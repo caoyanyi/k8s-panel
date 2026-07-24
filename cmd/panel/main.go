@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/x509"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/caoyanyi/k8s-panel/internal/auth"
+	"github.com/caoyanyi/k8s-panel/internal/buildinfo"
 	"github.com/caoyanyi/k8s-panel/internal/chartrepo"
 	"github.com/caoyanyi/k8s-panel/internal/config"
 	"github.com/caoyanyi/k8s-panel/internal/helmadapter"
@@ -25,6 +27,11 @@ import (
 )
 
 func main() {
+	if len(os.Args) == 2 && (os.Args[1] == "version" || os.Args[1] == "--version") {
+		fmt.Println(buildinfo.String("k8s-panel"))
+		return
+	}
+
 	settings, err := config.Load(os.Getenv)
 	if err != nil {
 		fatal("load configuration", err)

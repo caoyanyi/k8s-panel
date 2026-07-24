@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/caoyanyi/k8s-panel/internal/buildinfo"
 	"github.com/caoyanyi/k8s-panel/internal/secure"
 )
 
@@ -16,6 +17,8 @@ func main() {
 		usage()
 	}
 	switch os.Args[1] {
+	case "version", "--version":
+		fmt.Println(buildinfo.String("panelctl"))
 	case "encryption-key":
 		key := make([]byte, 32)
 		if _, err := io.ReadFull(rand.Reader, key); err != nil {
@@ -42,7 +45,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: panelctl encryption-key | panelctl hash-password")
+	fmt.Fprintln(os.Stderr, "usage: panelctl version | panelctl encryption-key | panelctl hash-password")
 	os.Exit(2)
 }
 

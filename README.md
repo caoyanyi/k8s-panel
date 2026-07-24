@@ -72,6 +72,19 @@ kubectl -n k8s-panel create secret generic k8s-panel-secrets \
 kubectl apply -f deploy/kubernetes.yaml
 ```
 
+## 版本发布
+
+向 GitHub 推送符合 SemVer 的 `v` 前缀标签后，会自动执行测试、跨平台打包、GHCR 多架构镜像发布和 GitHub Release 创建。标签必须指向 `main` 已包含的提交，例如：
+
+```bash
+git tag -a v0.2.0 -m "v0.2.0"
+git push origin v0.2.0
+```
+
+预发布版本可使用 `v0.2.0-rc.1`。Release 包含 Linux、macOS 和 Windows 归档及 `checksums.txt`；镜像发布为 `ghcr.io/caoyanyi/k8s-panel:v0.2.0`、`ghcr.io/caoyanyi/k8s-panel:0.2.0` 和对应的 `sha-<commit>` 标签，不发布 `latest`。
+
+二进制可通过 `panel --version` 和 `panelctl version` 查看内嵌版本及提交号。
+
 ## 验证
 
 ```bash

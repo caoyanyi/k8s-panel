@@ -6,6 +6,7 @@
 data
 docs
 coverage.out
+dist
 panel
 panelctl
 web/node_modules

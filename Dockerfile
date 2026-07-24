@@ -1,4 +1,4 @@
-FROM node:24.16.0-alpine3.23 AS web-build
+FROM --platform=$BUILDPLATFORM node:24.16.0-alpine3.23 AS web-build
 
 WORKDIR /src/web
 COPY web/package.json web/package-lock.json ./
@@ -6,17 +6,33 @@ RUN npm ci
 COPY web/ ./
 RUN npm run build
 
-FROM golang:1.26.5-alpine3.23 AS go-build
+FROM --platform=$BUILDPLATFORM golang:1.26.5-alpine3.23 AS go-build
 
 WORKDIR /src
+ARG TARGETOS
+ARG TARGETARCH
+ARG VERSION=dev
+ARG COMMIT=unknown
 COPY go.mod go.sum ./
 RUN go mod download
 COPY cmd/ ./cmd/
 COPY internal/ ./internal/
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/panel ./cmd/panel
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/panelctl ./cmd/panelctl
+RUN CGO_ENABLED=0 GOOS="$TARGETOS" GOARCH="$TARGETARCH" go build -trimpath \
+    -ldflags="-s -w -X github.com/caoyanyi/k8s-panel/internal/buildinfo.Version=$VERSION -X github.com/caoyanyi/k8s-panel/internal/buildinfo.Commit=$COMMIT" \
+    -o /out/panel ./cmd/panel
+RUN CGO_ENABLED=0 GOOS="$TARGETOS" GOARCH="$TARGETARCH" go build -trimpath \
+    -ldflags="-s -w -X github.com/caoyanyi/k8s-panel/internal/buildinfo.Version=$VERSION -X github.com/caoyanyi/k8s-panel/internal/buildinfo.Commit=$COMMIT" \
+    -o /out/panelctl ./cmd/panelctl
 
 FROM alpine:3.23.3
+
+ARG VERSION=dev
+ARG COMMIT=unknown
+LABEL org.opencontainers.image.source="https://github.com/caoyanyi/k8s-panel" \
+      org.opencontainers.image.title="K8s Panel" \
+      org.opencontainers.image.description="Kubernetes and Helm management panel" \
+      org.opencontainers.image.version="$VERSION" \
+      org.opencontainers.image.revision="$COMMIT"
 
 RUN apk add --no-cache ca-certificates tzdata \
     && addgroup -S -g 10001 panel \

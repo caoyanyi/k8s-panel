@@ -27,4 +27,4 @@ verify: test typecheck web-build
 	cd web && $(NPM) audit --audit-level=high
 
 clean:
-	rm -rf bin web/dist web/coverage web/playwright-report web/test-results coverage.out
+	rm -rf bin dist web/dist web/coverage web/playwright-report web/test-results coverage.out
