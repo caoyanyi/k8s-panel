@@ -1,0 +1,284 @@
+package platform
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/caoyanyi/k8s-panel/internal/domain"
+	"github.com/caoyanyi/k8s-panel/internal/kubernetes"
+)
+
+const operationQueueSize = 128
+
+type Service struct {
+	store             Store
+	cipher            SecretCipher
+	targetValidator   TargetValidator
+	kubeFactory       KubeFactory
+	repositoryChecker RepositoryChecker
+	helm              HelmGateway
+	clock             func() time.Time
+	newID             func(string) (string, error)
+	queue             chan operationJob
+	runOnce           sync.Once
+	locksMu           sync.Mutex
+	releaseLocks      map[string]*sync.Mutex
+}
+
+type operationJob struct {
+	operationID string
+	input       domain.HelmOperationInput
+}
+
+func New(dependencies Dependencies) (*Service, error) {
+	if dependencies.Store == nil || dependencies.Cipher == nil || dependencies.TargetValidator == nil ||
+		dependencies.KubeFactory == nil || dependencies.RepositoryChecker == nil || dependencies.Helm == nil {
+		return nil, errors.New("all platform dependencies are required")
+	}
+	if dependencies.Clock == nil {
+		dependencies.Clock = time.Now
+	}
+	if dependencies.NewID == nil {
+		return nil, errors.New("ID generator is required")
+	}
+	return &Service{
+		store:             dependencies.Store,
+		cipher:            dependencies.Cipher,
+		targetValidator:   dependencies.TargetValidator,
+		kubeFactory:       dependencies.KubeFactory,
+		repositoryChecker: dependencies.RepositoryChecker,
+		helm:              dependencies.Helm,
+		clock:             dependencies.Clock,
+		newID:             dependencies.NewID,
+		queue:             make(chan operationJob, operationQueueSize),
+		releaseLocks:      make(map[string]*sync.Mutex),
+	}, nil
+}
+
+func (s *Service) CreateCluster(
+	ctx context.Context,
+	actor string,
+	requestID string,
+	input domain.ClusterInput,
+) (ClusterView, error) {
+	if err := domain.ValidateClusterInput(input); err != nil {
+		return ClusterView{}, err
+	}
+	if err := s.targetValidator.Validate(ctx, input.Server); err != nil {
+		return ClusterView{}, domain.Invalid("server", "target is blocked or cannot be resolved")
+	}
+	id, err := s.newID("clu")
+	if err != nil {
+		return ClusterView{}, fmt.Errorf("create cluster ID: %w", err)
+	}
+	tokenCiphertext, err := s.cipher.SealString(input.BearerToken, clusterAAD(id, "bearer_token"))
+	if err != nil {
+		return ClusterView{}, fmt.Errorf("encrypt cluster token: %w", err)
+	}
+	var caCiphertext string
+	if input.CACert != "" {
+		caCiphertext, err = s.cipher.SealString(input.CACert, clusterAAD(id, "ca_cert"))
+		if err != nil {
+			return ClusterView{}, fmt.Errorf("encrypt cluster CA: %w", err)
+		}
+	}
+	now := s.now()
+	cluster := domain.Cluster{
+		ID:                    id,
+		Name:                  input.Name,
+		Environment:           input.Environment,
+		Server:                strings.TrimRight(input.Server, "/"),
+		Status:                domain.ClusterPending,
+		CACertCiphertext:      caCiphertext,
+		BearerTokenCiphertext: tokenCiphertext,
+		CreatedAt:             now,
+		UpdatedAt:             now,
+	}
+	if err := s.store.CreateCluster(ctx, cluster); err != nil {
+		return ClusterView{}, err
+	}
+	if err := s.audit(ctx, actor, requestID, "cluster.create", "succeeded", id, "", input.Name, "connection metadata created", ""); err != nil {
+		return ClusterView{}, fmt.Errorf("write cluster audit: %w", err)
+	}
+	view, _ := s.testClusterConnection(ctx, actor, requestID, id)
+	return view, nil
+}
+
+func (s *Service) ListClusters(ctx context.Context) ([]ClusterView, error) {
+	clusters, err := s.store.ListClusters(ctx)
+	if err != nil {
+		return nil, err
+	}
+	views := make([]ClusterView, 0, len(clusters))
+	for _, cluster := range clusters {
+		views = append(views, clusterView(cluster))
+	}
+	return views, nil
+}
+
+func (s *Service) GetCluster(ctx context.Context, id string) (ClusterView, error) {
+	cluster, err := s.store.GetCluster(ctx, id)
+	if err != nil {
+		return ClusterView{}, err
+	}
+	return clusterView(cluster), nil
+}
+
+func (s *Service) TestClusterConnection(ctx context.Context, actor, requestID, id string) (ClusterView, error) {
+	return s.testClusterConnection(ctx, actor, requestID, id)
+}
+
+func (s *Service) testClusterConnection(ctx context.Context, actor, requestID, id string) (ClusterView, error) {
+	cluster, err := s.store.GetCluster(ctx, id)
+	if err != nil {
+		return ClusterView{}, err
+	}
+	if cluster.Status == domain.ClusterDisabled {
+		return ClusterView{}, domain.ErrInvalidState
+	}
+	connection, err := s.clusterConnection(cluster)
+	if err != nil {
+		return ClusterView{}, err
+	}
+	gateway, err := s.kubeFactory.New(connection)
+	if err != nil {
+		return ClusterView{}, fmt.Errorf("create Kubernetes gateway: %w", err)
+	}
+	probe, probeErr := gateway.Probe(ctx)
+	now := s.now()
+	cluster.LastCheckedAt = now
+	cluster.UpdatedAt = now
+	result := "succeeded"
+	if probeErr == nil {
+		cluster.Status = domain.ClusterConnected
+		cluster.Version = probe.Version
+		cluster.LastErrorCode = ""
+	} else {
+		cluster.Status, cluster.LastErrorCode = clusterFailure(probeErr)
+		result = "failed"
+	}
+	if err := s.store.UpdateCluster(ctx, cluster); err != nil {
+		return ClusterView{}, err
+	}
+	if err := s.audit(ctx, actor, requestID, "cluster.connection_test", result, id, "", cluster.Name, cluster.LastErrorCode, ""); err != nil {
+		return ClusterView{}, fmt.Errorf("write connection test audit: %w", err)
+	}
+	return clusterView(cluster), probeErr
+}
+
+func (s *Service) SetClusterEnabled(ctx context.Context, actor, requestID, id string, enabled bool) (ClusterView, error) {
+	cluster, err := s.store.GetCluster(ctx, id)
+	if err != nil {
+		return ClusterView{}, err
+	}
+	if enabled {
+		cluster.Status = domain.ClusterPending
+	} else {
+		cluster.Status = domain.ClusterDisabled
+	}
+	cluster.UpdatedAt = s.now()
+	if err := s.store.UpdateCluster(ctx, cluster); err != nil {
+		return ClusterView{}, err
+	}
+	if err := s.audit(ctx, actor, requestID, "cluster.update", "succeeded", id, "", cluster.Name, fmt.Sprintf("enabled=%t", enabled), ""); err != nil {
+		return ClusterView{}, err
+	}
+	if enabled {
+		view, _ := s.testClusterConnection(ctx, actor, requestID, id)
+		return view, nil
+	}
+	return clusterView(cluster), nil
+}
+
+func (s *Service) DeleteCluster(ctx context.Context, actor, requestID, id, expectedName string) error {
+	cluster, err := s.store.GetCluster(ctx, id)
+	if err != nil {
+		return err
+	}
+	if expectedName != cluster.Name {
+		return domain.Invalid("confirmation", "must match the cluster name")
+	}
+	if err := s.audit(ctx, actor, requestID, "cluster.delete", "succeeded", id, "", cluster.Name, "connection metadata deleted", ""); err != nil {
+		return err
+	}
+	return s.store.DeleteCluster(ctx, id)
+}
+
+func (s *Service) Summary(ctx context.Context, clusterID string) (domain.ClusterSummary, error) {
+	gateway, err := s.kubeGateway(ctx, clusterID)
+	if err != nil {
+		return domain.ClusterSummary{}, err
+	}
+	return gateway.Summary(ctx)
+}
+
+func (s *Service) Namespaces(ctx context.Context, clusterID string) ([]domain.Namespace, error) {
+	gateway, err := s.kubeGateway(ctx, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	return gateway.Namespaces(ctx)
+}
+
+func (s *Service) Workloads(ctx context.Context, clusterID, namespace, kind string) ([]domain.Workload, error) {
+	gateway, err := s.kubeGateway(ctx, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	return gateway.Workloads(ctx, namespace, kind)
+}
+
+func (s *Service) kubeGateway(ctx context.Context, clusterID string) (KubeGateway, error) {
+	cluster, err := s.store.GetCluster(ctx, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	if cluster.Status == domain.ClusterDisabled {
+		return nil, domain.ErrInvalidState
+	}
+	connection, err := s.clusterConnection(cluster)
+	if err != nil {
+		return nil, err
+	}
+	return s.kubeFactory.New(connection)
+}
+
+func (s *Service) clusterConnection(cluster domain.Cluster) (kubernetes.Connection, error) {
+	token, err := s.cipher.OpenString(cluster.BearerTokenCiphertext, clusterAAD(cluster.ID, "bearer_token"))
+	if err != nil {
+		return kubernetes.Connection{}, fmt.Errorf("decrypt cluster token: %w", err)
+	}
+	var ca string
+	if cluster.CACertCiphertext != "" {
+		ca, err = s.cipher.OpenString(cluster.CACertCiphertext, clusterAAD(cluster.ID, "ca_cert"))
+		if err != nil {
+			return kubernetes.Connection{}, fmt.Errorf("decrypt cluster CA: %w", err)
+		}
+	}
+	return kubernetes.Connection{Server: cluster.Server, CACert: ca, BearerToken: token}, nil
+}
+
+func clusterAAD(id, field string) string {
+	return "cluster:" + id + ":" + field
+}
+
+func clusterFailure(err error) (domain.ClusterStatus, string) {
+	switch {
+	case errors.Is(err, domain.ErrForbidden):
+		return domain.ClusterDegraded, "permission_denied"
+	case errors.Is(err, domain.ErrUnauthorized):
+		return domain.ClusterUnreachable, "credentials_rejected"
+	case errors.Is(err, domain.ErrTimeout):
+		return domain.ClusterUnreachable, "upstream_timeout"
+	default:
+		return domain.ClusterUnreachable, "upstream_unavailable"
+	}
+}
+
+func (s *Service) now() time.Time {
+	return s.clock().UTC()
+}

@@ -1,0 +1,14 @@
+/docs/
+/data/
+/web/node_modules/
+/web/dist/
+/web/coverage/
+/web/playwright-report/
+/web/test-results/
+/web/*.tsbuildinfo
+/coverage.out
+/panel
+/panelctl
+/.env
+/.env.*
+!.env.example

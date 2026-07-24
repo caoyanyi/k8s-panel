@@ -1,0 +1,331 @@
+package httpapi
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/caoyanyi/k8s-panel/internal/auth"
+	"github.com/caoyanyi/k8s-panel/internal/domain"
+	"github.com/caoyanyi/k8s-panel/internal/kubernetes"
+	"github.com/caoyanyi/k8s-panel/internal/platform"
+	"github.com/caoyanyi/k8s-panel/internal/secure"
+	"github.com/caoyanyi/k8s-panel/internal/store"
+)
+
+func TestServerAuthenticationAndClusterLifecycle(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestHandler(t)
+
+	unauthorized := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, "/api/v1/clusters", nil))
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized status = %d, want 401", unauthorized.Code)
+	}
+	assertErrorCode(t, unauthorized.Body.Bytes(), "unauthorized")
+	if unauthorized.Header().Get("X-Request-ID") == "" {
+		t.Error("unauthorized response has no request ID")
+	}
+
+	cookie := login(t, handler)
+	createBody := `{
+		"name":"production-east",
+		"environment":"production",
+		"server":"https://api.example.com:6443",
+		"ca_cert":"test-ca",
+		"bearer_token":"plain-service-account-token"
+	}`
+	create := authenticatedRequest(t, handler, cookie, http.MethodPost, "/api/v1/clusters", createBody)
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, body = %s", create.Code, create.Body.String())
+	}
+	if create.Header().Get("Location") == "" {
+		t.Error("create response has no Location header")
+	}
+	if strings.Contains(create.Body.String(), "plain-service-account-token") || strings.Contains(create.Body.String(), "test-ca") {
+		t.Fatal("create response leaked cluster credentials")
+	}
+	var created struct {
+		Data platform.ClusterView `json:"data"`
+	}
+	decodeTestJSON(t, create.Body.Bytes(), &created)
+	if created.Data.Status != domain.ClusterConnected || !created.Data.CredentialsConfigured {
+		t.Errorf("created cluster = %#v", created.Data)
+	}
+
+	list := authenticatedRequest(t, handler, cookie, http.MethodGet, "/api/v1/clusters", "")
+	if list.Code != http.StatusOK {
+		t.Fatalf("list status = %d, body = %s", list.Code, list.Body.String())
+	}
+	if !strings.Contains(list.Body.String(), "production-east") {
+		t.Errorf("list response = %s", list.Body.String())
+	}
+
+	duplicate := authenticatedRequest(t, handler, cookie, http.MethodPost, "/api/v1/clusters", createBody)
+	if duplicate.Code != http.StatusConflict {
+		t.Fatalf("duplicate status = %d, body = %s", duplicate.Code, duplicate.Body.String())
+	}
+	assertErrorCode(t, duplicate.Body.Bytes(), "conflict")
+
+	logout := authenticatedRequest(t, handler, cookie, http.MethodDelete, "/api/v1/session", "")
+	if logout.Code != http.StatusNoContent {
+		t.Fatalf("logout status = %d", logout.Code)
+	}
+	afterLogout := authenticatedRequest(t, handler, cookie, http.MethodGet, "/api/v1/clusters", "")
+	if afterLogout.Code != http.StatusUnauthorized {
+		t.Fatalf("after logout status = %d", afterLogout.Code)
+	}
+}
+
+func TestServerRejectsUnknownFieldsAndReturnsSecurityHeaders(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestHandler(t)
+	cookie := login(t, handler)
+	response := authenticatedRequest(
+		t,
+		handler,
+		cookie,
+		http.MethodPost,
+		"/api/v1/clusters",
+		`{"name":"cluster","environment":"development","server":"https://api.example.com","bearer_token":"token","insecure":true}`,
+	)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	assertErrorCode(t, response.Body.Bytes(), "invalid_json")
+	if got := response.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Errorf("X-Content-Type-Options = %q", got)
+	}
+	if got := response.Header().Get("Content-Security-Policy"); !strings.Contains(got, "default-src 'self'") {
+		t.Errorf("Content-Security-Policy = %q", got)
+	}
+}
+
+func TestServerValidatesRequestAndPreservesSafeRequestID(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestHandler(t)
+	cookie := login(t, handler)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/clusters", strings.NewReader(`{"name":""}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Request-ID", "req_external-123")
+	request.AddCookie(cookie)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if got := response.Header().Get("X-Request-ID"); got != "req_external-123" {
+		t.Errorf("X-Request-ID = %q", got)
+	}
+	assertErrorCode(t, response.Body.Bytes(), "validation_error")
+}
+
+func TestHealthEndpointsArePublic(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestHandler(t)
+	for _, path := range []string{"/healthz", "/readyz"} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		if response.Code != http.StatusOK {
+			t.Errorf("GET %s status = %d", path, response.Code)
+		}
+	}
+}
+
+func TestLoginRateLimitBlocksRepeatedFailures(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestHandler(t)
+	for attempt := 1; attempt <= 5; attempt++ {
+		response := loginRequest(handler, "wrong-password")
+		if response.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d status = %d, body = %s", attempt, response.Code, response.Body.String())
+		}
+	}
+
+	blocked := loginRequest(handler, "admin-password")
+	if blocked.Code != http.StatusTooManyRequests {
+		t.Fatalf("blocked status = %d, body = %s", blocked.Code, blocked.Body.String())
+	}
+	if blocked.Header().Get("Retry-After") == "" {
+		t.Error("rate-limited response has no Retry-After header")
+	}
+	assertErrorCode(t, blocked.Body.Bytes(), "rate_limited")
+}
+
+func TestLoginRejectsNonJSONContentType(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestHandler(t)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/session", strings.NewReader(`{"username":"admin","password":"admin-password"}`))
+	request.Header.Set("Content-Type", "text/plain")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	assertErrorCode(t, response.Body.Bytes(), "invalid_json")
+}
+
+func newTestHandler(t *testing.T) http.Handler {
+	t.Helper()
+	now := time.Date(2026, 7, 24, 8, 0, 0, 0, time.UTC)
+	fileStore, err := store.Open(filepath.Join(t.TempDir(), "panel.json"), func() time.Time { return now })
+	if err != nil {
+		t.Fatalf("store.Open() error = %v", err)
+	}
+	cipher, err := secure.NewCipher([]byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatalf("secure.NewCipher() error = %v", err)
+	}
+	var ids atomic.Int64
+	service, err := platform.New(platform.Dependencies{
+		Store:             fileStore,
+		Cipher:            cipher,
+		TargetValidator:   testValidator{},
+		KubeFactory:       testKubeFactory{},
+		RepositoryChecker: testRepositoryChecker{},
+		Helm:              testHelm{},
+		Clock:             func() time.Time { return now },
+		NewID: func(prefix string) (string, error) {
+			return fmt.Sprintf("%s_%d", prefix, ids.Add(1)), nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("platform.New() error = %v", err)
+	}
+	hasher := secure.NewPasswordHasher(secure.PasswordParams{
+		MemoryKiB: 8 * 1024, Iterations: 1, Parallelism: 1, SaltLength: 16, KeyLength: 32,
+	})
+	hash, err := hasher.Hash("admin-password")
+	if err != nil {
+		t.Fatalf("Hash() error = %v", err)
+	}
+	sessions, err := auth.NewSessionManager("admin", hash, time.Hour, hasher, func() time.Time { return now })
+	if err != nil {
+		t.Fatalf("auth.NewSessionManager() error = %v", err)
+	}
+	handler, err := New(Config{Service: service, Sessions: sessions})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	return handler
+}
+
+func login(t *testing.T, handler http.Handler) *http.Cookie {
+	t.Helper()
+	response := loginRequest(handler, "admin-password")
+	if response.Code != http.StatusOK {
+		t.Fatalf("login status = %d, body = %s", response.Code, response.Body.String())
+	}
+	cookies := response.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("login cookies = %#v", cookies)
+	}
+	cookie := cookies[0]
+	if !cookie.HttpOnly || cookie.SameSite != http.SameSiteStrictMode || cookie.Path != "/" {
+		t.Errorf("session cookie = %#v", cookie)
+	}
+	return cookie
+}
+
+func loginRequest(handler http.Handler, password string) *httptest.ResponseRecorder {
+	response := httptest.NewRecorder()
+	body := fmt.Sprintf(`{"username":"admin","password":%q}`, password)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/session", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(response, request)
+	return response
+}
+
+func authenticatedRequest(
+	t *testing.T,
+	handler http.Handler,
+	cookie *http.Cookie,
+	method string,
+	path string,
+	body string,
+) *httptest.ResponseRecorder {
+	t.Helper()
+	var payload *bytes.Reader
+	if body == "" {
+		payload = bytes.NewReader(nil)
+	} else {
+		payload = bytes.NewReader([]byte(body))
+	}
+	request := httptest.NewRequest(method, path, payload)
+	request.Header.Set("Content-Type", "application/json")
+	request.AddCookie(cookie)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	return response
+}
+
+func assertErrorCode(t *testing.T, payload []byte, want string) {
+	t.Helper()
+	var response struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	decodeTestJSON(t, payload, &response)
+	if response.Error.Code != want {
+		t.Errorf("error code = %q, want %q; payload = %s", response.Error.Code, want, payload)
+	}
+}
+
+func decodeTestJSON(t *testing.T, payload []byte, target any) {
+	t.Helper()
+	if err := json.Unmarshal(payload, target); err != nil {
+		t.Fatalf("decode JSON: %v; payload = %s", err, payload)
+	}
+}
+
+type testValidator struct{}
+
+func (testValidator) Validate(context.Context, string) error { return nil }
+
+type testKubeFactory struct{}
+
+func (testKubeFactory) New(kubernetes.Connection) (platform.KubeGateway, error) {
+	return testKube{}, nil
+}
+
+type testKube struct{}
+
+func (testKube) Probe(context.Context) (domain.ClusterProbe, error) {
+	return domain.ClusterProbe{Version: "v1.36.2", NamespaceCount: 1, NodeCount: 1}, nil
+}
+func (testKube) Summary(context.Context) (domain.ClusterSummary, error) {
+	return domain.ClusterSummary{Version: "v1.36.2"}, nil
+}
+func (testKube) Namespaces(context.Context) ([]domain.Namespace, error) { return nil, nil }
+func (testKube) Workloads(context.Context, string, string) ([]domain.Workload, error) {
+	return nil, nil
+}
+
+type testRepositoryChecker struct{}
+
+func (testRepositoryChecker) Check(context.Context, platform.RepositoryConnection) error { return nil }
+
+type testHelm struct{}
+
+func (testHelm) List(context.Context, kubernetes.Connection, string) ([]domain.HelmRelease, error) {
+	return nil, nil
+}
+func (testHelm) Execute(context.Context, domain.OperationKind, platform.HelmRequest) error {
+	return nil
+}

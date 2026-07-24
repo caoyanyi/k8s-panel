@@ -1,0 +1,105 @@
+export type Environment = 'development' | 'staging' | 'production'
+export type ClusterStatus = 'pending' | 'connected' | 'degraded' | 'unreachable' | 'disabled'
+export type OperationState = 'queued' | 'running' | 'succeeded' | 'failed' | 'unknown'
+
+export interface Principal {
+  username: string
+  role: string
+  expires_at: string
+}
+
+export interface Cluster {
+  id: string
+  name: string
+  environment: Environment
+  server: string
+  status: ClusterStatus
+  version?: string
+  last_error_code?: string
+  credentials_configured: boolean
+  last_checked_at?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface ClusterSummary {
+  version: string
+  namespace_count: number
+  node_count: number
+  ready_node_count: number
+  workload_count: number
+  ready_workloads: number
+  unhealthy_pods: number
+}
+
+export interface Namespace {
+  name: string
+  status: string
+  created_at: string
+}
+
+export interface Workload {
+  kind: string
+  namespace: string
+  name: string
+  ready: number
+  desired: number
+  status: string
+  images: string[]
+  created_at: string
+}
+
+export interface ChartRepository {
+  id: string
+  name: string
+  url: string
+  enabled: boolean
+  status: string
+  last_error_code?: string
+  credentials_configured: boolean
+  last_checked_at?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface HelmRelease {
+  name: string
+  namespace: string
+  revision: number
+  status: string
+  chart: string
+  app_version?: string
+  updated_at?: string
+}
+
+export interface Operation {
+  id: string
+  request_id: string
+  kind: string
+  state: OperationState
+  cluster_id: string
+  namespace: string
+  target: string
+  submitted_by: string
+  summary?: string
+  error_code?: string
+  error_message?: string
+  created_at: string
+  started_at?: string
+  finished_at?: string
+  updated_at: string
+}
+
+export interface AuditEvent {
+  id: string
+  request_id: string
+  operation_id?: string
+  actor: string
+  action: string
+  result: string
+  cluster_id?: string
+  namespace?: string
+  target: string
+  summary?: string
+  created_at: string
+}

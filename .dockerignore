@@ -1,0 +1,17 @@
+.git
+.github
+.env
+.env.*
+!.env.example
+data
+docs
+coverage.out
+panel
+panelctl
+web/node_modules
+web/dist
+web/coverage
+web/playwright-report
+web/test-results
+web/*.tsbuildinfo
+*.log
