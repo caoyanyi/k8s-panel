@@ -6,6 +6,7 @@ import { Layout, type RouteName } from './Layout'
 import { LoginPage } from './LoginPage'
 import { useResource } from './hooks'
 import { AuditPage } from './pages/AuditPage'
+import { ClusterResourcesPage } from './pages/ClusterResourcesPage'
 import { ClustersPage } from './pages/ClustersPage'
 import { DashboardPage } from './pages/DashboardPage'
 import { HelmPage } from './pages/HelmPage'
@@ -103,6 +104,7 @@ function AuthenticatedApp({ principal, onAnonymous }: { principal: Principal; on
       <Layout principal={principal} route={route} onNavigate={navigate} onLogout={logout} notice={notice}>
         {route === 'dashboard' && <DashboardPage onOpenClusters={() => navigate('clusters')} />}
         {route === 'clusters' && <ClustersPage notify={notify} />}
+        {route === 'resources' && <ClusterResourcesPage />}
         {route === 'workloads' && <WorkloadsPage />}
         {route === 'helm' && <HelmPage notify={notify} openOperations={() => navigate('operations')} />}
         {route === 'operations' && <OperationsPage />}
@@ -114,5 +116,5 @@ function AuthenticatedApp({ principal, onAnonymous }: { principal: Principal; on
 
 function readRoute(): RouteName {
   const candidate = window.location.hash.replace(/^#\/?/, '') as RouteName
-  return ['dashboard', 'clusters', 'workloads', 'helm', 'operations', 'audit'].includes(candidate) ? candidate : 'dashboard'
+  return ['dashboard', 'clusters', 'resources', 'workloads', 'helm', 'operations', 'audit'].includes(candidate) ? candidate : 'dashboard'
 }

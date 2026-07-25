@@ -176,6 +176,38 @@ func (s *Server) listNamespaces(w http.ResponseWriter, r *http.Request) {
 	writeData(w, http.StatusOK, items)
 }
 
+func (s *Server) listNodes(w http.ResponseWriter, r *http.Request) {
+	items, err := s.service.Nodes(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeData(w, http.StatusOK, items)
+}
+
+func (s *Server) getNodeDetail(w http.ResponseWriter, r *http.Request) {
+	item, err := s.service.NodeDetail(r.Context(), r.PathValue("id"), r.PathValue("name"))
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeData(w, http.StatusOK, item)
+}
+
+func (s *Server) listNodeEvents(w http.ResponseWriter, r *http.Request) {
+	limit, err := parseBoundedInt(r.URL.Query().Get("limit"), 50, 1, domain.MaxNodeEventLimit, "limit")
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	items, err := s.service.NodeEvents(r.Context(), r.PathValue("id"), r.PathValue("name"), limit)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeData(w, http.StatusOK, items)
+}
+
 func (s *Server) listWorkloads(w http.ResponseWriter, r *http.Request) {
 	items, err := s.service.Workloads(r.Context(), r.PathValue("id"), r.URL.Query().Get("namespace"), r.URL.Query().Get("kind"))
 	if err != nil {

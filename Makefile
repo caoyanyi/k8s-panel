@@ -1,5 +1,7 @@
 GO ?= go
 NPM ?= npm
+GO_TEST_PARALLELISM ?= 2
+GO_TEST_GOMAXPROCS ?= 2
 
 .PHONY: build clean test typecheck verify web-install web-build
 
@@ -15,7 +17,7 @@ build: web-build
 	CGO_ENABLED=0 $(GO) build -trimpath -o bin/panelctl ./cmd/panelctl
 
 test:
-	$(GO) test -race ./...
+	GOMAXPROCS=$(GO_TEST_GOMAXPROCS) $(GO) test -p=$(GO_TEST_PARALLELISM) -race ./...
 	cd web && $(NPM) test
 
 typecheck:

@@ -103,6 +103,13 @@ func ValidatePodLogRequest(input PodLogRequest) error {
 	return nil
 }
 
+func ValidateNodeName(name string) error {
+	if !validDNSSubdomain(name) {
+		return Invalid("name", "must be a valid Kubernetes node name")
+	}
+	return nil
+}
+
 func validateHTTPSURL(raw string, allowPath bool) (*url.URL, error) {
 	parsed, err := url.ParseRequestURI(strings.TrimSpace(raw))
 	if err != nil {

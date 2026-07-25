@@ -143,9 +143,74 @@ type ClusterSummary struct {
 }
 
 type Namespace struct {
-	Name      string    `json:"name"`
-	Status    string    `json:"status"`
-	CreatedAt time.Time `json:"created_at"`
+	Name       string            `json:"name"`
+	Status     string            `json:"status"`
+	Labels     map[string]string `json:"labels"`
+	Finalizers []string          `json:"finalizers"`
+	CreatedAt  time.Time         `json:"created_at"`
+}
+
+type NodeResources struct {
+	CPU              string `json:"cpu,omitempty"`
+	Memory           string `json:"memory,omitempty"`
+	Pods             string `json:"pods,omitempty"`
+	EphemeralStorage string `json:"ephemeral_storage,omitempty"`
+}
+
+type Node struct {
+	Name          string        `json:"name"`
+	Status        string        `json:"status"`
+	Roles         []string      `json:"roles"`
+	Version       string        `json:"version"`
+	InternalIP    string        `json:"internal_ip,omitempty"`
+	OSImage       string        `json:"os_image,omitempty"`
+	Architecture  string        `json:"architecture,omitempty"`
+	Capacity      NodeResources `json:"capacity"`
+	Allocatable   NodeResources `json:"allocatable"`
+	Unschedulable bool          `json:"unschedulable"`
+	TaintCount    int           `json:"taint_count"`
+	CreatedAt     time.Time     `json:"created_at"`
+}
+
+type NodeTaint struct {
+	Key       string    `json:"key"`
+	Value     string    `json:"value,omitempty"`
+	Effect    string    `json:"effect"`
+	TimeAdded time.Time `json:"time_added,omitzero"`
+}
+
+type NodeAddress struct {
+	Type    string `json:"type"`
+	Address string `json:"address"`
+}
+
+type NodeCondition struct {
+	Type               string    `json:"type"`
+	Status             string    `json:"status"`
+	Reason             string    `json:"reason,omitempty"`
+	Message            string    `json:"message,omitempty"`
+	LastHeartbeatTime  time.Time `json:"last_heartbeat_time,omitzero"`
+	LastTransitionTime time.Time `json:"last_transition_time,omitzero"`
+}
+
+type NodeSystemInfo struct {
+	OSImage                 string `json:"os_image,omitempty"`
+	KernelVersion           string `json:"kernel_version,omitempty"`
+	ContainerRuntimeVersion string `json:"container_runtime_version,omitempty"`
+	KubeletVersion          string `json:"kubelet_version,omitempty"`
+	OperatingSystem         string `json:"operating_system,omitempty"`
+	Architecture            string `json:"architecture,omitempty"`
+}
+
+type NodeDetail struct {
+	Node
+	UID             string            `json:"uid"`
+	ResourceVersion string            `json:"resource_version"`
+	Labels          map[string]string `json:"labels"`
+	Taints          []NodeTaint       `json:"taints"`
+	Addresses       []NodeAddress     `json:"addresses"`
+	Conditions      []NodeCondition   `json:"conditions"`
+	SystemInfo      NodeSystemInfo    `json:"system_info"`
 }
 
 type Workload struct {
@@ -162,6 +227,7 @@ type Workload struct {
 const (
 	MaxPodLogTailLines    = 2000
 	MaxWorkloadEventLimit = 100
+	MaxNodeEventLimit     = 100
 )
 
 type WorkloadReference struct {

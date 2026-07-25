@@ -74,10 +74,11 @@ func main() {
 		fatal("initialize platform service", err)
 	}
 	handler, err := httpapi.New(httpapi.Config{
-		Service:       service,
-		Sessions:      sessions,
-		StaticDir:     settings.WebDir,
-		SecureCookies: settings.SecureCookies,
+		Service:               service,
+		Sessions:              sessions,
+		StaticDir:             settings.WebDir,
+		SecureCookies:         settings.SecureCookies,
+		MaxConcurrentRequests: settings.MaxConcurrentRequests,
 	})
 	if err != nil {
 		fatal("initialize HTTP API", err)
@@ -85,7 +86,7 @@ func main() {
 
 	rootContext, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	go service.Run(rootContext, 2)
+	go service.Run(rootContext, settings.HelmWorkers)
 
 	server := &http.Server{
 		Addr:              settings.ListenAddr,

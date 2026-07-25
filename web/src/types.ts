@@ -35,7 +35,71 @@ export interface ClusterSummary {
 export interface Namespace {
   name: string
   status: string
+  labels: Record<string, string>
+  finalizers: string[]
   created_at: string
+}
+
+export interface NodeResources {
+  cpu?: string
+  memory?: string
+  pods?: string
+  ephemeral_storage?: string
+}
+
+export interface ClusterNode {
+  name: string
+  status: string
+  roles: string[]
+  version: string
+  internal_ip?: string
+  os_image?: string
+  architecture?: string
+  capacity: NodeResources
+  allocatable: NodeResources
+  unschedulable: boolean
+  taint_count: number
+  created_at: string
+}
+
+export interface NodeTaint {
+  key: string
+  value?: string
+  effect: string
+  time_added?: string
+}
+
+export interface NodeAddress {
+  type: string
+  address: string
+}
+
+export interface NodeCondition {
+  type: string
+  status: string
+  reason?: string
+  message?: string
+  last_heartbeat_time?: string
+  last_transition_time?: string
+}
+
+export interface NodeSystemInfo {
+  os_image?: string
+  kernel_version?: string
+  container_runtime_version?: string
+  kubelet_version?: string
+  operating_system?: string
+  architecture?: string
+}
+
+export interface NodeDetail extends ClusterNode {
+  uid: string
+  resource_version: string
+  labels: Record<string, string>
+  taints: NodeTaint[]
+  addresses: NodeAddress[]
+  conditions: NodeCondition[]
+  system_info: NodeSystemInfo
 }
 
 export interface Workload {

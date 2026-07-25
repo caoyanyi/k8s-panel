@@ -42,8 +42,12 @@ func TestClientReadsProbeNamespacesAndWorkloads(t *testing.T) {
 					"metadata": map[string]any{"continue": ""},
 					"items": []any{
 						map[string]any{
-							"metadata": map[string]any{"name": "payments", "creationTimestamp": "2026-07-23T08:00:00Z"},
-							"status":   map[string]any{"phase": "Active"},
+							"metadata": map[string]any{
+								"name": "payments", "creationTimestamp": "2026-07-23T08:00:00Z",
+								"labels": map[string]string{"team": "payments"},
+							},
+							"spec":   map[string]any{"finalizers": []string{"kubernetes"}},
+							"status": map[string]any{"phase": "Active"},
 						},
 					},
 				})
@@ -115,6 +119,12 @@ func TestClientReadsProbeNamespacesAndWorkloads(t *testing.T) {
 	}
 	if len(namespaces) != 2 || namespaces[1].Name != "payments" {
 		t.Fatalf("Namespaces() = %#v", namespaces)
+	}
+	if namespaces[0].Labels == nil || namespaces[0].Finalizers == nil {
+		t.Errorf("empty namespace metadata must use JSON-safe collections: %#v", namespaces[0])
+	}
+	if namespaces[1].Labels["team"] != "payments" || len(namespaces[1].Finalizers) != 1 {
+		t.Errorf("namespace metadata = %#v", namespaces[1])
 	}
 
 	workloads, err := client.Workloads(context.Background(), "payments", "")
@@ -291,6 +301,129 @@ func TestClientReadsSanitizedWorkloadDetailEventsAndPodLogs(t *testing.T) {
 	}
 }
 
+func TestClientReadsNodeInventoryDetailAndEvents(t *testing.T) {
+	t.Parallel()
+
+	var eventSelector string
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer test-token" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		switch r.URL.Path {
+		case "/api/v1/nodes":
+			writeTestJSON(t, w, map[string]any{"items": []any{
+				nodeFixture("worker-b", "False", false),
+				nodeFixture("control-01.example.internal", "True", true),
+			}})
+		case "/api/v1/nodes/control-01.example.internal":
+			writeTestJSON(t, w, nodeFixture("control-01.example.internal", "True", true))
+		case "/api/v1/events":
+			eventSelector = r.URL.Query().Get("fieldSelector")
+			writeTestJSON(t, w, map[string]any{"items": []any{
+				map[string]any{
+					"metadata": map[string]any{"name": "node-old", "creationTimestamp": "2026-07-24T08:00:00Z"},
+					"type":     "Normal", "reason": "RegisteredNode", "message": "Node registered", "count": 1,
+					"reportingComponent": "node-controller", "lastTimestamp": "2026-07-24T08:01:00Z",
+				},
+				map[string]any{
+					"metadata": map[string]any{"name": "node-new", "creationTimestamp": "2026-07-24T08:02:00Z"},
+					"type":     "Warning", "reason": "NodeNotReady", "message": "Node is not ready", "count": 2,
+					"reportingComponent": "node-controller", "eventTime": "2026-07-24T08:03:00Z",
+				},
+			}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	certificate := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+	client, err := NewClient(Connection{Server: server.URL, CACert: string(certificate), BearerToken: "test-token"}, loopbackPolicy(t))
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+
+	nodes, err := client.Nodes(context.Background())
+	if err != nil {
+		t.Fatalf("Nodes() error = %v", err)
+	}
+	if len(nodes) != 2 || nodes[0].Name != "control-01.example.internal" || nodes[1].Status != "NotReady" {
+		t.Fatalf("Nodes() = %#v", nodes)
+	}
+	first := nodes[0]
+	if len(first.Roles) != 1 || first.Roles[0] != "control-plane" || first.InternalIP != "10.0.0.11" {
+		t.Errorf("node identity = %#v", first)
+	}
+	if first.Allocatable.CPU != "3500m" || first.Allocatable.Memory != "15Gi" || first.Capacity.Pods != "110" {
+		t.Errorf("node resources = %#v", first)
+	}
+	if !first.Unschedulable || first.TaintCount != 1 || first.Version != "v1.36.2" {
+		t.Errorf("node scheduling = %#v", first)
+	}
+
+	detail, err := client.NodeDetail(context.Background(), "control-01.example.internal")
+	if err != nil {
+		t.Fatalf("NodeDetail() error = %v", err)
+	}
+	if detail.UID != "uid-control-01.example.internal" || detail.ResourceVersion != "91" || detail.SystemInfo.ContainerRuntimeVersion != "containerd://2.1.4" {
+		t.Errorf("NodeDetail() = %#v", detail)
+	}
+	if len(detail.Taints) != 1 || detail.Taints[0].Effect != "NoSchedule" || len(detail.Conditions) != 2 {
+		t.Errorf("node diagnostics = %#v", detail)
+	}
+	if detail.Labels["topology.kubernetes.io/zone"] != "cn-east-1a" {
+		t.Errorf("node labels = %#v", detail.Labels)
+	}
+
+	events, err := client.NodeEvents(context.Background(), "control-01.example.internal", 1)
+	if err != nil {
+		t.Fatalf("NodeEvents() error = %v", err)
+	}
+	if len(events) != 1 || events[0].Reason != "NodeNotReady" {
+		t.Errorf("NodeEvents() = %#v", events)
+	}
+	if !strings.Contains(eventSelector, "involvedObject.kind=Node") || !strings.Contains(eventSelector, "involvedObject.name=control-01.example.internal") {
+		t.Errorf("event fieldSelector = %q", eventSelector)
+	}
+}
+
+func nodeFixture(name, ready string, controlPlane bool) map[string]any {
+	labels := map[string]string{
+		"kubernetes.io/hostname":      name,
+		"topology.kubernetes.io/zone": "cn-east-1a",
+	}
+	if controlPlane {
+		labels["node-role.kubernetes.io/control-plane"] = ""
+	}
+	return map[string]any{
+		"metadata": map[string]any{
+			"name": name, "uid": "uid-" + name, "resourceVersion": "91", "labels": labels,
+			"creationTimestamp": "2026-07-20T08:00:00Z",
+		},
+		"spec": map[string]any{
+			"unschedulable": controlPlane,
+			"taints":        []any{map[string]any{"key": "node-role.kubernetes.io/control-plane", "effect": "NoSchedule"}},
+		},
+		"status": map[string]any{
+			"capacity":    map[string]string{"cpu": "4", "memory": "16Gi", "pods": "110", "ephemeral-storage": "100Gi"},
+			"allocatable": map[string]string{"cpu": "3500m", "memory": "15Gi", "pods": "100", "ephemeral-storage": "90Gi"},
+			"addresses": []any{
+				map[string]any{"type": "InternalIP", "address": "10.0.0.11"},
+				map[string]any{"type": "Hostname", "address": name},
+			},
+			"nodeInfo": map[string]any{
+				"architecture": "amd64", "operatingSystem": "linux", "osImage": "Ubuntu 24.04.2 LTS",
+				"kernelVersion": "6.8.0", "containerRuntimeVersion": "containerd://2.1.4", "kubeletVersion": "v1.36.2",
+			},
+			"conditions": []any{
+				map[string]any{"type": "MemoryPressure", "status": "False", "reason": "KubeletHasSufficientMemory", "lastTransitionTime": "2026-07-24T07:00:00Z"},
+				map[string]any{"type": "Ready", "status": ready, "reason": "KubeletReady", "message": "kubelet is ready", "lastTransitionTime": "2026-07-24T08:00:00Z"},
+			},
+		},
+	}
+}
+
 func TestClientTruncatesOversizedPodLogs(t *testing.T) {
 	t.Parallel()
 
@@ -314,6 +447,18 @@ func TestClientTruncatesOversizedPodLogs(t *testing.T) {
 	}
 	if !logs.Truncated || len(logs.Content) != maxLogBytes {
 		t.Fatalf("logs truncated = %t, content bytes = %d", logs.Truncated, len(logs.Content))
+	}
+}
+
+func TestAppendListItemsEnforcesResourceLimits(t *testing.T) {
+	t.Parallel()
+
+	items := make([]json.RawMessage, maxListItems)
+	if _, _, err := appendListItems(items, 0, []json.RawMessage{json.RawMessage(`{}`)}); !errors.Is(err, domain.ErrUpstream) {
+		t.Fatalf("item limit error = %v", err)
+	}
+	if _, _, err := appendListItems(nil, maxListBytes-1, []json.RawMessage{json.RawMessage(`{}`)}); !errors.Is(err, domain.ErrUpstream) {
+		t.Fatalf("byte limit error = %v", err)
 	}
 }
 

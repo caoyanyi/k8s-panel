@@ -20,10 +20,11 @@ import (
 const sessionCookieName = "panel_session"
 
 type Config struct {
-	Service       *platform.Service
-	Sessions      *auth.SessionManager
-	StaticDir     string
-	SecureCookies bool
+	Service               *platform.Service
+	Sessions              *auth.SessionManager
+	StaticDir             string
+	SecureCookies         bool
+	MaxConcurrentRequests int
 }
 
 type Server struct {
@@ -32,6 +33,7 @@ type Server struct {
 	staticDir     string
 	secureCookies bool
 	loginLimiter  *failureLimiter
+	requestSlots  chan struct{}
 	mux           *http.ServeMux
 }
 
@@ -48,12 +50,20 @@ func New(config Config) (*Server, error) {
 	if config.Service == nil || config.Sessions == nil {
 		return nil, errors.New("service and session manager are required")
 	}
+	maxConcurrentRequests := config.MaxConcurrentRequests
+	if maxConcurrentRequests == 0 {
+		maxConcurrentRequests = 16
+	}
+	if maxConcurrentRequests < 1 || maxConcurrentRequests > 128 {
+		return nil, errors.New("max concurrent requests must be between 1 and 128")
+	}
 	server := &Server{
 		service:       config.Service,
 		sessions:      config.Sessions,
 		staticDir:     config.StaticDir,
 		secureCookies: config.SecureCookies,
 		loginLimiter:  newFailureLimiter(5, 5*time.Minute, 10_000, time.Now),
+		requestSlots:  make(chan struct{}, maxConcurrentRequests),
 		mux:           http.NewServeMux(),
 	}
 	server.routes()
@@ -85,6 +95,15 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 	}
 	r = r.WithContext(context.WithValue(r.Context(), requestIDKey, requestID))
+	if strings.HasPrefix(r.URL.Path, "/api/") {
+		select {
+		case s.requestSlots <- struct{}{}:
+			defer func() { <-s.requestSlots }()
+		default:
+			writeErrorStatus(w, r, http.StatusServiceUnavailable, "server_busy", "服务繁忙，请稍后重试", nil)
+			return
+		}
+	}
 	s.mux.ServeHTTP(w, r)
 }
 
@@ -103,6 +122,9 @@ func (s *Server) routes() {
 	s.mux.Handle("POST /api/v1/clusters/{id}/connection-tests", s.protected(http.HandlerFunc(s.testCluster)))
 	s.mux.Handle("GET /api/v1/clusters/{id}/summary", s.protected(http.HandlerFunc(s.clusterSummary)))
 	s.mux.Handle("GET /api/v1/clusters/{id}/namespaces", s.protected(http.HandlerFunc(s.listNamespaces)))
+	s.mux.Handle("GET /api/v1/clusters/{id}/nodes", s.protected(http.HandlerFunc(s.listNodes)))
+	s.mux.Handle("GET /api/v1/clusters/{id}/nodes/{name}", s.protected(http.HandlerFunc(s.getNodeDetail)))
+	s.mux.Handle("GET /api/v1/clusters/{id}/nodes/{name}/events", s.protected(http.HandlerFunc(s.listNodeEvents)))
 	s.mux.Handle("GET /api/v1/clusters/{id}/workloads", s.protected(http.HandlerFunc(s.listWorkloads)))
 	s.mux.Handle("GET /api/v1/clusters/{id}/workloads/{kind}/{namespace}/{name}", s.protected(http.HandlerFunc(s.getWorkloadDetail)))
 	s.mux.Handle("GET /api/v1/clusters/{id}/workloads/{kind}/{namespace}/{name}/events", s.protected(http.HandlerFunc(s.listWorkloadEvents)))

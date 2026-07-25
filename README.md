@@ -6,7 +6,8 @@ K8s Panel 是一个独立实现的 Kubernetes 与 Helm 管理面板。后端使�
 
 - 单管理员登录、HttpOnly 会话 Cookie、登录失败限流
 - 多集群配置、连接测试、启停和删除确认
-- 集群概览、命名空间与 Deployment/StatefulSet/DaemonSet/Pod 工作负载查询
+- 集群概览、节点/命名空间资源清单与节点诊断详情
+- Deployment/StatefulSet/DaemonSet/Pod 工作负载查询
 - 工作负载详情、脱敏 YAML、关联事件与有界 Pod 日志快照
 - Helm 仓库配置与连接测试
 - Helm Release 查询、安装、升级、回滚和卸载
@@ -41,11 +42,15 @@ go run ./cmd/panel
 | `PANEL_ADMIN_PASSWORD_HASH` | 无 | 必填，Argon2id 编码密码哈希 |
 | `PANEL_SESSION_TTL` | `8h` | 会话有效期，最大 24 小时 |
 | `PANEL_HELM_TIMEOUT` | `5m` | 单次 Helm 操作超时 |
+| `PANEL_HELM_WORKERS` | `2` | Helm 后台任务并发数，低配置主机建议设为 `1` |
+| `PANEL_MAX_CONCURRENT_REQUESTS` | `16` | API 同时处理的请求上限，超限快速返回 `503` |
 | `PANEL_ALLOWED_PRIVATE_CIDRS` | 空 | 允许访问的私网 CIDR，逗号分隔 |
 | `PANEL_SECURE_COOKIES` | `false` | HTTPS 部署必须设为 `true` |
 | `PANEL_LOG_LEVEL` | `info` | `debug`、`info`、`warn` 或 `error` |
 
 面板默认拒绝访问私网地址。若 Kubernetes API 或 Helm 仓库位于私网，应将其精确网段加入 `PANEL_ALLOWED_PRIVATE_CIDRS`，不要无条件放开全部内网。
+
+Kubernetes 单类资源清单最多读取 5,000 项、20 页和 32 MiB 原始对象，Web 表格每页只渲染 100 行；超过后端上限会停止读取并返回错误，避免大集群拖垮控制面。低配置主机可将 `PANEL_HELM_WORKERS=1`，并按实际并发下调 `PANEL_MAX_CONCURRENT_REQUESTS`。
 
 MVP 不加载本地 Chart、Helm 插件或宿主机凭据。OCI 模式仅支持匿名拉取；Chart provenance/OpenPGP 校验暂未启用。
 

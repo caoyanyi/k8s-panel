@@ -224,6 +224,39 @@ func (s *Service) Namespaces(ctx context.Context, clusterID string) ([]domain.Na
 	return gateway.Namespaces(ctx)
 }
 
+func (s *Service) Nodes(ctx context.Context, clusterID string) ([]domain.Node, error) {
+	gateway, err := s.kubeGateway(ctx, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	return gateway.Nodes(ctx)
+}
+
+func (s *Service) NodeDetail(ctx context.Context, clusterID, name string) (domain.NodeDetail, error) {
+	if err := domain.ValidateNodeName(name); err != nil {
+		return domain.NodeDetail{}, err
+	}
+	gateway, err := s.kubeGateway(ctx, clusterID)
+	if err != nil {
+		return domain.NodeDetail{}, err
+	}
+	return gateway.NodeDetail(ctx, name)
+}
+
+func (s *Service) NodeEvents(ctx context.Context, clusterID, name string, limit int) ([]domain.KubernetesEvent, error) {
+	if err := domain.ValidateNodeName(name); err != nil {
+		return nil, err
+	}
+	if limit < 1 || limit > domain.MaxNodeEventLimit {
+		return nil, domain.Invalid("limit", "must be between 1 and 100")
+	}
+	gateway, err := s.kubeGateway(ctx, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	return gateway.NodeEvents(ctx, name, limit)
+}
+
 func (s *Service) Workloads(ctx context.Context, clusterID, namespace, kind string) ([]domain.Workload, error) {
 	gateway, err := s.kubeGateway(ctx, clusterID)
 	if err != nil {

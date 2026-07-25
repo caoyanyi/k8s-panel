@@ -144,6 +144,40 @@ func TestHealthEndpointsArePublic(t *testing.T) {
 	}
 }
 
+func TestServerRejectsExcessConcurrentAPIRequests(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestHandler(t)
+	cookie := login(t, handler)
+	server, ok := handler.(*Server)
+	if !ok {
+		t.Fatalf("handler type = %T", handler)
+	}
+	if cap(server.requestSlots) != 16 {
+		t.Fatalf("default request limit = %d", cap(server.requestSlots))
+	}
+	for range cap(server.requestSlots) {
+		server.requestSlots <- struct{}{}
+	}
+	t.Cleanup(func() {
+		for range cap(server.requestSlots) {
+			<-server.requestSlots
+		}
+	})
+
+	response := authenticatedRequest(t, handler, cookie, http.MethodGet, "/api/v1/clusters", "")
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	assertErrorCode(t, response.Body.Bytes(), "server_busy")
+
+	health := httptest.NewRecorder()
+	handler.ServeHTTP(health, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if health.Code != http.StatusOK {
+		t.Fatalf("health status = %d", health.Code)
+	}
+}
+
 func TestLoginRateLimitBlocksRepeatedFailures(t *testing.T) {
 	t.Parallel()
 
@@ -228,6 +262,52 @@ func TestServerExposesAuthenticatedWorkloadDiagnostics(t *testing.T) {
 	handler.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, base+"/workloads/pod/payments/gateway-0", nil))
 	if unauthorized.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthorized detail status = %d", unauthorized.Code)
+	}
+}
+
+func TestServerExposesAuthenticatedClusterResources(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestHandler(t)
+	cookie := login(t, handler)
+	create := authenticatedRequest(t, handler, cookie, http.MethodPost, "/api/v1/clusters", `{
+		"name":"development","environment":"development","server":"https://api.example.com","bearer_token":"token"
+	}`)
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, body = %s", create.Code, create.Body.String())
+	}
+	var created struct {
+		Data platform.ClusterView `json:"data"`
+	}
+	decodeTestJSON(t, create.Body.Bytes(), &created)
+	base := "/api/v1/clusters/" + created.Data.ID
+
+	namespaces := authenticatedRequest(t, handler, cookie, http.MethodGet, base+"/namespaces", "")
+	if namespaces.Code != http.StatusOK || !strings.Contains(namespaces.Body.String(), `"name":"payments"`) {
+		t.Fatalf("namespaces status = %d, body = %s", namespaces.Code, namespaces.Body.String())
+	}
+	nodes := authenticatedRequest(t, handler, cookie, http.MethodGet, base+"/nodes", "")
+	if nodes.Code != http.StatusOK || !strings.Contains(nodes.Body.String(), `"name":"worker-01"`) {
+		t.Fatalf("nodes status = %d, body = %s", nodes.Code, nodes.Body.String())
+	}
+	detail := authenticatedRequest(t, handler, cookie, http.MethodGet, base+"/nodes/worker-01", "")
+	if detail.Code != http.StatusOK || !strings.Contains(detail.Body.String(), `"uid":"uid-worker-01"`) {
+		t.Fatalf("node detail status = %d, body = %s", detail.Code, detail.Body.String())
+	}
+	events := authenticatedRequest(t, handler, cookie, http.MethodGet, base+"/nodes/worker-01/events?limit=10", "")
+	if events.Code != http.StatusOK || !strings.Contains(events.Body.String(), `"reason":"NodeNotReady"`) {
+		t.Fatalf("node events status = %d, body = %s", events.Code, events.Body.String())
+	}
+	invalid := authenticatedRequest(t, handler, cookie, http.MethodGet, base+"/nodes/worker-01/events?limit=1000", "")
+	if invalid.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid node event limit status = %d, body = %s", invalid.Code, invalid.Body.String())
+	}
+	assertErrorCode(t, invalid.Body.Bytes(), "validation_error")
+
+	unauthorized := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, base+"/nodes", nil))
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized nodes status = %d", unauthorized.Code)
 	}
 }
 
@@ -363,7 +443,18 @@ func (testKube) Probe(context.Context) (domain.ClusterProbe, error) {
 func (testKube) Summary(context.Context) (domain.ClusterSummary, error) {
 	return domain.ClusterSummary{Version: "v1.36.2"}, nil
 }
-func (testKube) Namespaces(context.Context) ([]domain.Namespace, error) { return nil, nil }
+func (testKube) Namespaces(context.Context) ([]domain.Namespace, error) {
+	return []domain.Namespace{{Name: "payments", Status: "Active", Labels: map[string]string{"team": "payments"}}}, nil
+}
+func (testKube) Nodes(context.Context) ([]domain.Node, error) {
+	return []domain.Node{{Name: "worker-01", Status: "Ready"}}, nil
+}
+func (testKube) NodeDetail(_ context.Context, name string) (domain.NodeDetail, error) {
+	return domain.NodeDetail{Node: domain.Node{Name: name, Status: "Ready"}, UID: "uid-" + name}, nil
+}
+func (testKube) NodeEvents(context.Context, string, int) ([]domain.KubernetesEvent, error) {
+	return []domain.KubernetesEvent{{Type: "Warning", Reason: "NodeNotReady"}}, nil
+}
 func (testKube) Workloads(context.Context, string, string) ([]domain.Workload, error) {
 	return nil, nil
 }

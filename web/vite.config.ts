@@ -16,6 +16,7 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: './src/test/setup.ts',
     restoreMocks: true,
+    maxWorkers: 2,
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json-summary'],

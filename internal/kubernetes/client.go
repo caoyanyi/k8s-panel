@@ -24,6 +24,9 @@ import (
 const (
 	maxResponseBytes = 8 * 1024 * 1024
 	maxLogBytes      = 2 * 1024 * 1024
+	maxListBytes     = 32 * 1024 * 1024
+	maxListItems     = 5000
+	maxListPages     = 20
 	listPageSize     = "500"
 )
 
@@ -84,25 +87,30 @@ func NewClient(connection Connection, policy *outbound.Policy) (*Client, error) 
 }
 
 func (c *Client) Probe(ctx context.Context) (domain.ClusterProbe, error) {
+	probe, _, err := c.probeResources(ctx)
+	return probe, err
+}
+
+func (c *Client) probeResources(ctx context.Context) (domain.ClusterProbe, []domain.Node, error) {
 	var version struct {
 		GitVersion string `json:"gitVersion"`
 	}
 	if err := c.getJSON(ctx, "/version", nil, &version); err != nil {
-		return domain.ClusterProbe{}, err
+		return domain.ClusterProbe{}, nil, err
 	}
 	namespaces, err := c.Namespaces(ctx)
 	if err != nil {
-		return domain.ClusterProbe{}, err
+		return domain.ClusterProbe{}, nil, err
 	}
-	nodes, err := c.listRaw(ctx, "/api/v1/nodes", nil)
+	nodes, err := c.Nodes(ctx)
 	if err != nil {
-		return domain.ClusterProbe{}, err
+		return domain.ClusterProbe{}, nil, err
 	}
 	return domain.ClusterProbe{
 		Version:        version.GitVersion,
 		NamespaceCount: len(namespaces),
 		NodeCount:      len(nodes),
-	}, nil
+	}, nodes, nil
 }
 
 func (c *Client) Namespaces(ctx context.Context) ([]domain.Namespace, error) {
@@ -114,7 +122,10 @@ func (c *Client) Namespaces(ctx context.Context) ([]domain.Namespace, error) {
 	for _, item := range items {
 		var resource struct {
 			Metadata objectMetadata `json:"metadata"`
-			Status   struct {
+			Spec     struct {
+				Finalizers []string `json:"finalizers"`
+			} `json:"spec"`
+			Status struct {
 				Phase string `json:"phase"`
 			} `json:"status"`
 		}
@@ -122,13 +133,75 @@ func (c *Client) Namespaces(ctx context.Context) ([]domain.Namespace, error) {
 			return nil, fmt.Errorf("decode namespace: %w", err)
 		}
 		namespaces = append(namespaces, domain.Namespace{
-			Name:      resource.Metadata.Name,
-			Status:    resource.Status.Phase,
-			CreatedAt: resource.Metadata.CreationTimestamp,
+			Name:       resource.Metadata.Name,
+			Status:     resource.Status.Phase,
+			Labels:     cloneStringMap(resource.Metadata.Labels),
+			Finalizers: append(make([]string, 0, len(resource.Spec.Finalizers)), resource.Spec.Finalizers...),
+			CreatedAt:  resource.Metadata.CreationTimestamp,
 		})
 	}
 	sort.Slice(namespaces, func(i, j int) bool { return namespaces[i].Name < namespaces[j].Name })
 	return namespaces, nil
+}
+
+func (c *Client) Nodes(ctx context.Context) ([]domain.Node, error) {
+	items, err := c.listRaw(ctx, "/api/v1/nodes", nil)
+	if err != nil {
+		return nil, err
+	}
+	nodes := make([]domain.Node, 0, len(items))
+	for _, item := range items {
+		node, _, err := decodeNode(item)
+		if err != nil {
+			return nil, err
+		}
+		nodes = append(nodes, node)
+	}
+	sort.Slice(nodes, func(i, j int) bool { return nodes[i].Name < nodes[j].Name })
+	return nodes, nil
+}
+
+func (c *Client) NodeDetail(ctx context.Context, name string) (domain.NodeDetail, error) {
+	if err := domain.ValidateNodeName(name); err != nil {
+		return domain.NodeDetail{}, err
+	}
+	var raw json.RawMessage
+	if err := c.getJSON(ctx, "/api/v1/nodes/"+name, nil, &raw); err != nil {
+		return domain.NodeDetail{}, err
+	}
+	node, resource, err := decodeNode(raw)
+	if err != nil {
+		return domain.NodeDetail{}, err
+	}
+	return domain.NodeDetail{
+		Node:            node,
+		UID:             resource.Metadata.UID,
+		ResourceVersion: resource.Metadata.ResourceVersion,
+		Labels:          cloneStringMap(resource.Metadata.Labels),
+		Taints:          decodeNodeTaints(resource.Spec.Taints),
+		Addresses:       decodeNodeAddresses(resource.Status.Addresses),
+		Conditions:      decodeNodeConditions(resource.Status.Conditions),
+		SystemInfo:      decodeNodeSystemInfo(resource.Status.NodeInfo),
+	}, nil
+}
+
+func (c *Client) NodeEvents(ctx context.Context, name string, limit int) ([]domain.KubernetesEvent, error) {
+	if err := domain.ValidateNodeName(name); err != nil {
+		return nil, err
+	}
+	if limit < 1 || limit > domain.MaxNodeEventLimit {
+		return nil, domain.Invalid("limit", "must be between 1 and 100")
+	}
+	query := make(url.Values)
+	query.Set("fieldSelector", strings.Join([]string{
+		"involvedObject.kind=Node",
+		"involvedObject.name=" + name,
+	}, ","))
+	items, err := c.listRaw(ctx, "/api/v1/events", query)
+	if err != nil {
+		return nil, err
+	}
+	return decodeEvents(items, limit)
 }
 
 func (c *Client) Workloads(ctx context.Context, namespace, kind string) ([]domain.Workload, error) {
@@ -219,6 +292,10 @@ func (c *Client) WorkloadEvents(
 	if err != nil {
 		return nil, err
 	}
+	return decodeEvents(items, limit)
+}
+
+func decodeEvents(items []json.RawMessage, limit int) ([]domain.KubernetesEvent, error) {
 	events := make([]domain.KubernetesEvent, 0, min(limit, len(items)))
 	for _, item := range items {
 		var resource eventResource
@@ -265,7 +342,7 @@ func (c *Client) PodLogs(ctx context.Context, input domain.PodLogRequest) (domai
 }
 
 func (c *Client) Summary(ctx context.Context) (domain.ClusterSummary, error) {
-	probe, err := c.Probe(ctx)
+	probe, nodes, err := c.probeResources(ctx)
 	if err != nil {
 		return domain.ClusterSummary{}, err
 	}
@@ -277,6 +354,11 @@ func (c *Client) Summary(ctx context.Context) (domain.ClusterSummary, error) {
 		Version:        probe.Version,
 		NamespaceCount: probe.NamespaceCount,
 		NodeCount:      probe.NodeCount,
+	}
+	for _, node := range nodes {
+		if node.Status == "Ready" {
+			summary.ReadyNodeCount++
+		}
 	}
 	for _, workload := range workloads {
 		if workload.Kind == "Pod" {
@@ -301,7 +383,8 @@ func (c *Client) listRaw(ctx context.Context, path string, query url.Values) ([]
 	}
 	query.Set("limit", listPageSize)
 	items := make([]json.RawMessage, 0)
-	for page := 0; page < 100; page++ {
+	var totalBytes int64
+	for page := 0; page < maxListPages; page++ {
 		var response struct {
 			Metadata struct {
 				Continue string `json:"continue"`
@@ -311,13 +394,34 @@ func (c *Client) listRaw(ctx context.Context, path string, query url.Values) ([]
 		if err := c.getJSON(ctx, path, query, &response); err != nil {
 			return nil, err
 		}
-		items = append(items, response.Items...)
+		var appendErr error
+		items, totalBytes, appendErr = appendListItems(items, totalBytes, response.Items)
+		if appendErr != nil {
+			return nil, appendErr
+		}
 		if response.Metadata.Continue == "" {
 			return items, nil
 		}
 		query.Set("continue", response.Metadata.Continue)
 	}
-	return nil, errors.New("Kubernetes list exceeded pagination limit")
+	return nil, fmt.Errorf("Kubernetes list exceeded safe page limit: %w", domain.ErrUpstream)
+}
+
+func appendListItems(
+	items []json.RawMessage,
+	totalBytes int64,
+	pageItems []json.RawMessage,
+) ([]json.RawMessage, int64, error) {
+	if len(pageItems) > maxListItems-len(items) {
+		return nil, totalBytes, fmt.Errorf("Kubernetes list exceeded safe item limit: %w", domain.ErrUpstream)
+	}
+	for _, item := range pageItems {
+		if int64(len(item)) > maxListBytes-totalBytes {
+			return nil, totalBytes, fmt.Errorf("Kubernetes list exceeded safe byte limit: %w", domain.ErrUpstream)
+		}
+		totalBytes += int64(len(item))
+	}
+	return append(items, pageItems...), totalBytes, nil
 }
 
 func (c *Client) getJSON(ctx context.Context, path string, query url.Values, target any) error {
@@ -418,6 +522,51 @@ type workloadCondition struct {
 	Reason             string    `json:"reason"`
 	Message            string    `json:"message"`
 	LastTransitionTime time.Time `json:"lastTransitionTime"`
+}
+
+type nodeTaint struct {
+	Key       string    `json:"key"`
+	Value     string    `json:"value"`
+	Effect    string    `json:"effect"`
+	TimeAdded time.Time `json:"timeAdded"`
+}
+
+type nodeAddress struct {
+	Type    string `json:"type"`
+	Address string `json:"address"`
+}
+
+type nodeSystemInfo struct {
+	OSImage                 string `json:"osImage"`
+	KernelVersion           string `json:"kernelVersion"`
+	ContainerRuntimeVersion string `json:"containerRuntimeVersion"`
+	KubeletVersion          string `json:"kubeletVersion"`
+	OperatingSystem         string `json:"operatingSystem"`
+	Architecture            string `json:"architecture"`
+}
+
+type nodeCondition struct {
+	Type               string    `json:"type"`
+	Status             string    `json:"status"`
+	Reason             string    `json:"reason"`
+	Message            string    `json:"message"`
+	LastHeartbeatTime  time.Time `json:"lastHeartbeatTime"`
+	LastTransitionTime time.Time `json:"lastTransitionTime"`
+}
+
+type nodeResource struct {
+	Metadata objectMetadata `json:"metadata"`
+	Spec     struct {
+		Unschedulable bool        `json:"unschedulable"`
+		Taints        []nodeTaint `json:"taints"`
+	} `json:"spec"`
+	Status struct {
+		Capacity    map[string]string `json:"capacity"`
+		Allocatable map[string]string `json:"allocatable"`
+		Addresses   []nodeAddress     `json:"addresses"`
+		Conditions  []nodeCondition   `json:"conditions"`
+		NodeInfo    nodeSystemInfo    `json:"nodeInfo"`
+	} `json:"status"`
 }
 
 type workloadDetailResource struct {
@@ -696,6 +845,124 @@ func decodeWorkload(kind string, item json.RawMessage) (domain.Workload, error) 
 		Images:    images,
 		CreatedAt: resource.Metadata.CreationTimestamp,
 	}, nil
+}
+
+func decodeNode(item json.RawMessage) (domain.Node, nodeResource, error) {
+	var resource nodeResource
+	if err := json.Unmarshal(item, &resource); err != nil {
+		return domain.Node{}, nodeResource{}, fmt.Errorf("decode Kubernetes node: %w", domain.ErrUpstream)
+	}
+	return domain.Node{
+		Name:          resource.Metadata.Name,
+		Status:        nodeReadyStatus(resource.Status.Conditions),
+		Roles:         nodeRoles(resource.Metadata.Labels),
+		Version:       resource.Status.NodeInfo.KubeletVersion,
+		InternalIP:    nodeInternalIP(resource.Status.Addresses),
+		OSImage:       resource.Status.NodeInfo.OSImage,
+		Architecture:  resource.Status.NodeInfo.Architecture,
+		Capacity:      decodeNodeResources(resource.Status.Capacity),
+		Allocatable:   decodeNodeResources(resource.Status.Allocatable),
+		Unschedulable: resource.Spec.Unschedulable,
+		TaintCount:    len(resource.Spec.Taints),
+		CreatedAt:     resource.Metadata.CreationTimestamp,
+	}, resource, nil
+}
+
+func nodeReadyStatus(conditions []nodeCondition) string {
+	for _, condition := range conditions {
+		if condition.Type != "Ready" {
+			continue
+		}
+		switch condition.Status {
+		case "True":
+			return "Ready"
+		case "False":
+			return "NotReady"
+		default:
+			return "Unknown"
+		}
+	}
+	return "Unknown"
+}
+
+func nodeRoles(labels map[string]string) []string {
+	const rolePrefix = "node-role.kubernetes.io/"
+	roles := make(map[string]struct{})
+	for key, value := range labels {
+		role := ""
+		switch {
+		case strings.HasPrefix(key, rolePrefix):
+			role = strings.TrimPrefix(key, rolePrefix)
+			if role == "" {
+				role = value
+			}
+		case key == "kubernetes.io/role":
+			role = value
+		}
+		if role != "" {
+			roles[role] = struct{}{}
+		}
+	}
+	result := make([]string, 0, len(roles))
+	for role := range roles {
+		result = append(result, role)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func nodeInternalIP(addresses []nodeAddress) string {
+	for _, address := range addresses {
+		if address.Type == "InternalIP" {
+			return address.Address
+		}
+	}
+	return ""
+}
+
+func decodeNodeResources(resources map[string]string) domain.NodeResources {
+	return domain.NodeResources{
+		CPU:              resources["cpu"],
+		Memory:           resources["memory"],
+		Pods:             resources["pods"],
+		EphemeralStorage: resources["ephemeral-storage"],
+	}
+}
+
+func decodeNodeTaints(taints []nodeTaint) []domain.NodeTaint {
+	result := make([]domain.NodeTaint, 0, len(taints))
+	for _, taint := range taints {
+		result = append(result, domain.NodeTaint{
+			Key: taint.Key, Value: taint.Value, Effect: taint.Effect, TimeAdded: taint.TimeAdded,
+		})
+	}
+	return result
+}
+
+func decodeNodeAddresses(addresses []nodeAddress) []domain.NodeAddress {
+	result := make([]domain.NodeAddress, 0, len(addresses))
+	for _, address := range addresses {
+		result = append(result, domain.NodeAddress{Type: address.Type, Address: address.Address})
+	}
+	return result
+}
+
+func decodeNodeConditions(conditions []nodeCondition) []domain.NodeCondition {
+	result := make([]domain.NodeCondition, 0, len(conditions))
+	for _, condition := range conditions {
+		result = append(result, domain.NodeCondition{
+			Type: condition.Type, Status: condition.Status, Reason: condition.Reason, Message: condition.Message,
+			LastHeartbeatTime: condition.LastHeartbeatTime, LastTransitionTime: condition.LastTransitionTime,
+		})
+	}
+	return result
+}
+
+func decodeNodeSystemInfo(info nodeSystemInfo) domain.NodeSystemInfo {
+	return domain.NodeSystemInfo{
+		OSImage: info.OSImage, KernelVersion: info.KernelVersion, ContainerRuntimeVersion: info.ContainerRuntimeVersion,
+		KubeletVersion: info.KubeletVersion, OperatingSystem: info.OperatingSystem, Architecture: info.Architecture,
+	}
 }
 
 func decodePod(item json.RawMessage) (domain.Workload, error) {

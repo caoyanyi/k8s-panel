@@ -301,3 +301,35 @@ func TestValidatePodLogRequest(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateNodeName(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		value     string
+		wantField string
+	}{
+		{name: "hostname", value: "worker-01.example.internal"},
+		{name: "empty", wantField: "name"},
+		{name: "uppercase", value: "Worker-01", wantField: "name"},
+		{name: "path traversal", value: "../nodes", wantField: "name"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := ValidateNodeName(tt.value)
+			if tt.wantField == "" {
+				if err != nil {
+					t.Fatalf("ValidateNodeName() error = %v", err)
+				}
+				return
+			}
+			var validationErr *ValidationError
+			if !errors.As(err, &validationErr) || validationErr.Field != tt.wantField {
+				t.Fatalf("expected validation field %q, got %v", tt.wantField, err)
+			}
+		})
+	}
+}

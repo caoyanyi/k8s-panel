@@ -4,6 +4,7 @@ import { api } from '../api'
 import type { KubernetesEvent, PodLogs, Workload, WorkloadDetail } from '../types'
 import { formatDateTime } from '../utils'
 import { EmptyState, ErrorState, LoadingState } from './DataState'
+import { KubernetesEvents } from './KubernetesEvents'
 import { Modal } from './Modal'
 import { StatusBadge } from './StatusBadge'
 
@@ -173,7 +174,7 @@ export function WorkloadDetailModal({ clusterId, workload, open, onClose }: Work
           </div>
           {tab === 'overview' && <Overview detail={detail} />}
           {tab === 'events' && (
-            eventsLoading ? <LoadingState label="正在读取事件" /> : eventsError ? <ErrorState error={eventsError} /> : <Events events={events} />
+            eventsLoading ? <LoadingState label="正在读取事件" /> : eventsError ? <ErrorState error={eventsError} /> : <KubernetesEvents events={events} />
           )}
           {tab === 'yaml' && (
             <div className="code-panel">
@@ -256,21 +257,6 @@ function Overview({ detail }: { detail: WorkloadDetail }) {
           </div>
         ))}</div> : <span className="detail-muted">无条件记录</span>}
       </section>
-    </div>
-  )
-}
-
-function Events({ events }: { events: KubernetesEvent[] }) {
-  if (!events.length) return <EmptyState title="当前资源没有事件" />
-  return (
-    <div className="event-list">
-      {events.map((event) => (
-        <div key={event.name || `${event.reason}:${event.last_seen}`} className={event.type === 'Warning' ? 'event-row event-warning' : 'event-row'}>
-          <div><StatusBadge status={event.type} /><strong>{event.reason || '-'}</strong><span>{event.source || '-'}</span></div>
-          <p>{event.message || '-'}</p>
-          <div><span>次数 {event.count}</span><time>{formatDateTime(event.last_seen)}</time></div>
-        </div>
-      ))}
     </div>
   )
 }

@@ -11,16 +11,18 @@ func TestLoad(t *testing.T) {
 
 	key := base64.StdEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef"))
 	environment := map[string]string{
-		"PANEL_LISTEN_ADDR":           "127.0.0.1:9080",
-		"PANEL_DATA_FILE":             "/tmp/panel.json",
-		"PANEL_WEB_DIR":               "/tmp/web",
-		"PANEL_ENCRYPTION_KEY":        key,
-		"PANEL_ADMIN_USERNAME":        "platform-admin",
-		"PANEL_ADMIN_PASSWORD_HASH":   "$argon2id$v=19$m=8192,t=1,p=1$c2FsdHNhbHRzYWx0c2FsdA$MTIzNDU2Nzg5MDEyMzQ1Ng",
-		"PANEL_SESSION_TTL":           "2h",
-		"PANEL_HELM_TIMEOUT":          "3m",
-		"PANEL_ALLOWED_PRIVATE_CIDRS": "10.20.0.0/16,192.168.8.10/32",
-		"PANEL_SECURE_COOKIES":        "true",
+		"PANEL_LISTEN_ADDR":             "127.0.0.1:9080",
+		"PANEL_DATA_FILE":               "/tmp/panel.json",
+		"PANEL_WEB_DIR":                 "/tmp/web",
+		"PANEL_ENCRYPTION_KEY":          key,
+		"PANEL_ADMIN_USERNAME":          "platform-admin",
+		"PANEL_ADMIN_PASSWORD_HASH":     "$argon2id$v=19$m=8192,t=1,p=1$c2FsdHNhbHRzYWx0c2FsdA$MTIzNDU2Nzg5MDEyMzQ1Ng",
+		"PANEL_SESSION_TTL":             "2h",
+		"PANEL_HELM_TIMEOUT":            "3m",
+		"PANEL_HELM_WORKERS":            "1",
+		"PANEL_MAX_CONCURRENT_REQUESTS": "24",
+		"PANEL_ALLOWED_PRIVATE_CIDRS":   "10.20.0.0/16,192.168.8.10/32",
+		"PANEL_SECURE_COOKIES":          "true",
 	}
 	loaded, err := Load(func(name string) string { return environment[name] })
 	if err != nil {
@@ -35,8 +37,44 @@ func TestLoad(t *testing.T) {
 	if loaded.SessionTTL != 2*time.Hour || loaded.HelmTimeout != 3*time.Minute {
 		t.Errorf("durations = %v, %v", loaded.SessionTTL, loaded.HelmTimeout)
 	}
+	if loaded.HelmWorkers != 1 || loaded.MaxConcurrentRequests != 24 {
+		t.Errorf("resource limits = %d workers, %d requests", loaded.HelmWorkers, loaded.MaxConcurrentRequests)
+	}
 	if len(loaded.AllowedPrivateCIDRs) != 2 || !loaded.SecureCookies {
 		t.Errorf("network config = %#v", loaded)
+	}
+}
+
+func TestLoadRejectsInvalidResourceLimits(t *testing.T) {
+	t.Parallel()
+
+	base := map[string]string{
+		"PANEL_ENCRYPTION_KEY":      base64.StdEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef")),
+		"PANEL_ADMIN_PASSWORD_HASH": "$argon2id$hash",
+	}
+	tests := []struct {
+		name  string
+		key   string
+		value string
+	}{
+		{name: "zero Helm workers", key: "PANEL_HELM_WORKERS", value: "0"},
+		{name: "too many Helm workers", key: "PANEL_HELM_WORKERS", value: "9"},
+		{name: "zero concurrent requests", key: "PANEL_MAX_CONCURRENT_REQUESTS", value: "0"},
+		{name: "too many concurrent requests", key: "PANEL_MAX_CONCURRENT_REQUESTS", value: "129"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			environment := make(map[string]string, len(base)+1)
+			for key, value := range base {
+				environment[key] = value
+			}
+			environment[tt.key] = tt.value
+			if _, err := Load(func(name string) string { return environment[name] }); err == nil {
+				t.Fatal("Load() error = nil")
+			}
+		})
 	}
 }
 

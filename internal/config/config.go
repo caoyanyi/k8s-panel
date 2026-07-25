@@ -14,17 +14,19 @@ import (
 )
 
 type Config struct {
-	ListenAddr          string
-	DataFile            string
-	WebDir              string
-	EncryptionKey       []byte
-	AdminUsername       string
-	AdminPasswordHash   string
-	SessionTTL          time.Duration
-	HelmTimeout         time.Duration
-	AllowedPrivateCIDRs []netip.Prefix
-	SecureCookies       bool
-	LogLevel            string
+	ListenAddr            string
+	DataFile              string
+	WebDir                string
+	EncryptionKey         []byte
+	AdminUsername         string
+	AdminPasswordHash     string
+	SessionTTL            time.Duration
+	HelmTimeout           time.Duration
+	HelmWorkers           int
+	MaxConcurrentRequests int
+	AllowedPrivateCIDRs   []netip.Prefix
+	SecureCookies         bool
+	LogLevel              string
 }
 
 func Load(getenv func(string) string) (Config, error) {
@@ -70,6 +72,14 @@ func Load(getenv func(string) string) (Config, error) {
 	if err != nil || loaded.HelmTimeout < 10*time.Second || loaded.HelmTimeout > 30*time.Minute {
 		return Config{}, errors.New("PANEL_HELM_TIMEOUT must be between 10s and 30m")
 	}
+	loaded.HelmWorkers, err = intOrDefault(getenv("PANEL_HELM_WORKERS"), 2)
+	if err != nil || loaded.HelmWorkers < 1 || loaded.HelmWorkers > 8 {
+		return Config{}, errors.New("PANEL_HELM_WORKERS must be between 1 and 8")
+	}
+	loaded.MaxConcurrentRequests, err = intOrDefault(getenv("PANEL_MAX_CONCURRENT_REQUESTS"), 16)
+	if err != nil || loaded.MaxConcurrentRequests < 1 || loaded.MaxConcurrentRequests > 128 {
+		return Config{}, errors.New("PANEL_MAX_CONCURRENT_REQUESTS must be between 1 and 128")
+	}
 	loaded.AllowedPrivateCIDRs, err = outbound.ParseAllowedPrefixes(getenv("PANEL_ALLOWED_PRIVATE_CIDRS"))
 	if err != nil {
 		return Config{}, err
@@ -98,6 +108,13 @@ func durationOrDefault(value string, fallback time.Duration) (time.Duration, err
 		return fallback, nil
 	}
 	return time.ParseDuration(strings.TrimSpace(value))
+}
+
+func intOrDefault(value string, fallback int) (int, error) {
+	if strings.TrimSpace(value) == "" {
+		return fallback, nil
+	}
+	return strconv.Atoi(strings.TrimSpace(value))
 }
 
 func validateListenAddress(address string) error {

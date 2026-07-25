@@ -155,6 +155,47 @@ func TestServiceReadsWorkloadDiagnosticsAndAuditsPodLogs(t *testing.T) {
 	}
 }
 
+func TestServiceReadsNodeDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	gateway := &fakeKubeGateway{
+		probe:      domain.ClusterProbe{Version: "v1.36.2"},
+		nodes:      []domain.Node{{Name: "worker-01", Status: "Ready"}},
+		nodeDetail: domain.NodeDetail{Node: domain.Node{Name: "worker-01", Status: "Ready"}, UID: "uid-worker-01"},
+		nodeEvents: []domain.KubernetesEvent{{Type: "Warning", Reason: "NodeNotReady"}},
+	}
+	service, _, _ := newTestService(t, serviceFakes{kube: gateway})
+	cluster, err := service.CreateCluster(context.Background(), "admin", "req_cluster", domain.ClusterInput{
+		Name: "cluster", Environment: domain.EnvironmentDevelopment, Server: "https://api.example.com", BearerToken: "token",
+	})
+	if err != nil {
+		t.Fatalf("CreateCluster() error = %v", err)
+	}
+
+	nodes, err := service.Nodes(context.Background(), cluster.ID)
+	if err != nil || len(nodes) != 1 || nodes[0].Name != "worker-01" {
+		t.Fatalf("Nodes() = %#v, %v", nodes, err)
+	}
+	detail, err := service.NodeDetail(context.Background(), cluster.ID, "worker-01")
+	if err != nil || detail.UID != "uid-worker-01" {
+		t.Fatalf("NodeDetail() = %#v, %v", detail, err)
+	}
+	events, err := service.NodeEvents(context.Background(), cluster.ID, "worker-01", 25)
+	if err != nil || len(events) != 1 || events[0].Reason != "NodeNotReady" {
+		t.Fatalf("NodeEvents() = %#v, %v", events, err)
+	}
+	if gateway.nodeName != "worker-01" || gateway.nodeEventLimit != 25 {
+		t.Errorf("gateway calls = %q, %d", gateway.nodeName, gateway.nodeEventLimit)
+	}
+
+	if _, err := service.NodeDetail(context.Background(), cluster.ID, "../nodes"); err == nil {
+		t.Fatal("NodeDetail() accepted an invalid node name")
+	}
+	if _, err := service.NodeEvents(context.Background(), cluster.ID, "worker-01", domain.MaxNodeEventLimit+1); err == nil {
+		t.Fatal("NodeEvents() accepted an excessive limit")
+	}
+}
+
 func TestServiceSerializesHelmOperationsForSameRelease(t *testing.T) {
 	t.Parallel()
 
@@ -285,6 +326,11 @@ type fakeKubeGateway struct {
 	detailReference domain.WorkloadReference
 	eventLimit      int
 	logRequest      domain.PodLogRequest
+	nodes           []domain.Node
+	nodeDetail      domain.NodeDetail
+	nodeEvents      []domain.KubernetesEvent
+	nodeName        string
+	nodeEventLimit  int
 }
 
 func (g *fakeKubeGateway) Probe(context.Context) (domain.ClusterProbe, error) {
@@ -295,6 +341,18 @@ func (g *fakeKubeGateway) Summary(context.Context) (domain.ClusterSummary, error
 }
 func (g *fakeKubeGateway) Namespaces(context.Context) ([]domain.Namespace, error) {
 	return append([]domain.Namespace(nil), g.namespaces...), nil
+}
+func (g *fakeKubeGateway) Nodes(context.Context) ([]domain.Node, error) {
+	return append([]domain.Node(nil), g.nodes...), nil
+}
+func (g *fakeKubeGateway) NodeDetail(_ context.Context, name string) (domain.NodeDetail, error) {
+	g.nodeName = name
+	return g.nodeDetail, nil
+}
+func (g *fakeKubeGateway) NodeEvents(_ context.Context, name string, limit int) ([]domain.KubernetesEvent, error) {
+	g.nodeName = name
+	g.nodeEventLimit = limit
+	return append([]domain.KubernetesEvent(nil), g.nodeEvents...), nil
 }
 func (g *fakeKubeGateway) Workloads(context.Context, string, string) ([]domain.Workload, error) {
 	return nil, nil
