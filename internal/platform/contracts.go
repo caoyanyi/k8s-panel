@@ -44,6 +44,9 @@ type KubeGateway interface {
 	Summary(context.Context) (domain.ClusterSummary, error)
 	Namespaces(context.Context) ([]domain.Namespace, error)
 	Workloads(context.Context, string, string) ([]domain.Workload, error)
+	WorkloadDetail(context.Context, domain.WorkloadReference) (domain.WorkloadDetail, error)
+	WorkloadEvents(context.Context, domain.WorkloadReference, int) ([]domain.KubernetesEvent, error)
+	PodLogs(context.Context, domain.PodLogRequest) (domain.PodLogs, error)
 }
 
 type KubeFactory interface {

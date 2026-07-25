@@ -6,7 +6,8 @@ K8s Panel 是一个独立实现的 Kubernetes 与 Helm 管理面板。后端使�
 
 - 单管理员登录、HttpOnly 会话 Cookie、登录失败限流
 - 多集群配置、连接测试、启停和删除确认
-- 集群概览、命名空间与 Deployment/StatefulSet/DaemonSet 工作负载查询
+- 集群概览、命名空间与 Deployment/StatefulSet/DaemonSet/Pod 工作负载查询
+- 工作负载详情、脱敏 YAML、关联事件与有界 Pod 日志快照
 - Helm 仓库配置与连接测试
 - Helm Release 查询、安装、升级、回滚和卸载
 - Helm 写操作异步队列、同一 Release 串行执行
@@ -96,4 +97,4 @@ npm --prefix web run build
 npm --prefix web run e2e
 ```
 
-MVP 使用单节点文件存储，适合单副本部署。高可用、多租户 RBAC、OIDC、资源 YAML 编辑、终端和日志流式查看属于后续版本范围。
+MVP 使用单节点文件存储，适合单副本部署。高可用、多租户 RBAC、OIDC、资源 YAML 编辑、终端和日志流式跟随属于后续版本范围。

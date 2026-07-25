@@ -6,7 +6,7 @@ interface ModalProps {
   open: boolean
   onClose: () => void
   children: ReactNode
-  width?: 'normal' | 'wide'
+  width?: 'normal' | 'wide' | 'large'
 }
 
 export function Modal({ title, open, onClose, children, width = 'normal' }: ModalProps) {

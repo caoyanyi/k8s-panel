@@ -232,6 +232,56 @@ func (s *Service) Workloads(ctx context.Context, clusterID, namespace, kind stri
 	return gateway.Workloads(ctx, namespace, kind)
 }
 
+func (s *Service) WorkloadDetail(ctx context.Context, clusterID string, reference domain.WorkloadReference) (domain.WorkloadDetail, error) {
+	if err := domain.ValidateWorkloadReference(reference); err != nil {
+		return domain.WorkloadDetail{}, err
+	}
+	gateway, err := s.kubeGateway(ctx, clusterID)
+	if err != nil {
+		return domain.WorkloadDetail{}, err
+	}
+	return gateway.WorkloadDetail(ctx, reference)
+}
+
+func (s *Service) WorkloadEvents(ctx context.Context, clusterID string, reference domain.WorkloadReference, limit int) ([]domain.KubernetesEvent, error) {
+	if err := domain.ValidateWorkloadReference(reference); err != nil {
+		return nil, err
+	}
+	if limit < 1 || limit > domain.MaxWorkloadEventLimit {
+		return nil, domain.Invalid("limit", "must be between 1 and 100")
+	}
+	gateway, err := s.kubeGateway(ctx, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	return gateway.WorkloadEvents(ctx, reference, limit)
+}
+
+func (s *Service) PodLogs(
+	ctx context.Context,
+	actor, requestID, clusterID string,
+	input domain.PodLogRequest,
+) (domain.PodLogs, error) {
+	if err := domain.ValidatePodLogRequest(input); err != nil {
+		return domain.PodLogs{}, err
+	}
+	gateway, err := s.kubeGateway(ctx, clusterID)
+	if err != nil {
+		return domain.PodLogs{}, err
+	}
+	logs, logsErr := gateway.PodLogs(ctx, input)
+	result := "succeeded"
+	summary := fmt.Sprintf("container=%s, previous=%t, tail_lines=%d", input.Container, input.Previous, input.TailLines)
+	if logsErr != nil {
+		result = "failed"
+		summary = "pod log request failed"
+	}
+	if err := s.audit(ctx, actor, requestID, "pod.logs.read", result, clusterID, input.Namespace, input.Pod+"/"+input.Container, summary, ""); err != nil {
+		return domain.PodLogs{}, fmt.Errorf("write pod log audit: %w", err)
+	}
+	return logs, logsErr
+}
+
 func (s *Service) kubeGateway(ctx context.Context, clusterID string) (KubeGateway, error) {
 	cluster, err := s.store.GetCluster(ctx, clusterID)
 	if err != nil {

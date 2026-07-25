@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -182,6 +183,90 @@ func (s *Server) listWorkloads(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeData(w, http.StatusOK, items)
+}
+
+func (s *Server) getWorkloadDetail(w http.ResponseWriter, r *http.Request) {
+	item, err := s.service.WorkloadDetail(r.Context(), r.PathValue("id"), workloadReference(r))
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeData(w, http.StatusOK, item)
+}
+
+func (s *Server) listWorkloadEvents(w http.ResponseWriter, r *http.Request) {
+	limit, err := parseBoundedInt(r.URL.Query().Get("limit"), 50, 1, domain.MaxWorkloadEventLimit, "limit")
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	items, err := s.service.WorkloadEvents(r.Context(), r.PathValue("id"), workloadReference(r), limit)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeData(w, http.StatusOK, items)
+}
+
+func (s *Server) getPodLogs(w http.ResponseWriter, r *http.Request) {
+	tailLines, err := parseBoundedInt(
+		r.URL.Query().Get("tail_lines"), 200, 1, domain.MaxPodLogTailLines, "tail_lines",
+	)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	previous, err := parseOptionalBool(r.URL.Query().Get("previous"), false, "previous")
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	timestamps, err := parseOptionalBool(r.URL.Query().Get("timestamps"), true, "timestamps")
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	item, err := s.service.PodLogs(r.Context(), principal(r).Username, requestID(r), r.PathValue("id"), domain.PodLogRequest{
+		Namespace:  r.PathValue("namespace"),
+		Pod:        r.PathValue("name"),
+		Container:  r.URL.Query().Get("container"),
+		TailLines:  tailLines,
+		Previous:   previous,
+		Timestamps: timestamps,
+	})
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeData(w, http.StatusOK, item)
+}
+
+func workloadReference(r *http.Request) domain.WorkloadReference {
+	return domain.WorkloadReference{
+		Kind: r.PathValue("kind"), Namespace: r.PathValue("namespace"), Name: r.PathValue("name"),
+	}
+}
+
+func parseBoundedInt(raw string, defaultValue, minimum, maximum int, field string) (int, error) {
+	if raw == "" {
+		return defaultValue, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < minimum || value > maximum {
+		return 0, domain.Invalid(field, fmt.Sprintf("must be between %d and %d", minimum, maximum))
+	}
+	return value, nil
+}
+
+func parseOptionalBool(raw string, defaultValue bool, field string) (bool, error) {
+	if raw == "" {
+		return defaultValue, nil
+	}
+	value, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, domain.Invalid(field, "must be true or false")
+	}
+	return value, nil
 }
 
 func (s *Server) listRepositories(w http.ResponseWriter, r *http.Request) {

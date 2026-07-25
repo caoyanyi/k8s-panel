@@ -11,6 +11,7 @@ const MaxHelmValuesBytes = 256 * 1024
 var (
 	resourceNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 	dnsLabelPattern     = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
+	dnsSubdomainPattern = regexp.MustCompile(`^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$`)
 	chartNamePattern    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$`)
 )
 
@@ -75,6 +76,33 @@ func ValidateHelmOperationInput(input HelmOperationInput) error {
 	return nil
 }
 
+func ValidateWorkloadReference(reference WorkloadReference) error {
+	kind := strings.ToLower(strings.TrimSpace(reference.Kind))
+	if kind != "deployment" && kind != "statefulset" && kind != "daemonset" && kind != "pod" {
+		return Invalid("kind", "must be deployment, statefulset, daemonset or pod")
+	}
+	if !validDNSLabel(reference.Namespace) {
+		return Invalid("namespace", "must be a valid Kubernetes namespace")
+	}
+	if !validDNSSubdomain(reference.Name) {
+		return Invalid("name", "must be a valid Kubernetes resource name")
+	}
+	return nil
+}
+
+func ValidatePodLogRequest(input PodLogRequest) error {
+	if err := ValidateWorkloadReference(WorkloadReference{Kind: "pod", Namespace: input.Namespace, Name: input.Pod}); err != nil {
+		return err
+	}
+	if !validDNSLabel(input.Container) {
+		return Invalid("container", "must be a valid Kubernetes container name")
+	}
+	if input.TailLines < 1 || input.TailLines > MaxPodLogTailLines {
+		return Invalid("tail_lines", "must be between 1 and 2000")
+	}
+	return nil
+}
+
 func validateHTTPSURL(raw string, allowPath bool) (*url.URL, error) {
 	parsed, err := url.ParseRequestURI(strings.TrimSpace(raw))
 	if err != nil {
@@ -91,4 +119,16 @@ func validateHTTPSURL(raw string, allowPath bool) (*url.URL, error) {
 
 func validDNSLabel(value string) bool {
 	return len(value) > 0 && len(value) <= 63 && dnsLabelPattern.MatchString(value)
+}
+
+func validDNSSubdomain(value string) bool {
+	if len(value) == 0 || len(value) > 253 || !dnsSubdomainPattern.MatchString(value) {
+		return false
+	}
+	for _, label := range strings.Split(value, ".") {
+		if !validDNSLabel(label) {
+			return false
+		}
+	}
+	return true
 }

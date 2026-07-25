@@ -159,6 +159,75 @@ type Workload struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+const (
+	MaxPodLogTailLines    = 2000
+	MaxWorkloadEventLimit = 100
+)
+
+type WorkloadReference struct {
+	Kind      string
+	Namespace string
+	Name      string
+}
+
+type WorkloadContainer struct {
+	Name         string `json:"name"`
+	Image        string `json:"image"`
+	Type         string `json:"type"`
+	Ready        bool   `json:"ready"`
+	RestartCount int32  `json:"restart_count"`
+	State        string `json:"state,omitempty"`
+}
+
+type WorkloadCondition struct {
+	Type               string    `json:"type"`
+	Status             string    `json:"status"`
+	Reason             string    `json:"reason,omitempty"`
+	Message            string    `json:"message,omitempty"`
+	LastTransitionTime time.Time `json:"last_transition_time,omitzero"`
+}
+
+type WorkloadDetail struct {
+	Workload
+	UID             string              `json:"uid"`
+	ResourceVersion string              `json:"resource_version"`
+	Labels          map[string]string   `json:"labels"`
+	Containers      []WorkloadContainer `json:"containers"`
+	Conditions      []WorkloadCondition `json:"conditions"`
+	YAML            string              `json:"yaml"`
+}
+
+type KubernetesEvent struct {
+	Name      string    `json:"name"`
+	Type      string    `json:"type"`
+	Reason    string    `json:"reason"`
+	Message   string    `json:"message"`
+	Source    string    `json:"source,omitempty"`
+	Count     int32     `json:"count"`
+	FirstSeen time.Time `json:"first_seen,omitzero"`
+	LastSeen  time.Time `json:"last_seen,omitzero"`
+}
+
+type PodLogRequest struct {
+	Namespace  string
+	Pod        string
+	Container  string
+	TailLines  int
+	Previous   bool
+	Timestamps bool
+}
+
+type PodLogs struct {
+	Namespace  string `json:"namespace"`
+	Pod        string `json:"pod"`
+	Container  string `json:"container"`
+	TailLines  int    `json:"tail_lines"`
+	Previous   bool   `json:"previous"`
+	Timestamps bool   `json:"timestamps"`
+	Truncated  bool   `json:"truncated"`
+	Content    string `json:"content"`
+}
+
 type HelmRelease struct {
 	Name       string    `json:"name"`
 	Namespace  string    `json:"namespace"`

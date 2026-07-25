@@ -57,6 +57,38 @@ test('critical views have no serious accessibility violations', async ({ page },
   expect(result.violations.filter((violation) => ['serious', 'critical'].includes(violation.impact ?? ''))).toEqual([])
 })
 
+test('workload diagnostics show details, events, YAML and bounded logs', async ({ page }, testInfo) => {
+  const consoleErrors: string[] = []
+  page.on('console', (message) => {
+    if (message.type() === 'error') consoleErrors.push(message.text())
+  })
+  page.on('pageerror', (error) => consoleErrors.push(error.message))
+  await mockWorkloadDiagnostics(page)
+
+  await page.goto('/#workloads')
+  await expect(page.getByRole('heading', { name: '工作负载' })).toBeVisible()
+  await expect(page.getByText('gateway-0', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: '查看 gateway-0' }).click()
+
+  const dialog = page.getByRole('dialog', { name: 'Pod · gateway-0' })
+  await expect(dialog).toBeVisible()
+  await expect(dialog.getByText('uid-gateway-0')).toBeVisible()
+
+  await dialog.getByRole('tab', { name: '事件' }).click()
+  await expect(dialog.getByText('BackOff')).toBeVisible()
+  await dialog.getByRole('tab', { name: 'YAML' }).click()
+  await expect(dialog.getByText(/value: <redacted>/)).toBeVisible()
+  await dialog.getByRole('tab', { name: '日志' }).click()
+  await expect(dialog.getByText(/gateway ready/)).toBeVisible()
+
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
+  expect(overflow).toBeLessThanOrEqual(1)
+  const result = await new AxeBuilder({ page }).analyze()
+  expect(result.violations.filter((violation) => ['serious', 'critical'].includes(violation.impact ?? ''))).toEqual([])
+  await page.screenshot({ path: `test-results/${testInfo.project.name}-workload-diagnostics.png` })
+  expect(consoleErrors).toEqual([])
+})
+
 async function navigate(page: Page, projectName: string, label: string) {
   if (projectName.includes('mobile')) {
     await page.getByRole('button', { name: '打开导航' }).click()
@@ -71,4 +103,73 @@ function requiredEnvironment(name: string) {
   const value = process.env[name]
   if (!value) throw new Error(`${name} is not set by global setup`)
   return value
+}
+
+async function mockWorkloadDiagnostics(page: Page) {
+  await page.route('**/api/v1/**', async (route) => {
+    const url = new URL(route.request().url())
+    const path = url.pathname
+    let data: unknown
+
+    if (path === '/api/v1/session') {
+      data = { username: 'diagnostics-admin', role: 'admin', expires_at: '2026-07-25T16:00:00Z' }
+    } else if (path === '/api/v1/clusters') {
+      data = [{
+        id: 'clu_1', name: 'production-cn', environment: 'production', server: 'https://api.example.com',
+        status: 'connected', version: 'v1.36.2', credentials_configured: true,
+        created_at: '2026-07-24T08:00:00Z', updated_at: '2026-07-25T08:00:00Z',
+      }]
+    } else if (path === '/api/v1/clusters/clu_1/namespaces') {
+      data = [{ name: 'payments', status: 'Active', created_at: '2026-07-24T08:00:00Z' }]
+    } else if (path === '/api/v1/clusters/clu_1/summary') {
+      data = {
+        version: 'v1.36.2', namespace_count: 1, node_count: 3, ready_node_count: 3,
+        workload_count: 1, ready_workloads: 1, unhealthy_pods: 0,
+      }
+    } else if (path === '/api/v1/clusters/clu_1/workloads') {
+      data = [{
+        kind: 'Pod', namespace: 'payments', name: 'gateway-0', ready: 1, desired: 1, status: 'Ready',
+        images: ['registry.example.com/payments/gateway:1.4.0'], created_at: '2026-07-24T08:00:00Z',
+      }]
+    } else if (path.endsWith('/workloads/pod/payments/gateway-0/events')) {
+      data = [{
+        name: 'gateway-warning', type: 'Warning', reason: 'BackOff', message: 'Back-off restarting container',
+        source: 'kubelet', count: 3, first_seen: '2026-07-25T07:50:00Z', last_seen: '2026-07-25T08:03:00Z',
+      }]
+    } else if (path.endsWith('/workloads/pod/payments/gateway-0')) {
+      data = {
+        kind: 'Pod', namespace: 'payments', name: 'gateway-0', ready: 1, desired: 1, status: 'Ready',
+        images: ['registry.example.com/payments/gateway:1.4.0'], created_at: '2026-07-24T08:00:00Z',
+        uid: 'uid-gateway-0', resource_version: '42', labels: { app: 'gateway', tier: 'api' },
+        containers: [{
+          name: 'app', image: 'registry.example.com/payments/gateway:1.4.0', type: 'container',
+          ready: true, restart_count: 2, state: 'Running',
+        }],
+        conditions: [{
+          type: 'Ready', status: 'True', reason: 'ContainersReady', message: 'All containers are ready',
+          last_transition_time: '2026-07-25T08:01:00Z',
+        }],
+        yaml: 'apiVersion: v1\nkind: Pod\nmetadata:\n  name: gateway-0\nspec:\n  containers:\n    - env:\n        - name: API_TOKEN\n          value: <redacted>\n',
+      }
+    } else if (path.endsWith('/pods/payments/gateway-0/logs')) {
+      data = {
+        namespace: 'payments', pod: 'gateway-0', container: 'app', tail_lines: 200,
+        previous: false, timestamps: true, truncated: false,
+        content: '2026-07-25T08:04:00Z gateway ready\n',
+      }
+    } else {
+      await route.fulfill({
+        status: 404,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: { code: 'not_found', message: `No mock for ${path}` } }),
+      })
+      return
+    }
+
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ data }),
+    })
+  })
 }

@@ -1,6 +1,7 @@
 package kubernetes
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -11,15 +12,18 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/caoyanyi/k8s-panel/internal/domain"
 	"github.com/caoyanyi/k8s-panel/internal/outbound"
+	"gopkg.in/yaml.v3"
 )
 
 const (
 	maxResponseBytes = 8 * 1024 * 1024
+	maxLogBytes      = 2 * 1024 * 1024
 	listPageSize     = "500"
 )
 
@@ -162,6 +166,104 @@ func (c *Client) Workloads(ctx context.Context, namespace, kind string) ([]domai
 	return workloads, nil
 }
 
+func (c *Client) WorkloadDetail(ctx context.Context, reference domain.WorkloadReference) (domain.WorkloadDetail, error) {
+	reference.Kind = strings.ToLower(strings.TrimSpace(reference.Kind))
+	if err := domain.ValidateWorkloadReference(reference); err != nil {
+		return domain.WorkloadDetail{}, err
+	}
+	var raw json.RawMessage
+	if err := c.getJSON(ctx, workloadResourcePath(reference), nil, &raw); err != nil {
+		return domain.WorkloadDetail{}, err
+	}
+	workload, err := decodeWorkload(reference.Kind, raw)
+	if err != nil {
+		return domain.WorkloadDetail{}, err
+	}
+	var resource workloadDetailResource
+	if err := json.Unmarshal(raw, &resource); err != nil {
+		return domain.WorkloadDetail{}, fmt.Errorf("decode Kubernetes workload detail: %w", domain.ErrUpstream)
+	}
+	sanitized, err := sanitizedWorkloadYAML(raw)
+	if err != nil {
+		return domain.WorkloadDetail{}, err
+	}
+	return domain.WorkloadDetail{
+		Workload:        workload,
+		UID:             resource.Metadata.UID,
+		ResourceVersion: resource.Metadata.ResourceVersion,
+		Labels:          cloneStringMap(resource.Metadata.Labels),
+		Containers:      decodeContainers(reference.Kind, resource),
+		Conditions:      decodeConditions(resource.Status.Conditions),
+		YAML:            sanitized,
+	}, nil
+}
+
+func (c *Client) WorkloadEvents(
+	ctx context.Context,
+	reference domain.WorkloadReference,
+	limit int,
+) ([]domain.KubernetesEvent, error) {
+	reference.Kind = strings.ToLower(strings.TrimSpace(reference.Kind))
+	if err := domain.ValidateWorkloadReference(reference); err != nil {
+		return nil, err
+	}
+	if limit < 1 || limit > domain.MaxWorkloadEventLimit {
+		return nil, domain.Invalid("limit", "must be between 1 and 100")
+	}
+	query := make(url.Values)
+	query.Set("fieldSelector", strings.Join([]string{
+		"involvedObject.kind=" + displayWorkloadKind(reference.Kind),
+		"involvedObject.name=" + reference.Name,
+	}, ","))
+	items, err := c.listRaw(ctx, "/api/v1/namespaces/"+reference.Namespace+"/events", query)
+	if err != nil {
+		return nil, err
+	}
+	events := make([]domain.KubernetesEvent, 0, min(limit, len(items)))
+	for _, item := range items {
+		var resource eventResource
+		if err := json.Unmarshal(item, &resource); err != nil {
+			return nil, fmt.Errorf("decode Kubernetes event: %w", domain.ErrUpstream)
+		}
+		events = append(events, domain.KubernetesEvent{
+			Name:      resource.Metadata.Name,
+			Type:      resource.Type,
+			Reason:    resource.Reason,
+			Message:   resource.Message,
+			Source:    eventSource(resource),
+			Count:     max(resource.Count, 1),
+			FirstSeen: firstNonZeroTime(resource.FirstTimestamp, resource.EventTime, resource.Metadata.CreationTimestamp),
+			LastSeen:  firstNonZeroTime(resource.Series.LastObservedTime, resource.LastTimestamp, resource.EventTime, resource.Metadata.CreationTimestamp),
+		})
+	}
+	sort.Slice(events, func(i, j int) bool { return events[i].LastSeen.After(events[j].LastSeen) })
+	if len(events) > limit {
+		events = events[:limit]
+	}
+	return events, nil
+}
+
+func (c *Client) PodLogs(ctx context.Context, input domain.PodLogRequest) (domain.PodLogs, error) {
+	if err := domain.ValidatePodLogRequest(input); err != nil {
+		return domain.PodLogs{}, err
+	}
+	query := make(url.Values)
+	query.Set("container", input.Container)
+	query.Set("tailLines", strconv.Itoa(input.TailLines))
+	query.Set("previous", strconv.FormatBool(input.Previous))
+	query.Set("timestamps", strconv.FormatBool(input.Timestamps))
+	path := "/api/v1/namespaces/" + input.Namespace + "/pods/" + input.Pod + "/log"
+	payload, truncated, err := c.getPayload(ctx, path, query, "text/plain", maxLogBytes, true)
+	if err != nil {
+		return domain.PodLogs{}, err
+	}
+	payload = bytes.ToValidUTF8(payload, []byte("\uFFFD"))
+	return domain.PodLogs{
+		Namespace: input.Namespace, Pod: input.Pod, Container: input.Container, TailLines: input.TailLines,
+		Previous: input.Previous, Timestamps: input.Timestamps, Truncated: truncated, Content: string(payload),
+	}, nil
+}
+
 func (c *Client) Summary(ctx context.Context) (domain.ClusterSummary, error) {
 	probe, err := c.Probe(ctx)
 	if err != nil {
@@ -219,43 +321,9 @@ func (c *Client) listRaw(ctx context.Context, path string, query url.Values) ([]
 }
 
 func (c *Client) getJSON(ctx context.Context, path string, query url.Values, target any) error {
-	requestURL := *c.baseURL
-	requestURL.Path = strings.TrimRight(c.baseURL.Path, "/") + path
-	requestURL.RawQuery = query.Encode()
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL.String(), nil)
+	payload, _, err := c.getPayload(ctx, path, query, "application/json", maxResponseBytes, false)
 	if err != nil {
-		return fmt.Errorf("create Kubernetes request: %w", err)
-	}
-	request.Header.Set("Authorization", "Bearer "+c.token)
-	request.Header.Set("Accept", "application/json")
-
-	response, err := c.http.Do(request)
-	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-			return fmt.Errorf("Kubernetes request: %w", domain.ErrTimeout)
-		}
-		return fmt.Errorf("Kubernetes request: %w", domain.ErrUpstream)
-	}
-	defer response.Body.Close()
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		switch response.StatusCode {
-		case http.StatusUnauthorized:
-			return fmt.Errorf("Kubernetes authentication rejected: %w", domain.ErrUnauthorized)
-		case http.StatusForbidden:
-			return fmt.Errorf("Kubernetes authorization rejected: %w", domain.ErrForbidden)
-		case http.StatusNotFound:
-			return fmt.Errorf("Kubernetes resource unavailable: %w", domain.ErrNotFound)
-		default:
-			return fmt.Errorf("Kubernetes returned HTTP %d: %w", response.StatusCode, domain.ErrUpstream)
-		}
-	}
-	limited := io.LimitReader(response.Body, maxResponseBytes+1)
-	payload, err := io.ReadAll(limited)
-	if err != nil {
-		return fmt.Errorf("read Kubernetes response: %w", domain.ErrUpstream)
-	}
-	if len(payload) > maxResponseBytes {
-		return errors.New("Kubernetes response exceeded size limit")
+		return err
 	}
 	if err := json.Unmarshal(payload, target); err != nil {
 		return fmt.Errorf("decode Kubernetes response: %w", domain.ErrUpstream)
@@ -263,14 +331,317 @@ func (c *Client) getJSON(ctx context.Context, path string, query url.Values, tar
 	return nil
 }
 
+func (c *Client) getPayload(
+	ctx context.Context,
+	path string,
+	query url.Values,
+	accept string,
+	maxBytes int64,
+	truncate bool,
+) ([]byte, bool, error) {
+	requestURL := *c.baseURL
+	requestURL.Path = strings.TrimRight(c.baseURL.Path, "/") + path
+	requestURL.RawQuery = query.Encode()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL.String(), nil)
+	if err != nil {
+		return nil, false, fmt.Errorf("create Kubernetes request: %w", err)
+	}
+	request.Header.Set("Authorization", "Bearer "+c.token)
+	request.Header.Set("Accept", accept)
+
+	response, err := c.http.Do(request)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			return nil, false, fmt.Errorf("Kubernetes request: %w", domain.ErrTimeout)
+		}
+		return nil, false, fmt.Errorf("Kubernetes request: %w", domain.ErrUpstream)
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		switch response.StatusCode {
+		case http.StatusUnauthorized:
+			return nil, false, fmt.Errorf("Kubernetes authentication rejected: %w", domain.ErrUnauthorized)
+		case http.StatusForbidden:
+			return nil, false, fmt.Errorf("Kubernetes authorization rejected: %w", domain.ErrForbidden)
+		case http.StatusNotFound:
+			return nil, false, fmt.Errorf("Kubernetes resource unavailable: %w", domain.ErrNotFound)
+		default:
+			return nil, false, fmt.Errorf("Kubernetes returned HTTP %d: %w", response.StatusCode, domain.ErrUpstream)
+		}
+	}
+	limited := io.LimitReader(response.Body, maxBytes+1)
+	payload, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, false, fmt.Errorf("read Kubernetes response: %w", domain.ErrUpstream)
+	}
+	if int64(len(payload)) > maxBytes {
+		if truncate {
+			return payload[:maxBytes], true, nil
+		}
+		return nil, false, errors.New("Kubernetes response exceeded size limit")
+	}
+	return payload, false, nil
+}
+
 type objectMetadata struct {
-	Name              string    `json:"name"`
-	Namespace         string    `json:"namespace"`
-	CreationTimestamp time.Time `json:"creationTimestamp"`
+	Name              string            `json:"name"`
+	Namespace         string            `json:"namespace"`
+	UID               string            `json:"uid"`
+	ResourceVersion   string            `json:"resourceVersion"`
+	Labels            map[string]string `json:"labels"`
+	CreationTimestamp time.Time         `json:"creationTimestamp"`
 }
 
 type containerSpec struct {
+	Name  string `json:"name"`
 	Image string `json:"image"`
+}
+
+type containerStatus struct {
+	Name         string `json:"name"`
+	Ready        bool   `json:"ready"`
+	RestartCount int32  `json:"restartCount"`
+	State        struct {
+		Waiting *struct {
+			Reason string `json:"reason"`
+		} `json:"waiting"`
+		Running    *struct{} `json:"running"`
+		Terminated *struct {
+			Reason string `json:"reason"`
+		} `json:"terminated"`
+	} `json:"state"`
+}
+
+type workloadCondition struct {
+	Type               string    `json:"type"`
+	Status             string    `json:"status"`
+	Reason             string    `json:"reason"`
+	Message            string    `json:"message"`
+	LastTransitionTime time.Time `json:"lastTransitionTime"`
+}
+
+type workloadDetailResource struct {
+	Metadata objectMetadata `json:"metadata"`
+	Spec     struct {
+		Containers          []containerSpec `json:"containers"`
+		InitContainers      []containerSpec `json:"initContainers"`
+		EphemeralContainers []containerSpec `json:"ephemeralContainers"`
+		Template            struct {
+			Spec struct {
+				Containers     []containerSpec `json:"containers"`
+				InitContainers []containerSpec `json:"initContainers"`
+			} `json:"spec"`
+		} `json:"template"`
+	} `json:"spec"`
+	Status struct {
+		Conditions                 []workloadCondition `json:"conditions"`
+		ContainerStatuses          []containerStatus   `json:"containerStatuses"`
+		InitContainerStatuses      []containerStatus   `json:"initContainerStatuses"`
+		EphemeralContainerStatuses []containerStatus   `json:"ephemeralContainerStatuses"`
+	} `json:"status"`
+}
+
+type eventResource struct {
+	Metadata           objectMetadata `json:"metadata"`
+	Type               string         `json:"type"`
+	Reason             string         `json:"reason"`
+	Message            string         `json:"message"`
+	Count              int32          `json:"count"`
+	ReportingComponent string         `json:"reportingComponent"`
+	Source             struct {
+		Component string `json:"component"`
+	} `json:"source"`
+	EventTime      time.Time `json:"eventTime"`
+	FirstTimestamp time.Time `json:"firstTimestamp"`
+	LastTimestamp  time.Time `json:"lastTimestamp"`
+	Series         struct {
+		LastObservedTime time.Time `json:"lastObservedTime"`
+	} `json:"series"`
+}
+
+func workloadResourcePath(reference domain.WorkloadReference) string {
+	base := "/api/v1/namespaces/" + reference.Namespace + "/pods/"
+	switch reference.Kind {
+	case "deployment":
+		base = "/apis/apps/v1/namespaces/" + reference.Namespace + "/deployments/"
+	case "statefulset":
+		base = "/apis/apps/v1/namespaces/" + reference.Namespace + "/statefulsets/"
+	case "daemonset":
+		base = "/apis/apps/v1/namespaces/" + reference.Namespace + "/daemonsets/"
+	}
+	return base + reference.Name
+}
+
+func displayWorkloadKind(kind string) string {
+	switch kind {
+	case "deployment":
+		return "Deployment"
+	case "statefulset":
+		return "StatefulSet"
+	case "daemonset":
+		return "DaemonSet"
+	default:
+		return "Pod"
+	}
+}
+
+func decodeContainers(kind string, resource workloadDetailResource) []domain.WorkloadContainer {
+	if kind != "pod" {
+		return mergeContainerDetails(resource.Spec.Template.Spec.Containers, nil, "container")
+	}
+	containers := mergeContainerDetails(resource.Spec.Containers, resource.Status.ContainerStatuses, "container")
+	containers = append(containers, mergeContainerDetails(resource.Spec.InitContainers, resource.Status.InitContainerStatuses, "init")...)
+	containers = append(containers, mergeContainerDetails(resource.Spec.EphemeralContainers, resource.Status.EphemeralContainerStatuses, "ephemeral")...)
+	return containers
+}
+
+func mergeContainerDetails(specs []containerSpec, statuses []containerStatus, containerType string) []domain.WorkloadContainer {
+	byName := make(map[string]containerStatus, len(statuses))
+	for _, status := range statuses {
+		byName[status.Name] = status
+	}
+	containers := make([]domain.WorkloadContainer, 0, len(specs))
+	for _, spec := range specs {
+		status := byName[spec.Name]
+		containers = append(containers, domain.WorkloadContainer{
+			Name: spec.Name, Image: spec.Image, Type: containerType, Ready: status.Ready,
+			RestartCount: status.RestartCount, State: containerState(status),
+		})
+	}
+	return containers
+}
+
+func containerState(status containerStatus) string {
+	if status.State.Running != nil {
+		return "Running"
+	}
+	if status.State.Waiting != nil {
+		if status.State.Waiting.Reason != "" {
+			return status.State.Waiting.Reason
+		}
+		return "Waiting"
+	}
+	if status.State.Terminated != nil {
+		if status.State.Terminated.Reason != "" {
+			return status.State.Terminated.Reason
+		}
+		return "Terminated"
+	}
+	return ""
+}
+
+func decodeConditions(conditions []workloadCondition) []domain.WorkloadCondition {
+	result := make([]domain.WorkloadCondition, 0, len(conditions))
+	for _, condition := range conditions {
+		result = append(result, domain.WorkloadCondition{
+			Type: condition.Type, Status: condition.Status, Reason: condition.Reason,
+			Message: condition.Message, LastTransitionTime: condition.LastTransitionTime,
+		})
+	}
+	return result
+}
+
+func sanitizedWorkloadYAML(raw json.RawMessage) (string, error) {
+	var object map[string]any
+	if err := json.Unmarshal(raw, &object); err != nil {
+		return "", fmt.Errorf("decode workload for YAML: %w", domain.ErrUpstream)
+	}
+	delete(object, "status")
+	if metadata, ok := object["metadata"].(map[string]any); ok {
+		for _, key := range []string{
+			"annotations", "creationTimestamp", "generation", "managedFields", "resourceVersion", "selfLink", "uid",
+		} {
+			delete(metadata, key)
+		}
+	}
+	redactContainerEnvironment(object)
+	redactSensitiveFields(object)
+	payload, err := yaml.Marshal(object)
+	if err != nil {
+		return "", fmt.Errorf("encode workload YAML: %w", err)
+	}
+	return string(payload), nil
+}
+
+func redactContainerEnvironment(object map[string]any) {
+	spec, _ := object["spec"].(map[string]any)
+	redactSpecEnvironment(spec)
+	if template, ok := spec["template"].(map[string]any); ok {
+		if templateSpec, ok := template["spec"].(map[string]any); ok {
+			redactSpecEnvironment(templateSpec)
+		}
+	}
+}
+
+func redactSpecEnvironment(spec map[string]any) {
+	for _, containerKey := range []string{"containers", "initContainers", "ephemeralContainers"} {
+		containers, _ := spec[containerKey].([]any)
+		for _, rawContainer := range containers {
+			container, _ := rawContainer.(map[string]any)
+			environment, _ := container["env"].([]any)
+			for _, rawVariable := range environment {
+				variable, _ := rawVariable.(map[string]any)
+				if _, exists := variable["value"]; exists {
+					variable["value"] = "<redacted>"
+				}
+			}
+		}
+	}
+}
+
+func redactSensitiveFields(value any) {
+	sensitive := map[string]struct{}{
+		"apikey": {}, "authorization": {}, "clientsecret": {}, "credentials": {},
+		"password": {}, "passwd": {}, "privatekey": {}, "token": {},
+	}
+	sensitiveSequences := map[string]struct{}{"args": {}, "command": {}}
+	var visit func(any)
+	visit = func(current any) {
+		switch typed := current.(type) {
+		case map[string]any:
+			for key, child := range typed {
+				normalized := strings.ToLower(strings.NewReplacer("-", "", "_", "").Replace(key))
+				if _, found := sensitiveSequences[normalized]; found {
+					typed[key] = []any{"<redacted>"}
+					continue
+				}
+				if _, found := sensitive[normalized]; found {
+					typed[key] = "<redacted>"
+					continue
+				}
+				visit(child)
+			}
+		case []any:
+			for _, child := range typed {
+				visit(child)
+			}
+		}
+	}
+	visit(value)
+}
+
+func cloneStringMap(source map[string]string) map[string]string {
+	cloned := make(map[string]string, len(source))
+	for key, value := range source {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func eventSource(resource eventResource) string {
+	if resource.ReportingComponent != "" {
+		return resource.ReportingComponent
+	}
+	return resource.Source.Component
+}
+
+func firstNonZeroTime(values ...time.Time) time.Time {
+	for _, value := range values {
+		if !value.IsZero() {
+			return value
+		}
+	}
+	return time.Time{}
 }
 
 func decodeWorkload(kind string, item json.RawMessage) (domain.Workload, error) {

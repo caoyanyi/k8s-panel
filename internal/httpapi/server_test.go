@@ -180,6 +180,57 @@ func TestLoginRejectsNonJSONContentType(t *testing.T) {
 	assertErrorCode(t, response.Body.Bytes(), "invalid_json")
 }
 
+func TestServerExposesAuthenticatedWorkloadDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestHandler(t)
+	cookie := login(t, handler)
+	create := authenticatedRequest(t, handler, cookie, http.MethodPost, "/api/v1/clusters", `{
+		"name":"development","environment":"development","server":"https://api.example.com","bearer_token":"token"
+	}`)
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, body = %s", create.Code, create.Body.String())
+	}
+	var created struct {
+		Data platform.ClusterView `json:"data"`
+	}
+	decodeTestJSON(t, create.Body.Bytes(), &created)
+	base := "/api/v1/clusters/" + created.Data.ID
+
+	detail := authenticatedRequest(t, handler, cookie, http.MethodGet, base+"/workloads/pod/payments/gateway-0", "")
+	if detail.Code != http.StatusOK || !strings.Contains(detail.Body.String(), `"uid":"uid-gateway-0"`) {
+		t.Fatalf("detail status = %d, body = %s", detail.Code, detail.Body.String())
+	}
+	events := authenticatedRequest(t, handler, cookie, http.MethodGet, base+"/workloads/pod/payments/gateway-0/events?limit=10", "")
+	if events.Code != http.StatusOK || !strings.Contains(events.Body.String(), `"reason":"BackOff"`) {
+		t.Fatalf("events status = %d, body = %s", events.Code, events.Body.String())
+	}
+	if strings.Contains(events.Body.String(), "0001-01-01") {
+		t.Fatalf("events contain zero timestamps: %s", events.Body.String())
+	}
+	logs := authenticatedRequest(t, handler, cookie, http.MethodGet, base+"/pods/payments/gateway-0/logs?container=app&tail_lines=250&previous=true", "")
+	if logs.Code != http.StatusOK || !strings.Contains(logs.Body.String(), `"tail_lines":250`) {
+		t.Fatalf("logs status = %d, body = %s", logs.Code, logs.Body.String())
+	}
+
+	invalid := authenticatedRequest(t, handler, cookie, http.MethodGet, base+"/pods/payments/gateway-0/logs?container=app&tail_lines=99999", "")
+	if invalid.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid logs status = %d, body = %s", invalid.Code, invalid.Body.String())
+	}
+	assertErrorCode(t, invalid.Body.Bytes(), "validation_error")
+	invalidBool := authenticatedRequest(t, handler, cookie, http.MethodGet, base+"/pods/payments/gateway-0/logs?container=app&previous=sometimes", "")
+	if invalidBool.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid boolean status = %d, body = %s", invalidBool.Code, invalidBool.Body.String())
+	}
+	assertErrorCode(t, invalidBool.Body.Bytes(), "validation_error")
+
+	unauthorized := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, base+"/workloads/pod/payments/gateway-0", nil))
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized detail status = %d", unauthorized.Code)
+	}
+}
+
 func newTestHandler(t *testing.T) http.Handler {
 	t.Helper()
 	now := time.Date(2026, 7, 24, 8, 0, 0, 0, time.UTC)
@@ -315,6 +366,21 @@ func (testKube) Summary(context.Context) (domain.ClusterSummary, error) {
 func (testKube) Namespaces(context.Context) ([]domain.Namespace, error) { return nil, nil }
 func (testKube) Workloads(context.Context, string, string) ([]domain.Workload, error) {
 	return nil, nil
+}
+func (testKube) WorkloadDetail(_ context.Context, reference domain.WorkloadReference) (domain.WorkloadDetail, error) {
+	return domain.WorkloadDetail{
+		Workload: domain.Workload{Kind: "Pod", Namespace: reference.Namespace, Name: reference.Name, Status: "Ready"},
+		UID:      "uid-gateway-0", ResourceVersion: "42", YAML: "apiVersion: v1\nkind: Pod\n",
+	}, nil
+}
+func (testKube) WorkloadEvents(context.Context, domain.WorkloadReference, int) ([]domain.KubernetesEvent, error) {
+	return []domain.KubernetesEvent{{Type: "Warning", Reason: "BackOff", Message: "Back-off restarting container"}}, nil
+}
+func (testKube) PodLogs(_ context.Context, request domain.PodLogRequest) (domain.PodLogs, error) {
+	return domain.PodLogs{
+		Namespace: request.Namespace, Pod: request.Pod, Container: request.Container, TailLines: request.TailLines,
+		Previous: request.Previous, Timestamps: request.Timestamps, Content: "ready\n",
+	}, nil
 }
 
 type testRepositoryChecker struct{}

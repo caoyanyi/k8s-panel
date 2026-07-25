@@ -102,6 +102,59 @@ func TestServicePersistsUnreachableProbeWithoutLeakingError(t *testing.T) {
 	}
 }
 
+func TestServiceReadsWorkloadDiagnosticsAndAuditsPodLogs(t *testing.T) {
+	t.Parallel()
+
+	reference := domain.WorkloadReference{Kind: "pod", Namespace: "payments", Name: "gateway-0"}
+	logRequest := domain.PodLogRequest{Namespace: "payments", Pod: "gateway-0", Container: "app", TailLines: 200, Timestamps: true}
+	gateway := &fakeKubeGateway{
+		probe:  domain.ClusterProbe{Version: "v1.36.2"},
+		detail: domain.WorkloadDetail{Workload: domain.Workload{Kind: "Pod", Namespace: "payments", Name: "gateway-0"}, UID: "uid-1"},
+		events: []domain.KubernetesEvent{{Type: "Warning", Reason: "BackOff"}},
+		logs:   domain.PodLogs{Namespace: "payments", Pod: "gateway-0", Container: "app", TailLines: 200, Content: "sensitive application output"},
+	}
+	service, _, _ := newTestService(t, serviceFakes{kube: gateway})
+	cluster, err := service.CreateCluster(context.Background(), "admin", "req_cluster", domain.ClusterInput{
+		Name: "cluster", Environment: domain.EnvironmentDevelopment, Server: "https://api.example.com", BearerToken: "token",
+	})
+	if err != nil {
+		t.Fatalf("CreateCluster() error = %v", err)
+	}
+
+	detail, err := service.WorkloadDetail(context.Background(), cluster.ID, reference)
+	if err != nil || detail.UID != "uid-1" {
+		t.Fatalf("WorkloadDetail() = %#v, %v", detail, err)
+	}
+	events, err := service.WorkloadEvents(context.Background(), cluster.ID, reference, 20)
+	if err != nil || len(events) != 1 || events[0].Reason != "BackOff" {
+		t.Fatalf("WorkloadEvents() = %#v, %v", events, err)
+	}
+	logs, err := service.PodLogs(context.Background(), "admin", "req_logs", cluster.ID, logRequest)
+	if err != nil || logs.Content != "sensitive application output" {
+		t.Fatalf("PodLogs() = %#v, %v", logs, err)
+	}
+	if gateway.detailReference != reference || gateway.eventLimit != 20 || gateway.logRequest != logRequest {
+		t.Errorf("gateway calls = %#v, %d, %#v", gateway.detailReference, gateway.eventLimit, gateway.logRequest)
+	}
+
+	audits, err := service.ListAuditEvents(context.Background(), 100)
+	if err != nil {
+		t.Fatalf("ListAuditEvents() error = %v", err)
+	}
+	found := false
+	for _, event := range audits {
+		if event.Action == "pod.logs.read" {
+			found = true
+			if event.RequestID != "req_logs" || event.Target != "gateway-0/app" || strings.Contains(event.Summary, logs.Content) {
+				t.Errorf("pod log audit = %#v", event)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("pod.logs.read audit event was not written")
+	}
+}
+
 func TestServiceSerializesHelmOperationsForSameRelease(t *testing.T) {
 	t.Parallel()
 
@@ -223,9 +276,15 @@ type fakeKubeFactory struct{ gateway KubeGateway }
 func (f fakeKubeFactory) New(kubernetes.Connection) (KubeGateway, error) { return f.gateway, nil }
 
 type fakeKubeGateway struct {
-	probe      domain.ClusterProbe
-	probeErr   error
-	namespaces []domain.Namespace
+	probe           domain.ClusterProbe
+	probeErr        error
+	namespaces      []domain.Namespace
+	detail          domain.WorkloadDetail
+	events          []domain.KubernetesEvent
+	logs            domain.PodLogs
+	detailReference domain.WorkloadReference
+	eventLimit      int
+	logRequest      domain.PodLogRequest
 }
 
 func (g *fakeKubeGateway) Probe(context.Context) (domain.ClusterProbe, error) {
@@ -239,6 +298,19 @@ func (g *fakeKubeGateway) Namespaces(context.Context) ([]domain.Namespace, error
 }
 func (g *fakeKubeGateway) Workloads(context.Context, string, string) ([]domain.Workload, error) {
 	return nil, nil
+}
+func (g *fakeKubeGateway) WorkloadDetail(_ context.Context, reference domain.WorkloadReference) (domain.WorkloadDetail, error) {
+	g.detailReference = reference
+	return g.detail, nil
+}
+func (g *fakeKubeGateway) WorkloadEvents(_ context.Context, reference domain.WorkloadReference, limit int) ([]domain.KubernetesEvent, error) {
+	g.detailReference = reference
+	g.eventLimit = limit
+	return append([]domain.KubernetesEvent(nil), g.events...), nil
+}
+func (g *fakeKubeGateway) PodLogs(_ context.Context, request domain.PodLogRequest) (domain.PodLogs, error) {
+	g.logRequest = request
+	return g.logs, nil
 }
 
 type successfulRepositoryChecker struct{}

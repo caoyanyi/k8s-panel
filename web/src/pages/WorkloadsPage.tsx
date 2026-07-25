@@ -1,9 +1,10 @@
-import { RefreshCw, Search } from 'lucide-react'
+import { Eye, RefreshCw, Search } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '../api'
 import { EmptyState, ErrorState, LoadingState } from '../components/DataState'
 import { PageHeader } from '../components/PageHeader'
 import { StatusBadge } from '../components/StatusBadge'
+import { WorkloadDetailModal } from '../components/WorkloadDetailModal'
 import { usePanel } from '../context'
 import { useResource } from '../hooks'
 import type { ClusterSummary, Namespace, Workload } from '../types'
@@ -13,6 +14,7 @@ export function WorkloadsPage() {
   const { clusters, selectedClusterId, selectedNamespace, setSelectedNamespace } = usePanel()
   const [kind, setKind] = useState('')
   const [search, setSearch] = useState('')
+  const [selectedWorkload, setSelectedWorkload] = useState<Workload | null>(null)
   const selectedCluster = clusters.find((cluster) => cluster.id === selectedClusterId)
   const namespaces = useResource(
     (signal) => selectedClusterId ? api.get<Namespace[]>(`/api/v1/clusters/${selectedClusterId}/namespaces`, signal) : Promise.resolve([]),
@@ -38,6 +40,8 @@ export function WorkloadsPage() {
     }
   }, [namespaces.data, selectedNamespace, setSelectedNamespace])
 
+  useEffect(() => setSelectedWorkload(null), [selectedClusterId])
+
   const visible = useMemo(() => {
     const normalized = search.trim().toLowerCase()
     if (!normalized) return workloads.data ?? []
@@ -62,7 +66,7 @@ export function WorkloadsPage() {
           <section className="section-block table-section">
             {namespaces.error ? <ErrorState error={namespaces.error} onRetry={() => void namespaces.refresh()} /> : workloads.loading ? <LoadingState label="正在读取工作负载" /> : workloads.error ? <ErrorState error={workloads.error} onRetry={() => void workloads.refresh()} /> : visible.length === 0 ? <EmptyState title="当前范围没有工作负载" /> : (
               <div className="table-wrap"><table>
-                <thead><tr><th>名称</th><th>类型</th><th>命名空间</th><th>状态</th><th>就绪</th><th>镜像</th><th>创建时间</th></tr></thead>
+                <thead><tr><th>名称</th><th>类型</th><th>命名空间</th><th>状态</th><th>就绪</th><th>镜像</th><th>创建时间</th><th className="actions-column">操作</th></tr></thead>
                 <tbody>{visible.map((item) => <tr key={`${item.kind}:${item.namespace}:${item.name}`}>
                   <td><strong>{item.name}</strong></td>
                   <td><span className="kind-label">{item.kind}</span></td>
@@ -71,12 +75,14 @@ export function WorkloadsPage() {
                   <td><span className={item.ready === item.desired ? 'replica-ready' : 'replica-warning'}>{item.ready}/{item.desired}</span></td>
                   <td><div className="image-list">{item.images.length ? item.images.map((image) => <span key={image} className="mono" title={image}>{truncate(image, 54)}</span>) : '-'}</div></td>
                   <td>{formatDateTime(item.created_at)}</td>
+                  <td className="actions-column"><button type="button" className="icon-button" aria-label={`查看 ${item.name}`} title="查看详情" onClick={() => setSelectedWorkload(item)}><Eye size={16} /></button></td>
                 </tr>)}</tbody>
               </table></div>
             )}
           </section>
         </>
       )}
+      {selectedWorkload && <WorkloadDetailModal clusterId={selectedClusterId} workload={selectedWorkload} open onClose={() => setSelectedWorkload(null)} />}
     </div>
   )
 }

@@ -49,6 +49,54 @@ export interface Workload {
   created_at: string
 }
 
+export interface WorkloadContainer {
+  name: string
+  image: string
+  type: 'container' | 'init' | 'ephemeral'
+  ready: boolean
+  restart_count: number
+  state?: string
+}
+
+export interface WorkloadCondition {
+  type: string
+  status: string
+  reason?: string
+  message?: string
+  last_transition_time?: string
+}
+
+export interface WorkloadDetail extends Workload {
+  uid: string
+  resource_version: string
+  labels: Record<string, string>
+  containers: WorkloadContainer[]
+  conditions: WorkloadCondition[]
+  yaml: string
+}
+
+export interface KubernetesEvent {
+  name: string
+  type: string
+  reason: string
+  message: string
+  source?: string
+  count: number
+  first_seen?: string
+  last_seen?: string
+}
+
+export interface PodLogs {
+  namespace: string
+  pod: string
+  container: string
+  tail_lines: number
+  previous: boolean
+  timestamps: boolean
+  truncated: boolean
+  content: string
+}
+
 export interface ChartRepository {
   id: string
   name: string

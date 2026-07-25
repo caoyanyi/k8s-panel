@@ -234,3 +234,70 @@ func TestValidateHelmOperationInput(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateWorkloadReference(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		input     WorkloadReference
+		wantField string
+	}{
+		{name: "deployment", input: WorkloadReference{Kind: "deployment", Namespace: "payments", Name: "gateway-api"}},
+		{name: "pod", input: WorkloadReference{Kind: "pod", Namespace: "payments", Name: "gateway-api-6f778d8b4f-k7c2w"}},
+		{name: "unknown kind", input: WorkloadReference{Kind: "secret", Namespace: "payments", Name: "credentials"}, wantField: "kind"},
+		{name: "invalid namespace", input: WorkloadReference{Kind: "pod", Namespace: "../system", Name: "gateway"}, wantField: "namespace"},
+		{name: "uppercase name", input: WorkloadReference{Kind: "pod", Namespace: "payments", Name: "Gateway"}, wantField: "name"},
+		{name: "empty name", input: WorkloadReference{Kind: "pod", Namespace: "payments"}, wantField: "name"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := ValidateWorkloadReference(tt.input)
+			if tt.wantField == "" {
+				if err != nil {
+					t.Fatalf("ValidateWorkloadReference() error = %v", err)
+				}
+				return
+			}
+			var validationErr *ValidationError
+			if !errors.As(err, &validationErr) || validationErr.Field != tt.wantField {
+				t.Fatalf("expected validation field %q, got %v", tt.wantField, err)
+			}
+		})
+	}
+}
+
+func TestValidatePodLogRequest(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		input     PodLogRequest
+		wantField string
+	}{
+		{name: "valid", input: PodLogRequest{Namespace: "payments", Pod: "gateway-0", Container: "app", TailLines: 200}},
+		{name: "missing container", input: PodLogRequest{Namespace: "payments", Pod: "gateway-0", TailLines: 200}, wantField: "container"},
+		{name: "invalid container", input: PodLogRequest{Namespace: "payments", Pod: "gateway-0", Container: "APP", TailLines: 200}, wantField: "container"},
+		{name: "zero tail", input: PodLogRequest{Namespace: "payments", Pod: "gateway-0", Container: "app"}, wantField: "tail_lines"},
+		{name: "excessive tail", input: PodLogRequest{Namespace: "payments", Pod: "gateway-0", Container: "app", TailLines: MaxPodLogTailLines + 1}, wantField: "tail_lines"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := ValidatePodLogRequest(tt.input)
+			if tt.wantField == "" {
+				if err != nil {
+					t.Fatalf("ValidatePodLogRequest() error = %v", err)
+				}
+				return
+			}
+			var validationErr *ValidationError
+			if !errors.As(err, &validationErr) || validationErr.Field != tt.wantField {
+				t.Fatalf("expected validation field %q, got %v", tt.wantField, err)
+			}
+		})
+	}
+}
