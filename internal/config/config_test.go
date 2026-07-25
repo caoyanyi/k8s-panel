@@ -20,6 +20,8 @@ func TestLoad(t *testing.T) {
 		"PANEL_SESSION_TTL":             "2h",
 		"PANEL_HELM_TIMEOUT":            "3m",
 		"PANEL_HELM_WORKERS":            "1",
+		"PANEL_OPERATION_QUEUE_SIZE":    "32",
+		"PANEL_ADAPTIVE_OPERATIONS":     "false",
 		"PANEL_MAX_CONCURRENT_REQUESTS": "24",
 		"PANEL_ALLOWED_PRIVATE_CIDRS":   "10.20.0.0/16,192.168.8.10/32",
 		"PANEL_SECURE_COOKIES":          "true",
@@ -37,8 +39,8 @@ func TestLoad(t *testing.T) {
 	if loaded.SessionTTL != 2*time.Hour || loaded.HelmTimeout != 3*time.Minute {
 		t.Errorf("durations = %v, %v", loaded.SessionTTL, loaded.HelmTimeout)
 	}
-	if loaded.HelmWorkers != 1 || loaded.MaxConcurrentRequests != 24 {
-		t.Errorf("resource limits = %d workers, %d requests", loaded.HelmWorkers, loaded.MaxConcurrentRequests)
+	if loaded.HelmWorkers != 1 || loaded.OperationQueueSize != 32 || loaded.AdaptiveOperations || loaded.MaxConcurrentRequests != 24 {
+		t.Errorf("resource limits = %#v", loaded)
 	}
 	if len(loaded.AllowedPrivateCIDRs) != 2 || !loaded.SecureCookies {
 		t.Errorf("network config = %#v", loaded)
@@ -59,6 +61,9 @@ func TestLoadRejectsInvalidResourceLimits(t *testing.T) {
 	}{
 		{name: "zero Helm workers", key: "PANEL_HELM_WORKERS", value: "0"},
 		{name: "too many Helm workers", key: "PANEL_HELM_WORKERS", value: "9"},
+		{name: "zero operation queue", key: "PANEL_OPERATION_QUEUE_SIZE", value: "0"},
+		{name: "too large operation queue", key: "PANEL_OPERATION_QUEUE_SIZE", value: "129"},
+		{name: "invalid adaptive operations", key: "PANEL_ADAPTIVE_OPERATIONS", value: "sometimes"},
 		{name: "zero concurrent requests", key: "PANEL_MAX_CONCURRENT_REQUESTS", value: "0"},
 		{name: "too many concurrent requests", key: "PANEL_MAX_CONCURRENT_REQUESTS", value: "129"},
 	}

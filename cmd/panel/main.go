@@ -22,6 +22,7 @@ import (
 	"github.com/caoyanyi/k8s-panel/internal/kubernetes"
 	"github.com/caoyanyi/k8s-panel/internal/outbound"
 	"github.com/caoyanyi/k8s-panel/internal/platform"
+	"github.com/caoyanyi/k8s-panel/internal/resourceguard"
 	"github.com/caoyanyi/k8s-panel/internal/secure"
 	"github.com/caoyanyi/k8s-panel/internal/store"
 )
@@ -60,15 +61,28 @@ func main() {
 	}
 	policy := outbound.NewPolicy(net.DefaultResolver, settings.AllowedPrivateCIDRs)
 	rootCAs, _ := x509.SystemCertPool()
-	service, err := platform.New(platform.Dependencies{
-		Store:             fileStore,
-		Cipher:            cipher,
-		TargetValidator:   policy,
-		KubeFactory:       kubeFactory{policy: policy},
-		RepositoryChecker: chartrepo.NewChecker(policy, rootCAs),
-		Helm:              helmadapter.New(settings.HelmTimeout, policy, rootCAs),
+	operationGovernor, err := resourceguard.New(resourceguard.Config{
+		Enabled:           settings.AdaptiveOperations,
+		MaxConcurrent:     settings.HelmWorkers,
+		HighWatermark:     resourceguard.DefaultHighWatermark,
+		CriticalWatermark: resourceguard.DefaultCriticalWatermark,
+		Sampler:           resourceguard.NewSystemSampler(),
 		Clock:             time.Now,
-		NewID:             secure.RandomID,
+	})
+	if err != nil {
+		fatal("initialize operation resource governor", err)
+	}
+	service, err := platform.New(platform.Dependencies{
+		Store:              fileStore,
+		Cipher:             cipher,
+		TargetValidator:    policy,
+		KubeFactory:        kubeFactory{policy: policy},
+		RepositoryChecker:  chartrepo.NewChecker(policy, rootCAs),
+		Helm:               helmadapter.New(settings.HelmTimeout, policy, rootCAs),
+		OperationGovernor:  operationGovernor,
+		OperationQueueSize: settings.OperationQueueSize,
+		Clock:              time.Now,
+		NewID:              secure.RandomID,
 	})
 	if err != nil {
 		fatal("initialize platform service", err)

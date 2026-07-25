@@ -17,6 +17,7 @@ import (
 	"github.com/caoyanyi/k8s-panel/internal/domain"
 	"github.com/caoyanyi/k8s-panel/internal/kubernetes"
 	"github.com/caoyanyi/k8s-panel/internal/platform"
+	"github.com/caoyanyi/k8s-panel/internal/resourceguard"
 	"github.com/caoyanyi/k8s-panel/internal/secure"
 	"github.com/caoyanyi/k8s-panel/internal/store"
 )
@@ -311,6 +312,67 @@ func TestServerExposesAuthenticatedClusterResources(t *testing.T) {
 	}
 }
 
+func TestServerSubmitsControlledWorkloadOperationsAndExposesCapacity(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestHandler(t)
+	cookie := login(t, handler)
+	capacity := authenticatedRequest(t, handler, cookie, http.MethodGet, "/api/v1/system/resources", "")
+	if capacity.Code != http.StatusOK || !strings.Contains(capacity.Body.String(), `"operation_limit":2`) ||
+		!strings.Contains(capacity.Body.String(), `"queue_capacity":16`) {
+		t.Fatalf("capacity status = %d, body = %s", capacity.Code, capacity.Body.String())
+	}
+	unauthorizedCapacity := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorizedCapacity, httptest.NewRequest(http.MethodGet, "/api/v1/system/resources", nil))
+	if unauthorizedCapacity.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized capacity status = %d", unauthorizedCapacity.Code)
+	}
+
+	create := authenticatedRequest(t, handler, cookie, http.MethodPost, "/api/v1/clusters", `{
+		"name":"production-east","environment":"production","server":"https://api.example.com","bearer_token":"token"
+	}`)
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, body = %s", create.Code, create.Body.String())
+	}
+	var created struct {
+		Data platform.ClusterView `json:"data"`
+	}
+	decodeTestJSON(t, create.Body.Bytes(), &created)
+	base := "/api/v1/clusters/" + created.Data.ID + "/workloads/deployment/payments/gateway"
+
+	rejected := authenticatedRequest(t, handler, cookie, http.MethodPost, base+"/scales", `{
+		"replicas":5,"resource_version":"42"
+	}`)
+	if rejected.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("unconfirmed scale status = %d, body = %s", rejected.Code, rejected.Body.String())
+	}
+	assertErrorField(t, rejected.Body.Bytes(), "confirmation")
+
+	scale := authenticatedRequest(t, handler, cookie, http.MethodPost, base+"/scales", `{
+		"replicas":5,"resource_version":"42","confirmation":"production-east"
+	}`)
+	if scale.Code != http.StatusAccepted || scale.Header().Get("Location") == "" ||
+		!strings.Contains(scale.Body.String(), `"kind":"workload.scale"`) {
+		t.Fatalf("scale status = %d, body = %s", scale.Code, scale.Body.String())
+	}
+	restart := authenticatedRequest(t, handler, cookie, http.MethodPost, base+"/restarts", `{
+		"resource_version":"43","confirmation":"production-east"
+	}`)
+	if restart.Code != http.StatusAccepted || !strings.Contains(restart.Body.String(), `"kind":"workload.restart"`) {
+		t.Fatalf("restart status = %d, body = %s", restart.Code, restart.Body.String())
+	}
+
+	unsupported := authenticatedRequest(
+		t, handler, cookie, http.MethodPost,
+		"/api/v1/clusters/"+created.Data.ID+"/workloads/statefulset/payments/gateway/scales",
+		`{"replicas":3,"resource_version":"42","confirmation":"production-east"}`,
+	)
+	if unsupported.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("unsupported scale status = %d, body = %s", unsupported.Code, unsupported.Body.String())
+	}
+	assertErrorField(t, unsupported.Body.Bytes(), "kind")
+}
+
 func newTestHandler(t *testing.T) http.Handler {
 	t.Helper()
 	now := time.Date(2026, 7, 24, 8, 0, 0, 0, time.UTC)
@@ -324,13 +386,15 @@ func newTestHandler(t *testing.T) http.Handler {
 	}
 	var ids atomic.Int64
 	service, err := platform.New(platform.Dependencies{
-		Store:             fileStore,
-		Cipher:            cipher,
-		TargetValidator:   testValidator{},
-		KubeFactory:       testKubeFactory{},
-		RepositoryChecker: testRepositoryChecker{},
-		Helm:              testHelm{},
-		Clock:             func() time.Time { return now },
+		Store:              fileStore,
+		Cipher:             cipher,
+		TargetValidator:    testValidator{},
+		KubeFactory:        testKubeFactory{},
+		RepositoryChecker:  testRepositoryChecker{},
+		Helm:               testHelm{},
+		OperationGovernor:  testGovernor(t),
+		OperationQueueSize: 16,
+		Clock:              func() time.Time { return now },
 		NewID: func(prefix string) (string, error) {
 			return fmt.Sprintf("%s_%d", prefix, ids.Add(1)), nil
 		},
@@ -418,6 +482,21 @@ func assertErrorCode(t *testing.T, payload []byte, want string) {
 	}
 }
 
+func assertErrorField(t *testing.T, payload []byte, want string) {
+	t.Helper()
+	var response struct {
+		Error struct {
+			Details []struct {
+				Field string `json:"field"`
+			} `json:"details"`
+		} `json:"error"`
+	}
+	decodeTestJSON(t, payload, &response)
+	if len(response.Error.Details) != 1 || response.Error.Details[0].Field != want {
+		t.Errorf("error details = %#v, want field %q; payload = %s", response.Error.Details, want, payload)
+	}
+}
+
 func decodeTestJSON(t *testing.T, payload []byte, target any) {
 	t.Helper()
 	if err := json.Unmarshal(payload, target); err != nil {
@@ -473,6 +552,29 @@ func (testKube) PodLogs(_ context.Context, request domain.PodLogRequest) (domain
 		Previous: request.Previous, Timestamps: request.Timestamps, Content: "ready\n",
 	}, nil
 }
+func (testKube) ScaleWorkload(_ context.Context, reference domain.WorkloadReference, _ string, replicas int32) (domain.Workload, error) {
+	return domain.Workload{Kind: "Deployment", Namespace: reference.Namespace, Name: reference.Name, Desired: replicas}, nil
+}
+func (testKube) RestartWorkload(_ context.Context, reference domain.WorkloadReference, _ string, _ time.Time) (domain.Workload, error) {
+	return domain.Workload{Kind: "Deployment", Namespace: reference.Namespace, Name: reference.Name}, nil
+}
+
+func testGovernor(t *testing.T) platform.OperationGovernor {
+	t.Helper()
+	value := 0.10
+	governor, err := resourceguard.New(resourceguard.Config{
+		Enabled: false, MaxConcurrent: 2, HighWatermark: 0.80, CriticalWatermark: 0.95,
+		RetryInterval: time.Millisecond, Sampler: testResourceSampler{sample: resourceguard.Sample{MemoryRatio: &value}},
+	})
+	if err != nil {
+		t.Fatalf("resourceguard.New() error = %v", err)
+	}
+	return governor
+}
+
+type testResourceSampler struct{ sample resourceguard.Sample }
+
+func (s testResourceSampler) Sample() resourceguard.Sample { return s.sample }
 
 type testRepositoryChecker struct{}
 

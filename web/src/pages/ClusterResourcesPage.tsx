@@ -1,18 +1,17 @@
-import { ChevronLeft, ChevronRight, Eye, RefreshCw, Search } from 'lucide-react'
+import { Eye, RefreshCw, Search } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '../api'
 import { EmptyState, ErrorState, LoadingState } from '../components/DataState'
 import { NodeDetailModal } from '../components/NodeDetailModal'
 import { PageHeader } from '../components/PageHeader'
 import { StatusBadge } from '../components/StatusBadge'
+import { TablePagination, TABLE_PAGE_SIZE } from '../components/TablePagination'
 import { usePanel } from '../context'
 import { useResource } from '../hooks'
 import type { ClusterNode, Namespace } from '../types'
 import { formatDateTime } from '../utils'
 
 type ResourceView = 'nodes' | 'namespaces'
-
-const resourcePageSize = 100
 
 export function ClusterResourcesPage() {
   const { clusters, selectedClusterId } = usePanel()
@@ -42,11 +41,11 @@ export function ClusterResourcesPage() {
   const active = view === 'nodes' ? nodes : namespaces
   const activeCount = active.data?.length ?? 0
   const visibleCount = view === 'nodes' ? visibleNodes.length : visibleNamespaces.length
-  const totalPages = Math.max(1, Math.ceil(visibleCount / resourcePageSize))
+  const totalPages = Math.max(1, Math.ceil(visibleCount / TABLE_PAGE_SIZE))
   const currentPage = Math.min(page, totalPages - 1)
-  const pageStart = currentPage * resourcePageSize
-  const pageNodes = visibleNodes.slice(pageStart, pageStart + resourcePageSize)
-  const pageNamespaces = visibleNamespaces.slice(pageStart, pageStart + resourcePageSize)
+  const pageStart = currentPage * TABLE_PAGE_SIZE
+  const pageNodes = visibleNodes.slice(pageStart, pageStart + TABLE_PAGE_SIZE)
+  const pageNamespaces = visibleNamespaces.slice(pageStart, pageStart + TABLE_PAGE_SIZE)
 
   return (
     <div className="page">
@@ -118,16 +117,4 @@ function NamespaceTable({ namespaces }: { namespaces: Namespace[] }) {
 
 function resourceRatio(allocatable?: string, capacity?: string) {
   return `${allocatable || '-'} / ${capacity || '-'}`
-}
-
-function TablePagination({ page, totalItems, onPage }: { page: number; totalItems: number; onPage: (page: number) => void }) {
-  const totalPages = Math.ceil(totalItems / resourcePageSize)
-  if (totalPages <= 1) return null
-  return (
-    <nav className="table-pagination" aria-label="资源清单分页">
-      <span>第 {page + 1} / {totalPages} 页 · {totalItems} 条</span>
-      <button type="button" className="icon-button" aria-label="上一页" title="上一页" disabled={page === 0} onClick={() => onPage(page - 1)}><ChevronLeft size={17} /></button>
-      <button type="button" className="icon-button" aria-label="下一页" title="下一页" disabled={page + 1 >= totalPages} onClick={() => onPage(page + 1)}><ChevronRight size={17} /></button>
-    </nav>
-  )
 }

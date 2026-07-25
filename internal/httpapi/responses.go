@@ -50,6 +50,8 @@ func writeError(w http.ResponseWriter, r *http.Request, err error) {
 		writeErrorStatus(w, r, http.StatusConflict, "conflict", "资源名称或状态发生冲突", nil)
 	case errors.Is(err, domain.ErrInvalidState):
 		writeErrorStatus(w, r, http.StatusConflict, "invalid_state", "资源当前状态不允许该操作", nil)
+	case errors.Is(err, domain.ErrBusy):
+		writeErrorStatus(w, r, http.StatusServiceUnavailable, "server_busy", "服务繁忙，请稍后重试", nil)
 	case errors.Is(err, domain.ErrTimeout), errors.Is(err, context.DeadlineExceeded):
 		writeErrorStatus(w, r, http.StatusGatewayTimeout, "upstream_timeout", "上游请求超时", nil)
 	case errors.Is(err, domain.ErrUpstream):

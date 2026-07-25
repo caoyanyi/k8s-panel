@@ -23,6 +23,8 @@ type Config struct {
 	SessionTTL            time.Duration
 	HelmTimeout           time.Duration
 	HelmWorkers           int
+	OperationQueueSize    int
+	AdaptiveOperations    bool
 	MaxConcurrentRequests int
 	AllowedPrivateCIDRs   []netip.Prefix
 	SecureCookies         bool
@@ -76,6 +78,14 @@ func Load(getenv func(string) string) (Config, error) {
 	if err != nil || loaded.HelmWorkers < 1 || loaded.HelmWorkers > 8 {
 		return Config{}, errors.New("PANEL_HELM_WORKERS must be between 1 and 8")
 	}
+	loaded.OperationQueueSize, err = intOrDefault(getenv("PANEL_OPERATION_QUEUE_SIZE"), 64)
+	if err != nil || loaded.OperationQueueSize < 1 || loaded.OperationQueueSize > 128 {
+		return Config{}, errors.New("PANEL_OPERATION_QUEUE_SIZE must be between 1 and 128")
+	}
+	loaded.AdaptiveOperations, err = boolOrDefault(getenv("PANEL_ADAPTIVE_OPERATIONS"), true)
+	if err != nil {
+		return Config{}, errors.New("PANEL_ADAPTIVE_OPERATIONS must be true or false")
+	}
 	loaded.MaxConcurrentRequests, err = intOrDefault(getenv("PANEL_MAX_CONCURRENT_REQUESTS"), 16)
 	if err != nil || loaded.MaxConcurrentRequests < 1 || loaded.MaxConcurrentRequests > 128 {
 		return Config{}, errors.New("PANEL_MAX_CONCURRENT_REQUESTS must be between 1 and 128")
@@ -115,6 +125,13 @@ func intOrDefault(value string, fallback int) (int, error) {
 		return fallback, nil
 	}
 	return strconv.Atoi(strings.TrimSpace(value))
+}
+
+func boolOrDefault(value string, fallback bool) (bool, error) {
+	if strings.TrimSpace(value) == "" {
+		return fallback, nil
+	}
+	return strconv.ParseBool(strings.TrimSpace(value))
 }
 
 func validateListenAddress(address string) error {

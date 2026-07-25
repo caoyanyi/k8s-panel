@@ -105,7 +105,7 @@ function AuthenticatedApp({ principal, onAnonymous }: { principal: Principal; on
         {route === 'dashboard' && <DashboardPage onOpenClusters={() => navigate('clusters')} />}
         {route === 'clusters' && <ClustersPage notify={notify} />}
         {route === 'resources' && <ClusterResourcesPage />}
-        {route === 'workloads' && <WorkloadsPage />}
+        {route === 'workloads' && <WorkloadsPage notify={notify} openOperations={() => navigate('operations')} />}
         {route === 'helm' && <HelmPage notify={notify} openOperations={() => navigate('operations')} />}
         {route === 'operations' && <OperationsPage />}
         {route === 'audit' && <AuditPage />}

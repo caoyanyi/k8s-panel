@@ -333,3 +333,62 @@ func TestValidateNodeName(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateWorkloadOperationInput(t *testing.T) {
+	t.Parallel()
+
+	replicas := int32(3)
+	valid := WorkloadOperationInput{
+		ClusterID:       "clu_one",
+		Reference:       WorkloadReference{Kind: "deployment", Namespace: "payments", Name: "gateway"},
+		ResourceVersion: "42",
+		Replicas:        &replicas,
+	}
+	tests := []struct {
+		name      string
+		kind      OperationKind
+		input     WorkloadOperationInput
+		wantField string
+	}{
+		{name: "scale", kind: OperationWorkloadScale, input: valid},
+		{name: "restart", kind: OperationWorkloadRestart, input: WorkloadOperationInput{
+			ClusterID: valid.ClusterID, Reference: valid.Reference, ResourceVersion: valid.ResourceVersion,
+		}},
+		{name: "unsupported operation", kind: OperationHelmInstall, input: valid, wantField: "kind"},
+		{name: "only deployment", kind: OperationWorkloadScale, input: WorkloadOperationInput{
+			ClusterID:       valid.ClusterID,
+			Reference:       WorkloadReference{Kind: "statefulset", Namespace: "payments", Name: "gateway"},
+			ResourceVersion: valid.ResourceVersion, Replicas: &replicas,
+		}, wantField: "kind"},
+		{name: "missing resource version", kind: OperationWorkloadScale, input: WorkloadOperationInput{
+			ClusterID: valid.ClusterID, Reference: valid.Reference, Replicas: &replicas,
+		}, wantField: "resource_version"},
+		{name: "missing replicas", kind: OperationWorkloadScale, input: WorkloadOperationInput{
+			ClusterID: valid.ClusterID, Reference: valid.Reference, ResourceVersion: valid.ResourceVersion,
+		}, wantField: "replicas"},
+		{name: "excessive replicas", kind: OperationWorkloadScale, input: func() WorkloadOperationInput {
+			value := int32(1001)
+			input := valid
+			input.Replicas = &value
+			return input
+		}(), wantField: "replicas"},
+		{name: "restart rejects replicas", kind: OperationWorkloadRestart, input: valid, wantField: "replicas"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := ValidateWorkloadOperationInput(tt.kind, tt.input)
+			if tt.wantField == "" {
+				if err != nil {
+					t.Fatalf("ValidateWorkloadOperationInput() error = %v", err)
+				}
+				return
+			}
+			var validationErr *ValidationError
+			if !errors.As(err, &validationErr) || validationErr.Field != tt.wantField {
+				t.Fatalf("validation error = %v, want field %q", err, tt.wantField)
+			}
+		})
+	}
+}

@@ -273,6 +273,56 @@ func (s *Server) getPodLogs(w http.ResponseWriter, r *http.Request) {
 	writeData(w, http.StatusOK, item)
 }
 
+func (s *Server) scaleWorkload(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Replicas        *int32 `json:"replicas"`
+		ResourceVersion string `json:"resource_version"`
+		Confirmation    string `json:"confirmation"`
+	}
+	if err := decodeJSON(w, r, &input); err != nil {
+		writeInvalidJSON(w, r)
+		return
+	}
+	s.submitWorkloadOperation(w, r, domain.OperationWorkloadScale, domain.WorkloadOperationInput{
+		Replicas: input.Replicas, ResourceVersion: input.ResourceVersion, Confirmation: input.Confirmation,
+	})
+}
+
+func (s *Server) restartWorkload(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		ResourceVersion string `json:"resource_version"`
+		Confirmation    string `json:"confirmation"`
+	}
+	if err := decodeJSON(w, r, &input); err != nil {
+		writeInvalidJSON(w, r)
+		return
+	}
+	s.submitWorkloadOperation(w, r, domain.OperationWorkloadRestart, domain.WorkloadOperationInput{
+		ResourceVersion: input.ResourceVersion, Confirmation: input.Confirmation,
+	})
+}
+
+func (s *Server) submitWorkloadOperation(
+	w http.ResponseWriter,
+	r *http.Request,
+	kind domain.OperationKind,
+	input domain.WorkloadOperationInput,
+) {
+	input.ClusterID = r.PathValue("id")
+	input.Reference = domain.WorkloadReference{
+		Kind: r.PathValue("kind"), Namespace: r.PathValue("namespace"), Name: r.PathValue("name"),
+	}
+	operation, err := s.service.SubmitWorkloadOperation(
+		r.Context(), principal(r).Username, requestID(r), kind, input,
+	)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	w.Header().Set("Location", "/api/v1/operations/"+operation.ID)
+	writeData(w, http.StatusAccepted, operation)
+}
+
 func workloadReference(r *http.Request) domain.WorkloadReference {
 	return domain.WorkloadReference{
 		Kind: r.PathValue("kind"), Namespace: r.PathValue("namespace"), Name: r.PathValue("name"),
@@ -485,6 +535,10 @@ func (s *Server) listAuditEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeData(w, http.StatusOK, items)
+}
+
+func (s *Server) systemResources(w http.ResponseWriter, _ *http.Request) {
+	writeData(w, http.StatusOK, s.service.OperationCapacity())
 }
 
 func parseLimit(raw string) (int, error) {

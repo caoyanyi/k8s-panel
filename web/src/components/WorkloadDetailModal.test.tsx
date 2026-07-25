@@ -42,11 +42,12 @@ describe('WorkloadDetailModal', () => {
     vi.stubGlobal('fetch', fetchMock)
     const user = userEvent.setup()
 
-    render(<WorkloadDetailModal clusterId="clu_1" workload={workload} open onClose={vi.fn()} />)
+    render(<WorkloadDetailModal clusterId="clu_1" clusterName="development" environment="development" workload={workload} open onClose={vi.fn()} notify={vi.fn()} openOperations={vi.fn()} />)
     const dialog = await screen.findByRole('dialog', { name: 'Pod · gateway-0' })
 
     expect(within(dialog).getByText('uid-gateway-0')).toBeInTheDocument()
     expect(within(dialog).getByText('2')).toBeInTheDocument()
+    expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/events?limit=50'))).toBe(false)
 
     await user.click(within(dialog).getByRole('tab', { name: '事件' }))
     expect(await within(dialog).findByText('BackOff')).toBeInTheDocument()
@@ -84,7 +85,7 @@ describe('WorkloadDetailModal', () => {
       }))
     }))
 
-    render(<WorkloadDetailModal clusterId="clu_1" workload={workload} open onClose={vi.fn()} />)
+    render(<WorkloadDetailModal clusterId="clu_1" clusterName="development" environment="development" workload={workload} open onClose={vi.fn()} notify={vi.fn()} openOperations={vi.fn()} />)
 
     const dialog = await screen.findByRole('dialog', { name: 'Deployment · gateway' })
     expect(within(dialog).queryByRole('tab', { name: '日志' })).not.toBeInTheDocument()
@@ -115,7 +116,7 @@ describe('WorkloadDetailModal', () => {
     }))
     const user = userEvent.setup()
 
-    render(<WorkloadDetailModal clusterId="clu_1" workload={workload} open onClose={vi.fn()} />)
+    render(<WorkloadDetailModal clusterId="clu_1" clusterName="development" environment="development" workload={workload} open onClose={vi.fn()} notify={vi.fn()} openOperations={vi.fn()} />)
     const dialog = await screen.findByRole('dialog', { name: 'Pod · gateway-0' })
     await within(dialog).findByText('uid-gateway-0')
     await user.click(within(dialog).getByRole('tab', { name: '日志' }))
@@ -129,6 +130,113 @@ describe('WorkloadDetailModal', () => {
     })))
     expect(within(dialog).getByText('latest log response')).toBeInTheDocument()
     expect(within(dialog).queryByText('stale log response')).not.toBeInTheDocument()
+  })
+
+  it('submits a production deployment scale with resource-version confirmation', async () => {
+    const workload: Workload = {
+      kind: 'Deployment', namespace: 'payments', name: 'gateway', ready: 2, desired: 3,
+      status: 'Progressing', images: ['gateway:1.4.0'], created_at: '2026-07-24T08:00:00Z',
+    }
+    const notify = vi.fn()
+    const openOperations = vi.fn()
+    const onClose = vi.fn()
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input)
+      if (init?.method === 'POST' && path.endsWith('/scales')) {
+        return Promise.resolve(dataResponse({
+          id: 'op_scale', request_id: 'req_scale', kind: 'workload.scale', state: 'queued',
+          cluster_id: 'clu_1', namespace: 'payments', target: 'gateway', submitted_by: 'admin',
+          created_at: '2026-07-25T08:00:00Z', updated_at: '2026-07-25T08:00:00Z',
+        }))
+      }
+      if (path.endsWith('/events?limit=50')) return Promise.resolve(dataResponse([]))
+      return Promise.resolve(dataResponse({
+        ...workload, uid: 'uid-gateway', resource_version: '42', labels: {}, containers: [], conditions: [], yaml: 'kind: Deployment\n',
+      }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const user = userEvent.setup()
+
+    render(<WorkloadDetailModal
+      clusterId="clu_1"
+      clusterName="production-east"
+      environment="production"
+      workload={workload}
+      open
+      onClose={onClose}
+      notify={notify}
+      openOperations={openOperations}
+    />)
+    const dialog = await screen.findByRole('dialog', { name: 'Deployment · gateway' })
+    await within(dialog).findByText('uid-gateway')
+    await user.click(within(dialog).getByRole('button', { name: '扩缩容' }))
+    await user.clear(within(dialog).getByLabelText('副本数'))
+    await user.click(within(dialog).getByRole('button', { name: '提交扩缩容' }))
+    expect(within(dialog).getByRole('alert')).toHaveTextContent('请输入副本数')
+    expect(fetchMock.mock.calls.some(([input, init]) => init?.method === 'POST' && String(input).endsWith('/scales'))).toBe(false)
+    await user.type(within(dialog).getByLabelText('副本数'), '5')
+    await user.type(within(dialog).getByLabelText('输入集群名称确认'), 'production-east')
+    await user.click(within(dialog).getByRole('button', { name: '提交扩缩容' }))
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/clusters/clu_1/workloads/deployment/payments/gateway/scales',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ resource_version: '42', confirmation: 'production-east', replicas: 5 }),
+      }),
+    ))
+    expect(notify).toHaveBeenCalledWith('success', '扩缩容任务 op_scale 已提交')
+    expect(onClose).toHaveBeenCalled()
+    expect(openOperations).toHaveBeenCalled()
+  })
+
+  it('submits a deployment rolling restart without replica changes', async () => {
+    const workload: Workload = {
+      kind: 'Deployment', namespace: 'payments', name: 'gateway', ready: 3, desired: 3,
+      status: 'Ready', images: ['gateway:1.4.0'], created_at: '2026-07-24T08:00:00Z',
+    }
+    const notify = vi.fn()
+    const openOperations = vi.fn()
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input)
+      if (init?.method === 'POST' && path.endsWith('/restarts')) {
+        return Promise.resolve(dataResponse({
+          id: 'op_restart', request_id: 'req_restart', kind: 'workload.restart', state: 'queued',
+          cluster_id: 'clu_1', namespace: 'payments', target: 'gateway', submitted_by: 'admin',
+          created_at: '2026-07-25T08:00:00Z', updated_at: '2026-07-25T08:00:00Z',
+        }))
+      }
+      return Promise.resolve(dataResponse({
+        ...workload, uid: 'uid-gateway', resource_version: '51', labels: {}, containers: [], conditions: [], yaml: 'kind: Deployment\n',
+      }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const user = userEvent.setup()
+
+    render(<WorkloadDetailModal
+      clusterId="clu_1"
+      clusterName="development"
+      environment="development"
+      workload={workload}
+      open
+      onClose={vi.fn()}
+      notify={notify}
+      openOperations={openOperations}
+    />)
+    const dialog = await screen.findByRole('dialog', { name: 'Deployment · gateway' })
+    await within(dialog).findByText('uid-gateway')
+    await user.click(within(dialog).getByRole('button', { name: /^滚动重启$/ }))
+    await user.click(within(dialog).getByRole('button', { name: '提交滚动重启' }))
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/clusters/clu_1/workloads/deployment/payments/gateway/restarts',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ resource_version: '51', confirmation: '' }),
+      }),
+    ))
+    expect(notify).toHaveBeenCalledWith('success', '滚动重启任务 op_restart 已提交')
+    expect(openOperations).toHaveBeenCalled()
   })
 })
 

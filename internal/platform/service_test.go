@@ -7,12 +7,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/caoyanyi/k8s-panel/internal/domain"
 	"github.com/caoyanyi/k8s-panel/internal/kubernetes"
+	"github.com/caoyanyi/k8s-panel/internal/resourceguard"
 	"github.com/caoyanyi/k8s-panel/internal/secure"
 	"github.com/caoyanyi/k8s-panel/internal/store"
 )
@@ -266,9 +268,187 @@ func TestServiceSerializesHelmOperationsForSameRelease(t *testing.T) {
 	}
 }
 
+func TestServiceExecutesControlledWorkloadOperations(t *testing.T) {
+	t.Parallel()
+
+	gateway := &fakeKubeGateway{probe: domain.ClusterProbe{Version: "v1.36.2"}}
+	service, _, _ := newTestService(t, serviceFakes{kube: gateway})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go service.Run(ctx, 2)
+
+	cluster, err := service.CreateCluster(context.Background(), "admin", "req_cluster", domain.ClusterInput{
+		Name: "production-east", Environment: domain.EnvironmentProduction, Server: "https://api.example.com", BearerToken: "token",
+	})
+	if err != nil {
+		t.Fatalf("CreateCluster() error = %v", err)
+	}
+	replicas := int32(5)
+	scaleInput := domain.WorkloadOperationInput{
+		ClusterID:       cluster.ID,
+		Reference:       domain.WorkloadReference{Kind: "deployment", Namespace: "payments", Name: "gateway"},
+		ResourceVersion: "42",
+		Replicas:        &replicas,
+	}
+	if _, err := service.SubmitWorkloadOperation(
+		context.Background(), "admin", "req_rejected", domain.OperationWorkloadScale, scaleInput,
+	); err == nil {
+		t.Fatal("production scale without confirmation succeeded")
+	} else {
+		var validationErr *domain.ValidationError
+		if !errors.As(err, &validationErr) || validationErr.Field != "confirmation" {
+			t.Fatalf("confirmation error = %v", err)
+		}
+	}
+
+	scaleInput.Confirmation = "production-east"
+	scale, err := service.SubmitWorkloadOperation(
+		context.Background(), "admin", "req_scale", domain.OperationWorkloadScale, scaleInput,
+	)
+	if err != nil {
+		t.Fatalf("SubmitWorkloadOperation(scale) error = %v", err)
+	}
+	restart, err := service.SubmitWorkloadOperation(
+		context.Background(), "admin", "req_restart", domain.OperationWorkloadRestart, domain.WorkloadOperationInput{
+			ClusterID: cluster.ID, Reference: scaleInput.Reference, ResourceVersion: "43", Confirmation: "production-east",
+		},
+	)
+	if err != nil {
+		t.Fatalf("SubmitWorkloadOperation(restart) error = %v", err)
+	}
+	waitForOperationState(t, service, scale.ID, domain.OperationSucceeded)
+	waitForOperationState(t, service, restart.ID, domain.OperationSucceeded)
+
+	gateway.mutationMu.Lock()
+	defer gateway.mutationMu.Unlock()
+	if gateway.scaledVersion != "42" || gateway.scaledReplicas != 5 {
+		t.Errorf("scale call = version %q, replicas %d", gateway.scaledVersion, gateway.scaledReplicas)
+	}
+	if gateway.restartedVersion != "43" || gateway.restartedAt.IsZero() {
+		t.Errorf("restart call = version %q, time %v", gateway.restartedVersion, gateway.restartedAt)
+	}
+	if strings.Contains(scale.Summary, "production-east") || scale.Kind != domain.OperationWorkloadScale {
+		t.Errorf("scale operation = %#v", scale)
+	}
+}
+
+func TestServiceDefersOperationsDuringCriticalResourcePressure(t *testing.T) {
+	t.Parallel()
+
+	critical := 0.97
+	sampler := &mutableResourceSampler{sample: resourceguard.Sample{MemoryRatio: &critical}}
+	governor, err := resourceguard.New(resourceguard.Config{
+		Enabled: true, MaxConcurrent: 2, HighWatermark: 0.80, CriticalWatermark: 0.95,
+		RetryInterval: time.Millisecond, Sampler: sampler,
+	})
+	if err != nil {
+		t.Fatalf("resourceguard.New() error = %v", err)
+	}
+	started := make(chan string, 1)
+	release := make(chan struct{}, 1)
+	helm := &blockingHelmGateway{started: started, release: release}
+	service, _, _ := newTestService(t, serviceFakes{
+		kube: &fakeKubeGateway{probe: domain.ClusterProbe{Version: "v1.36.2"}}, helm: helm, governor: governor,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go service.Run(ctx, 2)
+
+	cluster, err := service.CreateCluster(context.Background(), "admin", "req_cluster", domain.ClusterInput{
+		Name: "development", Environment: domain.EnvironmentDevelopment, Server: "https://api.example.com", BearerToken: "token",
+	})
+	if err != nil {
+		t.Fatalf("CreateCluster() error = %v", err)
+	}
+	repository, err := service.CreateRepository(context.Background(), "admin", "req_repo", domain.RepositoryInput{
+		Name: "stable", URL: "https://charts.example.com",
+	})
+	if err != nil {
+		t.Fatalf("CreateRepository() error = %v", err)
+	}
+	operation, err := service.SubmitHelmOperation(context.Background(), "admin", "req_install", domain.OperationHelmInstall, domain.HelmOperationInput{
+		ClusterID: cluster.ID, Namespace: "payments", ReleaseName: "gateway", Chart: "gateway", RepositoryID: repository.ID,
+	})
+	if err != nil {
+		t.Fatalf("SubmitHelmOperation() error = %v", err)
+	}
+	select {
+	case target := <-started:
+		t.Fatalf("operation %q started under critical resource pressure", target)
+	case <-time.After(30 * time.Millisecond):
+	}
+	queued, err := service.GetOperation(context.Background(), operation.ID)
+	if err != nil || queued.State != domain.OperationQueued {
+		t.Fatalf("queued operation = %#v, %v", queued, err)
+	}
+	capacity := service.OperationCapacity()
+	if capacity.Pressure != resourceguard.PressureCritical || capacity.OperationLimit != 0 {
+		t.Fatalf("critical capacity = %#v", capacity)
+	}
+
+	normal := 0.20
+	sampler.Set(resourceguard.Sample{MemoryRatio: &normal})
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("operation did not start after resource pressure recovered")
+	}
+	release <- struct{}{}
+	waitForOperationState(t, service, operation.ID, domain.OperationSucceeded)
+}
+
+func TestServiceRejectsOperationsWhenBoundedQueueIsFull(t *testing.T) {
+	t.Parallel()
+
+	service, _, _ := newTestService(t, serviceFakes{
+		kube: &fakeKubeGateway{probe: domain.ClusterProbe{Version: "v1.36.2"}}, queueSize: 1,
+	})
+	cluster, err := service.CreateCluster(context.Background(), "admin", "req_cluster", domain.ClusterInput{
+		Name: "development", Environment: domain.EnvironmentDevelopment, Server: "https://api.example.com", BearerToken: "token",
+	})
+	if err != nil {
+		t.Fatalf("CreateCluster() error = %v", err)
+	}
+	replicas := int32(2)
+	input := domain.WorkloadOperationInput{
+		ClusterID: cluster.ID, Reference: domain.WorkloadReference{Kind: "deployment", Namespace: "payments", Name: "gateway"},
+		ResourceVersion: "42", Replicas: &replicas,
+	}
+	if _, err := service.SubmitWorkloadOperation(
+		context.Background(), "admin", "req_first", domain.OperationWorkloadScale, input,
+	); err != nil {
+		t.Fatalf("SubmitWorkloadOperation(first) error = %v", err)
+	}
+	if _, err := service.SubmitWorkloadOperation(
+		context.Background(), "admin", "req_second", domain.OperationWorkloadScale, input,
+	); !errors.Is(err, domain.ErrBusy) {
+		t.Fatalf("SubmitWorkloadOperation(second) error = %v, want busy", err)
+	}
+
+	capacity := service.OperationCapacity()
+	if capacity.QueueDepth != 1 || capacity.QueueCapacity != 1 {
+		t.Fatalf("operation capacity = %#v", capacity)
+	}
+	operations, err := service.ListOperations(context.Background(), 100)
+	if err != nil {
+		t.Fatalf("ListOperations() error = %v", err)
+	}
+	foundQueueFailure := false
+	for _, operation := range operations {
+		if operation.RequestID == "req_second" && operation.State == domain.OperationFailed && operation.ErrorCode == "queue_full" {
+			foundQueueFailure = true
+		}
+	}
+	if !foundQueueFailure {
+		t.Fatalf("queue-full operation not persisted: %#v", operations)
+	}
+}
+
 type serviceFakes struct {
-	kube KubeGateway
-	helm HelmGateway
+	kube      KubeGateway
+	helm      HelmGateway
+	governor  OperationGovernor
+	queueSize int
 }
 
 func newTestService(t *testing.T, fakes serviceFakes) (*Service, *store.File, string) {
@@ -289,15 +469,23 @@ func newTestService(t *testing.T, fakes serviceFakes) (*Service, *store.File, st
 	if fakes.helm == nil {
 		fakes.helm = &blockingHelmGateway{}
 	}
+	if fakes.governor == nil {
+		fakes.governor = testOperationGovernor(t)
+	}
+	if fakes.queueSize == 0 {
+		fakes.queueSize = 16
+	}
 	var idCounter atomic.Int64
 	service, err := New(Dependencies{
-		Store:             fileStore,
-		Cipher:            cipher,
-		TargetValidator:   allowAllValidator{},
-		KubeFactory:       fakeKubeFactory{gateway: fakes.kube},
-		RepositoryChecker: successfulRepositoryChecker{},
-		Helm:              fakes.helm,
-		Clock:             func() time.Time { return now },
+		Store:              fileStore,
+		Cipher:             cipher,
+		TargetValidator:    allowAllValidator{},
+		KubeFactory:        fakeKubeFactory{gateway: fakes.kube},
+		RepositoryChecker:  successfulRepositoryChecker{},
+		Helm:               fakes.helm,
+		OperationGovernor:  fakes.governor,
+		OperationQueueSize: fakes.queueSize,
+		Clock:              func() time.Time { return now },
 		NewID: func(prefix string) (string, error) {
 			return fmt.Sprintf("%s_%d", prefix, idCounter.Add(1)), nil
 		},
@@ -317,20 +505,25 @@ type fakeKubeFactory struct{ gateway KubeGateway }
 func (f fakeKubeFactory) New(kubernetes.Connection) (KubeGateway, error) { return f.gateway, nil }
 
 type fakeKubeGateway struct {
-	probe           domain.ClusterProbe
-	probeErr        error
-	namespaces      []domain.Namespace
-	detail          domain.WorkloadDetail
-	events          []domain.KubernetesEvent
-	logs            domain.PodLogs
-	detailReference domain.WorkloadReference
-	eventLimit      int
-	logRequest      domain.PodLogRequest
-	nodes           []domain.Node
-	nodeDetail      domain.NodeDetail
-	nodeEvents      []domain.KubernetesEvent
-	nodeName        string
-	nodeEventLimit  int
+	probe            domain.ClusterProbe
+	probeErr         error
+	namespaces       []domain.Namespace
+	detail           domain.WorkloadDetail
+	events           []domain.KubernetesEvent
+	logs             domain.PodLogs
+	detailReference  domain.WorkloadReference
+	eventLimit       int
+	logRequest       domain.PodLogRequest
+	nodes            []domain.Node
+	nodeDetail       domain.NodeDetail
+	nodeEvents       []domain.KubernetesEvent
+	nodeName         string
+	nodeEventLimit   int
+	mutationMu       sync.Mutex
+	scaledVersion    string
+	scaledReplicas   int32
+	restartedVersion string
+	restartedAt      time.Time
 }
 
 func (g *fakeKubeGateway) Probe(context.Context) (domain.ClusterProbe, error) {
@@ -369,6 +562,58 @@ func (g *fakeKubeGateway) WorkloadEvents(_ context.Context, reference domain.Wor
 func (g *fakeKubeGateway) PodLogs(_ context.Context, request domain.PodLogRequest) (domain.PodLogs, error) {
 	g.logRequest = request
 	return g.logs, nil
+}
+
+func (g *fakeKubeGateway) ScaleWorkload(_ context.Context, reference domain.WorkloadReference, resourceVersion string, replicas int32) (domain.Workload, error) {
+	g.mutationMu.Lock()
+	defer g.mutationMu.Unlock()
+	g.detailReference = reference
+	g.scaledVersion = resourceVersion
+	g.scaledReplicas = replicas
+	return domain.Workload{Kind: "Deployment", Namespace: reference.Namespace, Name: reference.Name, Desired: replicas}, nil
+}
+
+func (g *fakeKubeGateway) RestartWorkload(_ context.Context, reference domain.WorkloadReference, resourceVersion string, restartedAt time.Time) (domain.Workload, error) {
+	g.mutationMu.Lock()
+	defer g.mutationMu.Unlock()
+	g.detailReference = reference
+	g.restartedVersion = resourceVersion
+	g.restartedAt = restartedAt
+	return domain.Workload{Kind: "Deployment", Namespace: reference.Namespace, Name: reference.Name}, nil
+}
+
+func testOperationGovernor(t *testing.T) OperationGovernor {
+	t.Helper()
+	value := 0.10
+	governor, err := resourceguard.New(resourceguard.Config{
+		Enabled: false, MaxConcurrent: 8, HighWatermark: 0.80, CriticalWatermark: 0.95,
+		RetryInterval: time.Millisecond, Sampler: staticResourceSampler{sample: resourceguard.Sample{MemoryRatio: &value}},
+	})
+	if err != nil {
+		t.Fatalf("resourceguard.New() error = %v", err)
+	}
+	return governor
+}
+
+type staticResourceSampler struct{ sample resourceguard.Sample }
+
+func (s staticResourceSampler) Sample() resourceguard.Sample { return s.sample }
+
+type mutableResourceSampler struct {
+	mu     sync.RWMutex
+	sample resourceguard.Sample
+}
+
+func (s *mutableResourceSampler) Sample() resourceguard.Sample {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.sample
+}
+
+func (s *mutableResourceSampler) Set(sample resourceguard.Sample) {
+	s.mu.Lock()
+	s.sample = sample
+	s.mu.Unlock()
 }
 
 type successfulRepositoryChecker struct{}

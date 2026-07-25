@@ -1,6 +1,7 @@
 export type Environment = 'development' | 'staging' | 'production'
 export type ClusterStatus = 'pending' | 'connected' | 'degraded' | 'unreachable' | 'disabled'
 export type OperationState = 'queued' | 'running' | 'succeeded' | 'failed' | 'unknown'
+export type ResourcePressure = 'unknown' | 'normal' | 'constrained' | 'critical'
 
 export interface Principal {
   username: string
@@ -200,6 +201,19 @@ export interface Operation {
   started_at?: string
   finished_at?: string
   updated_at: string
+}
+
+export interface OperationCapacity {
+  adaptive: boolean
+  pressure: ResourcePressure
+  memory_ratio?: number
+  load_ratio?: number
+  active_operations: number
+  operation_limit: number
+  maximum_operations: number
+  queue_depth: number
+  queue_capacity: number
+  sampled_at: string
 }
 
 export interface AuditEvent {

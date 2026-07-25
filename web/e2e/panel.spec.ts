@@ -92,6 +92,39 @@ test('workload diagnostics show details, events, YAML and bounded logs', async (
   expect(consoleErrors).toEqual([])
 })
 
+test('production deployment scale enters the adaptive operation queue', async ({ page }, testInfo) => {
+  const consoleErrors: string[] = []
+  page.on('console', (message) => {
+    if (message.type() === 'error') consoleErrors.push(message.text())
+  })
+  page.on('pageerror', (error) => consoleErrors.push(error.message))
+  await mockWorkloadDiagnostics(page)
+
+  await page.goto('/#workloads')
+  await expect(page.getByText('gateway-api', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: '查看 gateway-api' }).click()
+
+  const dialog = page.getByRole('dialog', { name: 'Deployment · gateway-api' })
+  await expect(dialog.getByText('uid-gateway-api')).toBeVisible()
+  await dialog.getByRole('button', { name: '扩缩容' }).click()
+  await dialog.getByLabel('副本数').fill('5')
+  await dialog.getByLabel('输入集群名称确认').fill('production-cn')
+  const requestPromise = page.waitForRequest((request) => request.method() === 'POST' && request.url().endsWith('/workloads/deployment/payments/gateway-api/scales'))
+  await dialog.getByRole('button', { name: '提交扩缩容' }).click()
+
+  const request = await requestPromise
+  expect(request.postDataJSON()).toEqual({ resource_version: '73', confirmation: 'production-cn', replicas: 5 })
+  await expect(page.getByRole('heading', { name: '操作中心' })).toBeVisible()
+  await expect(page.getByText('工作负载扩缩容')).toBeVisible()
+  await expect(page.getByText('资源承压')).toBeVisible()
+  await expect(page.getByText('队列 1 / 64')).toBeVisible()
+
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
+  expect(overflow).toBeLessThanOrEqual(1)
+  await page.screenshot({ path: `test-results/${testInfo.project.name}-controlled-scale.png`, fullPage: true })
+  expect(consoleErrors).toEqual([])
+})
+
 test('cluster resources show node diagnostics and namespaces', async ({ page }, testInfo) => {
   const consoleErrors: string[] = []
   page.on('console', (message) => {
@@ -160,16 +193,42 @@ async function mockWorkloadDiagnostics(page: Page) {
       }]
     } else if (path === '/api/v1/clusters/clu_1/namespaces') {
       data = [{ name: 'payments', status: 'Active', created_at: '2026-07-24T08:00:00Z' }]
-    } else if (path === '/api/v1/clusters/clu_1/summary') {
-      data = {
-        version: 'v1.36.2', namespace_count: 1, node_count: 3, ready_node_count: 3,
-        workload_count: 1, ready_workloads: 1, unhealthy_pods: 0,
-      }
     } else if (path === '/api/v1/clusters/clu_1/workloads') {
-      data = [{
-        kind: 'Pod', namespace: 'payments', name: 'gateway-0', ready: 1, desired: 1, status: 'Ready',
+      data = [
+        {
+          kind: 'Pod', namespace: 'payments', name: 'gateway-0', ready: 1, desired: 1, status: 'Ready',
+          images: ['registry.example.com/payments/gateway:1.4.0'], created_at: '2026-07-24T08:00:00Z',
+        },
+        {
+          kind: 'Deployment', namespace: 'payments', name: 'gateway-api', ready: 3, desired: 3, status: 'Ready',
+          images: ['registry.example.com/payments/gateway:1.4.0'], created_at: '2026-07-24T08:00:00Z',
+        },
+      ]
+    } else if (path.endsWith('/workloads/deployment/payments/gateway-api/scales') && route.request().method() === 'POST') {
+      data = {
+        id: 'op_scale', request_id: 'req_scale', kind: 'workload.scale', state: 'queued',
+        cluster_id: 'clu_1', namespace: 'payments', target: 'gateway-api', submitted_by: 'diagnostics-admin',
+        summary: 'replicas=5, resource_version=73', created_at: '2026-07-25T08:05:00Z', updated_at: '2026-07-25T08:05:00Z',
+      }
+    } else if (path.endsWith('/workloads/deployment/payments/gateway-api')) {
+      data = {
+        kind: 'Deployment', namespace: 'payments', name: 'gateway-api', ready: 3, desired: 3, status: 'Ready',
         images: ['registry.example.com/payments/gateway:1.4.0'], created_at: '2026-07-24T08:00:00Z',
+        uid: 'uid-gateway-api', resource_version: '73', labels: { app: 'gateway' }, containers: [], conditions: [],
+        yaml: 'apiVersion: apps/v1\nkind: Deployment\n',
+      }
+    } else if (path === '/api/v1/operations') {
+      data = [{
+        id: 'op_scale', request_id: 'req_scale', kind: 'workload.scale', state: 'queued',
+        cluster_id: 'clu_1', namespace: 'payments', target: 'gateway-api', submitted_by: 'diagnostics-admin',
+        summary: 'replicas=5, resource_version=73', created_at: '2026-07-25T08:05:00Z', updated_at: '2026-07-25T08:05:00Z',
       }]
+    } else if (path === '/api/v1/system/resources') {
+      data = {
+        adaptive: true, pressure: 'constrained', memory_ratio: 0.84, load_ratio: 0.62,
+        active_operations: 1, operation_limit: 1, maximum_operations: 2,
+        queue_depth: 1, queue_capacity: 64, sampled_at: '2026-07-25T08:05:00Z',
+      }
     } else if (path.endsWith('/workloads/pod/payments/gateway-0/events')) {
       data = [{
         name: 'gateway-warning', type: 'Warning', reason: 'BackOff', message: 'Back-off restarting container',

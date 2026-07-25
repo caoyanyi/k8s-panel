@@ -22,12 +22,13 @@ import (
 )
 
 const (
-	maxResponseBytes = 8 * 1024 * 1024
-	maxLogBytes      = 2 * 1024 * 1024
-	maxListBytes     = 32 * 1024 * 1024
-	maxListItems     = 5000
-	maxListPages     = 20
-	listPageSize     = "500"
+	maxResponseBytes  = 8 * 1024 * 1024
+	maxLogBytes       = 2 * 1024 * 1024
+	maxListBytes      = 32 * 1024 * 1024
+	maxListItems      = 5000
+	maxListPages      = 20
+	listPageSize      = "500"
+	restartAnnotation = "k8s-panel.io/restartedAt"
 )
 
 type Connection struct {
@@ -271,6 +272,82 @@ func (c *Client) WorkloadDetail(ctx context.Context, reference domain.WorkloadRe
 	}, nil
 }
 
+func (c *Client) ScaleWorkload(
+	ctx context.Context,
+	reference domain.WorkloadReference,
+	resourceVersion string,
+	replicas int32,
+) (domain.Workload, error) {
+	if err := validateDeploymentMutation(reference, resourceVersion); err != nil {
+		return domain.Workload{}, err
+	}
+	if replicas < 0 || replicas > domain.MaxWorkloadReplicas {
+		return domain.Workload{}, domain.Invalid("replicas", "must be between 0 and 1000")
+	}
+	return c.patchDeployment(ctx, reference, map[string]any{
+		"metadata": map[string]any{"resourceVersion": strings.TrimSpace(resourceVersion)},
+		"spec":     map[string]any{"replicas": replicas},
+	})
+}
+
+func (c *Client) RestartWorkload(
+	ctx context.Context,
+	reference domain.WorkloadReference,
+	resourceVersion string,
+	restartedAt time.Time,
+) (domain.Workload, error) {
+	if err := validateDeploymentMutation(reference, resourceVersion); err != nil {
+		return domain.Workload{}, err
+	}
+	if restartedAt.IsZero() {
+		return domain.Workload{}, domain.Invalid("restarted_at", "is required")
+	}
+	return c.patchDeployment(ctx, reference, map[string]any{
+		"metadata": map[string]any{"resourceVersion": strings.TrimSpace(resourceVersion)},
+		"spec": map[string]any{"template": map[string]any{
+			"metadata": map[string]any{"annotations": map[string]any{
+				restartAnnotation: restartedAt.UTC().Format(time.RFC3339Nano),
+			}},
+		}},
+	})
+}
+
+func (c *Client) patchDeployment(
+	ctx context.Context,
+	reference domain.WorkloadReference,
+	patch map[string]any,
+) (domain.Workload, error) {
+	body, err := json.Marshal(patch)
+	if err != nil {
+		return domain.Workload{}, fmt.Errorf("encode Kubernetes patch: %w", err)
+	}
+	path := "/apis/apps/v1/namespaces/" + reference.Namespace + "/deployments/" + reference.Name
+	payload, _, err := c.requestPayload(
+		ctx, http.MethodPatch, path, nil, "application/json", "application/merge-patch+json", body, maxResponseBytes, false,
+	)
+	if err != nil {
+		return domain.Workload{}, err
+	}
+	workload, err := decodeWorkload("deployment", payload)
+	if err != nil {
+		return domain.Workload{}, err
+	}
+	return workload, nil
+}
+
+func validateDeploymentMutation(reference domain.WorkloadReference, resourceVersion string) error {
+	if err := domain.ValidateWorkloadReference(reference); err != nil {
+		return err
+	}
+	if strings.ToLower(strings.TrimSpace(reference.Kind)) != "deployment" {
+		return domain.Invalid("kind", "only Deployment operations are supported")
+	}
+	if strings.TrimSpace(resourceVersion) == "" || len(strings.TrimSpace(resourceVersion)) > 256 {
+		return domain.Invalid("resource_version", "is required and must not exceed 256 characters")
+	}
+	return nil
+}
+
 func (c *Client) WorkloadEvents(
 	ctx context.Context,
 	reference domain.WorkloadReference,
@@ -443,19 +520,41 @@ func (c *Client) getPayload(
 	maxBytes int64,
 	truncate bool,
 ) ([]byte, bool, error) {
+	return c.requestPayload(ctx, http.MethodGet, path, query, accept, "", nil, maxBytes, truncate)
+}
+
+func (c *Client) requestPayload(
+	ctx context.Context,
+	method string,
+	path string,
+	query url.Values,
+	accept string,
+	contentType string,
+	body []byte,
+	maxBytes int64,
+	truncate bool,
+) ([]byte, bool, error) {
 	requestURL := *c.baseURL
 	requestURL.Path = strings.TrimRight(c.baseURL.Path, "/") + path
-	requestURL.RawQuery = query.Encode()
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL.String(), nil)
+	if query != nil {
+		requestURL.RawQuery = query.Encode()
+	}
+	request, err := http.NewRequestWithContext(ctx, method, requestURL.String(), bytes.NewReader(body))
 	if err != nil {
 		return nil, false, fmt.Errorf("create Kubernetes request: %w", err)
 	}
 	request.Header.Set("Authorization", "Bearer "+c.token)
 	request.Header.Set("Accept", accept)
+	if contentType != "" {
+		request.Header.Set("Content-Type", contentType)
+	}
 
 	response, err := c.http.Do(request)
 	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		if errors.Is(err, context.Canceled) {
+			return nil, false, fmt.Errorf("Kubernetes request canceled: %w", context.Canceled)
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
 			return nil, false, fmt.Errorf("Kubernetes request: %w", domain.ErrTimeout)
 		}
 		return nil, false, fmt.Errorf("Kubernetes request: %w", domain.ErrUpstream)
@@ -469,6 +568,8 @@ func (c *Client) getPayload(
 			return nil, false, fmt.Errorf("Kubernetes authorization rejected: %w", domain.ErrForbidden)
 		case http.StatusNotFound:
 			return nil, false, fmt.Errorf("Kubernetes resource unavailable: %w", domain.ErrNotFound)
+		case http.StatusConflict:
+			return nil, false, fmt.Errorf("Kubernetes resource version conflict: %w", domain.ErrConflict)
 		default:
 			return nil, false, fmt.Errorf("Kubernetes returned HTTP %d: %w", response.StatusCode, domain.ErrUpstream)
 		}

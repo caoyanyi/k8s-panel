@@ -9,9 +9,11 @@ K8s Panel 是一个独立实现的 Kubernetes 与 Helm 管理面板。后端使�
 - 集群概览、节点/命名空间资源清单与节点诊断详情
 - Deployment/StatefulSet/DaemonSet/Pod 工作负载查询
 - 工作负载详情、脱敏 YAML、关联事件与有界 Pod 日志快照
+- Deployment 受控扩缩容与滚动重启，带资源版本冲突保护和生产确认
 - Helm 仓库配置与连接测试
 - Helm Release 查询、安装、升级、回滚和卸载
-- Helm 写操作异步队列、同一 Release 串行执行
+- Helm 与工作负载写操作共享有界异步队列、同一目标串行执行
+- 基于容器/主机内存和负载压力自适应限制后台操作并发
 - 操作记录与审计日志
 - Kubernetes 和 Helm 凭据 AES-256-GCM 加密落盘
 - HTTPS 目标校验、私网 CIDR 显式许可和响应体大小限制
@@ -42,7 +44,9 @@ go run ./cmd/panel
 | `PANEL_ADMIN_PASSWORD_HASH` | 无 | 必填，Argon2id 编码密码哈希 |
 | `PANEL_SESSION_TTL` | `8h` | 会话有效期，最大 24 小时 |
 | `PANEL_HELM_TIMEOUT` | `5m` | 单次 Helm 操作超时 |
-| `PANEL_HELM_WORKERS` | `2` | Helm 后台任务并发数，低配置主机建议设为 `1` |
+| `PANEL_HELM_WORKERS` | `2` | 后台操作最大并发数（兼容原 Helm 配置名），低配置主机建议设为 `1` |
+| `PANEL_OPERATION_QUEUE_SIZE` | `64` | 后台操作等待队列容量，范围 1 到 128 |
+| `PANEL_ADAPTIVE_OPERATIONS` | `true` | 按当前内存与系统负载自动降并发，高压时暂停启动新任务 |
 | `PANEL_MAX_CONCURRENT_REQUESTS` | `16` | API 同时处理的请求上限，超限快速返回 `503` |
 | `PANEL_ALLOWED_PRIVATE_CIDRS` | 空 | 允许访问的私网 CIDR，逗号分隔 |
 | `PANEL_SECURE_COOKIES` | `false` | HTTPS 部署必须设为 `true` |
@@ -50,7 +54,11 @@ go run ./cmd/panel
 
 面板默认拒绝访问私网地址。若 Kubernetes API 或 Helm 仓库位于私网，应将其精确网段加入 `PANEL_ALLOWED_PRIVATE_CIDRS`，不要无条件放开全部内网。
 
-Kubernetes 单类资源清单最多读取 5,000 项、20 页和 32 MiB 原始对象，Web 表格每页只渲染 100 行；超过后端上限会停止读取并返回错误，避免大集群拖垮控制面。低配置主机可将 `PANEL_HELM_WORKERS=1`，并按实际并发下调 `PANEL_MAX_CONCURRENT_REQUESTS`。
+Kubernetes 单类资源清单最多读取 5,000 项、20 页和 32 MiB 原始对象，Web 表格每页只渲染 100 行；事件仅在打开对应标签后读取，操作中心在页面不可见时暂停轮询。超过后端上限会停止读取并返回错误，避免大集群拖垮控制面。
+
+自适应操作控制默认在内存或归一化系统负载达到 80% 时将并发减半，达到 95% 时暂停启动新任务；指标暂不可用时按配置的最大并发运行。低配置主机建议同时设置 `PANEL_HELM_WORKERS=1`、较小的 `PANEL_OPERATION_QUEUE_SIZE`，并按实际流量下调 `PANEL_MAX_CONCURRENT_REQUESTS`。
+
+单节点文件存储最多保留最近 2,000 条操作记录和 5,000 条审计记录；排队中或执行中的操作不会因历史清理而移除。
 
 MVP 不加载本地 Chart、Helm 插件或宿主机凭据。OCI 模式仅支持匿名拉取；Chart provenance/OpenPGP 校验暂未启用。
 

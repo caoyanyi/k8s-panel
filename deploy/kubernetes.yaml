@@ -6,6 +6,9 @@ metadata:
 data:
   listen-address: "0.0.0.0:8080"
   allowed-private-cidrs: "10.0.0.0/8"
+  operation-workers: "2"
+  operation-queue-size: "64"
+  adaptive-operations: "true"
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -65,6 +68,21 @@ spec:
                 configMapKeyRef:
                   name: k8s-panel-config
                   key: allowed-private-cidrs
+            - name: PANEL_HELM_WORKERS
+              valueFrom:
+                configMapKeyRef:
+                  name: k8s-panel-config
+                  key: operation-workers
+            - name: PANEL_OPERATION_QUEUE_SIZE
+              valueFrom:
+                configMapKeyRef:
+                  name: k8s-panel-config
+                  key: operation-queue-size
+            - name: PANEL_ADAPTIVE_OPERATIONS
+              valueFrom:
+                configMapKeyRef:
+                  name: k8s-panel-config
+                  key: adaptive-operations
             - name: PANEL_ENCRYPTION_KEY
               valueFrom:
                 secretKeyRef:

@@ -6,6 +6,7 @@ import (
 
 	"github.com/caoyanyi/k8s-panel/internal/domain"
 	"github.com/caoyanyi/k8s-panel/internal/kubernetes"
+	"github.com/caoyanyi/k8s-panel/internal/resourceguard"
 )
 
 type Store interface {
@@ -50,6 +51,8 @@ type KubeGateway interface {
 	WorkloadDetail(context.Context, domain.WorkloadReference) (domain.WorkloadDetail, error)
 	WorkloadEvents(context.Context, domain.WorkloadReference, int) ([]domain.KubernetesEvent, error)
 	PodLogs(context.Context, domain.PodLogRequest) (domain.PodLogs, error)
+	ScaleWorkload(context.Context, domain.WorkloadReference, string, int32) (domain.Workload, error)
+	RestartWorkload(context.Context, domain.WorkloadReference, string, time.Time) (domain.Workload, error)
 }
 
 type KubeFactory interface {
@@ -77,13 +80,26 @@ type HelmGateway interface {
 	Execute(context.Context, domain.OperationKind, HelmRequest) error
 }
 
+type OperationGovernor interface {
+	Acquire(context.Context) (resourceguard.Snapshot, func(), error)
+	Snapshot() resourceguard.Snapshot
+}
+
+type OperationCapacity struct {
+	resourceguard.Snapshot
+	QueueDepth    int `json:"queue_depth"`
+	QueueCapacity int `json:"queue_capacity"`
+}
+
 type Dependencies struct {
-	Store             Store
-	Cipher            SecretCipher
-	TargetValidator   TargetValidator
-	KubeFactory       KubeFactory
-	RepositoryChecker RepositoryChecker
-	Helm              HelmGateway
-	Clock             func() time.Time
-	NewID             func(prefix string) (string, error)
+	Store              Store
+	Cipher             SecretCipher
+	TargetValidator    TargetValidator
+	KubeFactory        KubeFactory
+	RepositoryChecker  RepositoryChecker
+	Helm               HelmGateway
+	OperationGovernor  OperationGovernor
+	OperationQueueSize int
+	Clock              func() time.Time
+	NewID              func(prefix string) (string, error)
 }

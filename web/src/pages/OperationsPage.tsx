@@ -1,27 +1,51 @@
-import { RefreshCw } from 'lucide-react'
-import { useEffect } from 'react'
+import { Gauge, RefreshCw } from 'lucide-react'
+import { useCallback, useEffect, useRef } from 'react'
 import { api } from '../api'
 import { EmptyState, ErrorState, LoadingState } from '../components/DataState'
 import { PageHeader } from '../components/PageHeader'
 import { StatusBadge } from '../components/StatusBadge'
 import { useResource } from '../hooks'
-import type { Operation } from '../types'
+import type { Operation, OperationCapacity } from '../types'
 import { formatDateTime } from '../utils'
 
 export function OperationsPage() {
   const operations = useResource((signal) => api.get<Operation[]>('/api/v1/operations?limit=100', signal), [])
+  const capacity = useResource((signal) => api.get<OperationCapacity>('/api/v1/system/resources', signal), [])
+  const refreshInFlight = useRef(false)
+
+  const refreshAll = useCallback(async () => {
+    if (refreshInFlight.current || operations.loading || capacity.loading) return
+    refreshInFlight.current = true
+    try {
+      await Promise.allSettled([operations.refresh(), capacity.refresh()])
+    } finally {
+      refreshInFlight.current = false
+    }
+  }, [capacity.loading, capacity.refresh, operations.loading, operations.refresh])
+
   useEffect(() => {
-    const timer = window.setInterval(() => void operations.refresh(), 5000)
-    return () => window.clearInterval(timer)
-  }, [operations.refresh])
+    const refresh = () => {
+      if (!document.hidden) void refreshAll()
+    }
+    const onVisibilityChange = () => {
+      refresh()
+    }
+    const timer = window.setInterval(refresh, 5000)
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => {
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+    }
+  }, [refreshAll])
 
   return (
     <div className="page">
       <PageHeader
         title="操作中心"
-        meta="Helm 异步任务状态"
-        actions={<button className="button button-secondary" onClick={() => void operations.refresh()} disabled={operations.loading}><RefreshCw size={16} className={operations.loading ? 'spin' : ''} /> 刷新</button>}
+        meta="异步任务与资源准入"
+        actions={<button className="button button-secondary" onClick={() => void refreshAll()} disabled={operations.loading || capacity.loading}><RefreshCw size={16} className={operations.loading || capacity.loading ? 'spin' : ''} /> 刷新</button>}
       />
+      <OperationCapacityBand capacity={capacity.data} loading={capacity.loading} error={capacity.error} onRetry={() => void capacity.refresh()} />
       <section className="section-block table-section">
         {operations.loading && !operations.data ? <LoadingState label="正在读取操作记录" /> : operations.error ? <ErrorState error={operations.error} onRetry={() => void operations.refresh()} /> : !operations.data?.length ? <EmptyState title="暂无操作记录" /> : (
           <div className="table-wrap"><table>
@@ -43,11 +67,44 @@ export function OperationsPage() {
   )
 }
 
+function OperationCapacityBand({ capacity, loading, error, onRetry }: {
+  capacity: OperationCapacity | null
+  loading: boolean
+  error: unknown
+  onRetry: () => void
+}) {
+  if (loading && !capacity) {
+    return <section className="operation-capacity" aria-label="资源准入状态"><Gauge size={17} aria-hidden="true" /><span>正在读取资源状态</span></section>
+  }
+  if (error && !capacity) {
+    return <section className="operation-capacity operation-capacity-error" aria-label="资源准入状态"><Gauge size={17} aria-hidden="true" /><span>资源状态暂不可用</span><button type="button" className="text-button" onClick={onRetry}>重试</button></section>
+  }
+  if (!capacity) return null
+
+  return (
+    <section className="operation-capacity" aria-label="资源准入状态">
+      <div className="operation-capacity-state"><Gauge size={17} aria-hidden="true" /><StatusBadge status={capacity.pressure} /></div>
+      <span>{`内存 ${formatRatio(capacity.memory_ratio)}`}</span>
+      <span>{`负载 ${formatRatio(capacity.load_ratio)}`}</span>
+      <span>{`执行槽 ${capacity.active_operations} / ${capacity.operation_limit}`}</span>
+      <span>{`队列 ${capacity.queue_depth} / ${capacity.queue_capacity}`}</span>
+      {!capacity.adaptive && <span>自适应已关闭</span>}
+    </section>
+  )
+}
+
 function operationLabel(kind: string) {
   return ({
     'helm.install': 'Helm 安装',
     'helm.upgrade': 'Helm 升级',
     'helm.rollback': 'Helm 回滚',
     'helm.uninstall': 'Helm 卸载',
+    'workload.scale': '工作负载扩缩容',
+    'workload.restart': '工作负载滚动重启',
   } as Record<string, string>)[kind] ?? kind
+}
+
+function formatRatio(value?: number) {
+  if (value === undefined || !Number.isFinite(value)) return '-'
+  return `${Math.round(Math.min(1, Math.max(0, value)) * 100)}%`
 }

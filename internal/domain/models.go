@@ -67,10 +67,12 @@ type RepositoryInput struct {
 type OperationKind string
 
 const (
-	OperationHelmInstall   OperationKind = "helm.install"
-	OperationHelmUpgrade   OperationKind = "helm.upgrade"
-	OperationHelmRollback  OperationKind = "helm.rollback"
-	OperationHelmUninstall OperationKind = "helm.uninstall"
+	OperationHelmInstall     OperationKind = "helm.install"
+	OperationHelmUpgrade     OperationKind = "helm.upgrade"
+	OperationHelmRollback    OperationKind = "helm.rollback"
+	OperationHelmUninstall   OperationKind = "helm.uninstall"
+	OperationWorkloadScale   OperationKind = "workload.scale"
+	OperationWorkloadRestart OperationKind = "workload.restart"
 )
 
 type OperationState string
@@ -124,6 +126,14 @@ type HelmOperationInput struct {
 	Version      string
 	Values       string
 	Revision     int
+}
+
+type WorkloadOperationInput struct {
+	ClusterID       string
+	Reference       WorkloadReference
+	ResourceVersion string
+	Replicas        *int32
+	Confirmation    string
 }
 
 type ClusterProbe struct {
@@ -228,6 +238,7 @@ const (
 	MaxPodLogTailLines    = 2000
 	MaxWorkloadEventLimit = 100
 	MaxNodeEventLimit     = 100
+	MaxWorkloadReplicas   = 1000
 )
 
 type WorkloadReference struct {

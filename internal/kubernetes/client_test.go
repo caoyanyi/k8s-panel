@@ -462,6 +462,116 @@ func TestAppendListItemsEnforcesResourceLimits(t *testing.T) {
 	}
 }
 
+func TestClientMutatesDeploymentWithResourceVersion(t *testing.T) {
+	t.Parallel()
+
+	var requests []map[string]any
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPatch || r.URL.Path != "/apis/apps/v1/namespaces/payments/deployments/gateway" {
+			http.NotFound(w, r)
+			return
+		}
+		if got := r.Header.Get("Content-Type"); got != "application/merge-patch+json" {
+			t.Errorf("Content-Type = %q", got)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode patch: %v", err)
+		}
+		requests = append(requests, body)
+		writeTestJSON(t, w, map[string]any{
+			"metadata": map[string]any{
+				"name": "gateway", "namespace": "payments", "resourceVersion": "43",
+				"creationTimestamp": "2026-07-24T08:00:00Z",
+			},
+			"spec": map[string]any{
+				"replicas": 5,
+				"template": map[string]any{"spec": map[string]any{"containers": []any{
+					map[string]any{"name": "app", "image": "registry.example.com/gateway:1.4.0"},
+				}}},
+			},
+			"status": map[string]any{"readyReplicas": 3},
+		})
+	}))
+	t.Cleanup(server.Close)
+
+	certificate := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+	client, err := NewClient(Connection{Server: server.URL, CACert: string(certificate), BearerToken: "test-token"}, loopbackPolicy(t))
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	reference := domain.WorkloadReference{Kind: "deployment", Namespace: "payments", Name: "gateway"}
+	scaled, err := client.ScaleWorkload(context.Background(), reference, "42", 5)
+	if err != nil {
+		t.Fatalf("ScaleWorkload() error = %v", err)
+	}
+	if scaled.Desired != 5 || scaled.Name != "gateway" {
+		t.Errorf("scaled workload = %#v", scaled)
+	}
+	restartedAt := time.Date(2026, 7, 25, 8, 3, 0, 0, time.UTC)
+	if _, err := client.RestartWorkload(context.Background(), reference, "43", restartedAt); err != nil {
+		t.Fatalf("RestartWorkload() error = %v", err)
+	}
+	if len(requests) != 2 {
+		t.Fatalf("patch count = %d", len(requests))
+	}
+	firstMetadata := requests[0]["metadata"].(map[string]any)
+	firstSpec := requests[0]["spec"].(map[string]any)
+	if firstMetadata["resourceVersion"] != "42" || firstSpec["replicas"] != float64(5) {
+		t.Errorf("scale patch = %#v", requests[0])
+	}
+	secondMetadata := requests[1]["metadata"].(map[string]any)
+	secondSpec := requests[1]["spec"].(map[string]any)
+	template := secondSpec["template"].(map[string]any)
+	templateMetadata := template["metadata"].(map[string]any)
+	annotations := templateMetadata["annotations"].(map[string]any)
+	if secondMetadata["resourceVersion"] != "43" || annotations[restartAnnotation] != restartedAt.Format(time.RFC3339Nano) {
+		t.Errorf("restart patch = %#v", requests[1])
+	}
+}
+
+func TestClientMapsPatchConflict(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "conflict", http.StatusConflict)
+	}))
+	t.Cleanup(server.Close)
+	certificate := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+	client, err := NewClient(Connection{Server: server.URL, CACert: string(certificate), BearerToken: "test-token"}, loopbackPolicy(t))
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	_, err = client.ScaleWorkload(context.Background(), domain.WorkloadReference{
+		Kind: "deployment", Namespace: "payments", Name: "gateway",
+	}, "41", 2)
+	if !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("ScaleWorkload() error = %v", err)
+	}
+}
+
+func TestClientPreservesRequestCancellation(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	t.Cleanup(server.Close)
+	certificate := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+	client, err := NewClient(Connection{Server: server.URL, CACert: string(certificate), BearerToken: "test-token"}, loopbackPolicy(t))
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = client.WorkloadDetail(ctx, domain.WorkloadReference{
+		Kind: "deployment", Namespace: "payments", Name: "gateway",
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("WorkloadDetail() error = %v, want context cancellation", err)
+	}
+}
+
 func writeTestJSON(t *testing.T, w http.ResponseWriter, value any) {
 	t.Helper()
 	if err := json.NewEncoder(w).Encode(value); err != nil {

@@ -4,6 +4,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"unicode"
 )
 
 const MaxHelmValuesBytes = 256 * 1024
@@ -86,6 +87,38 @@ func ValidateWorkloadReference(reference WorkloadReference) error {
 	}
 	if !validDNSSubdomain(reference.Name) {
 		return Invalid("name", "must be a valid Kubernetes resource name")
+	}
+	return nil
+}
+
+func ValidateWorkloadOperationInput(kind OperationKind, input WorkloadOperationInput) error {
+	if kind != OperationWorkloadScale && kind != OperationWorkloadRestart {
+		return Invalid("kind", "must be workload.scale or workload.restart")
+	}
+	if strings.TrimSpace(input.ClusterID) == "" {
+		return Invalid("cluster_id", "is required")
+	}
+	if err := ValidateWorkloadReference(input.Reference); err != nil {
+		return err
+	}
+	if strings.ToLower(strings.TrimSpace(input.Reference.Kind)) != "deployment" {
+		return Invalid("kind", "only Deployment operations are supported")
+	}
+	resourceVersion := strings.TrimSpace(input.ResourceVersion)
+	if resourceVersion == "" || len(resourceVersion) > 256 || strings.IndexFunc(resourceVersion, unicode.IsControl) >= 0 {
+		return Invalid("resource_version", "must be a valid value no longer than 256 characters")
+	}
+	if kind == OperationWorkloadScale {
+		if input.Replicas == nil {
+			return Invalid("replicas", "is required")
+		}
+		if *input.Replicas < 0 || *input.Replicas > MaxWorkloadReplicas {
+			return Invalid("replicas", "must be between 0 and 1000")
+		}
+		return nil
+	}
+	if input.Replicas != nil {
+		return Invalid("replicas", "must not be provided for restart")
 	}
 	return nil
 }

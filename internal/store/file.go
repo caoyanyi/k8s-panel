@@ -15,7 +15,11 @@ import (
 	"github.com/caoyanyi/k8s-panel/internal/domain"
 )
 
-const schemaVersion = 1
+const (
+	schemaVersion        = 1
+	maxStoredOperations  = 2000
+	maxStoredAuditEvents = 5000
+)
 
 type state struct {
 	SchemaVersion int                 `json:"schema_version"`
@@ -47,10 +51,27 @@ func Open(path string, clock func() time.Time) (*File, error) {
 	if err := store.load(); err != nil {
 		return nil, err
 	}
+	if err := store.reconcileHistoryRetention(); err != nil {
+		return nil, err
+	}
 	if err := store.reconcileInterruptedOperations(); err != nil {
 		return nil, err
 	}
 	return store, nil
+}
+
+func (s *File) reconcileHistoryRetention() error {
+	next := cloneState(s.data)
+	next.Operations = trimOperationHistory(next.Operations)
+	next.AuditEvents = trimAuditHistory(next.AuditEvents)
+	if len(next.Operations) == len(s.data.Operations) && len(next.AuditEvents) == len(s.data.AuditEvents) {
+		return nil
+	}
+	if err := s.persist(next); err != nil {
+		return err
+	}
+	s.data = next
+	return nil
 }
 
 func (s *File) load() error {
@@ -77,12 +98,12 @@ func (s *File) reconcileInterruptedOperations() error {
 	changed := false
 	now := s.clock().UTC()
 	for i := range next.Operations {
-		if next.Operations[i].State != domain.OperationRunning {
+		if next.Operations[i].State != domain.OperationRunning && next.Operations[i].State != domain.OperationQueued {
 			continue
 		}
 		next.Operations[i].State = domain.OperationUnknown
 		next.Operations[i].ErrorCode = "process_restarted"
-		next.Operations[i].ErrorMessage = "操作执行期间服务发生重启，结果需要人工确认"
+		next.Operations[i].ErrorMessage = "操作排队或执行期间服务发生重启，结果需要人工确认"
 		next.Operations[i].UpdatedAt = now
 		next.Operations[i].FinishedAt = now
 		changed = true
@@ -279,6 +300,7 @@ func (s *File) CreateOperation(ctx context.Context, operation domain.Operation) 
 	}
 	next := cloneState(s.data)
 	next.Operations = append(next.Operations, operation)
+	next.Operations = trimOperationHistory(next.Operations)
 	return s.commit(next)
 }
 
@@ -337,6 +359,7 @@ func (s *File) CreateAuditEvent(ctx context.Context, event domain.AuditEvent) er
 	}
 	next := cloneState(s.data)
 	next.AuditEvents = append(next.AuditEvents, event)
+	next.AuditEvents = trimAuditHistory(next.AuditEvents)
 	return s.commit(next)
 }
 
@@ -418,6 +441,32 @@ func cloneState(source state) state {
 		Operations:    append([]domain.Operation(nil), source.Operations...),
 		AuditEvents:   append([]domain.AuditEvent(nil), source.AuditEvents...),
 	}
+}
+
+func trimOperationHistory(operations []domain.Operation) []domain.Operation {
+	overflow := len(operations) - maxStoredOperations
+	if overflow <= 0 {
+		return operations
+	}
+	trimmed := make([]domain.Operation, 0, maxStoredOperations)
+	for _, operation := range operations {
+		inFlight := operation.State == domain.OperationQueued || operation.State == domain.OperationRunning
+		if overflow > 0 && !inFlight {
+			overflow--
+			continue
+		}
+		trimmed = append(trimmed, operation)
+	}
+	return trimmed
+}
+
+func trimAuditHistory(events []domain.AuditEvent) []domain.AuditEvent {
+	if len(events) <= maxStoredAuditEvents {
+		return events
+	}
+	trimmed := make([]domain.AuditEvent, maxStoredAuditEvents)
+	copy(trimmed, events[len(events)-maxStoredAuditEvents:])
+	return trimmed
 }
 
 func limitSlice[T any](items []T, limit int) []T {

@@ -11,6 +11,7 @@ var (
 	ErrUnauthorized = errors.New("unauthorized")
 	ErrForbidden    = errors.New("forbidden")
 	ErrInvalidState = errors.New("invalid resource state")
+	ErrBusy         = errors.New("system is busy")
 	ErrUpstream     = errors.New("upstream request failed")
 	ErrTimeout      = errors.New("request timed out")
 )

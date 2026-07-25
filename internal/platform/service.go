@@ -12,7 +12,11 @@ import (
 	"github.com/caoyanyi/k8s-panel/internal/kubernetes"
 )
 
-const operationQueueSize = 128
+const (
+	defaultOperationQueueSize = 64
+	maxOperationQueueSize     = 128
+	targetLockStripes         = 64
+)
 
 type Service struct {
 	store             Store
@@ -21,22 +25,24 @@ type Service struct {
 	kubeFactory       KubeFactory
 	repositoryChecker RepositoryChecker
 	helm              HelmGateway
+	operationGovernor OperationGovernor
 	clock             func() time.Time
 	newID             func(string) (string, error)
 	queue             chan operationJob
 	runOnce           sync.Once
-	locksMu           sync.Mutex
-	releaseLocks      map[string]*sync.Mutex
+	targetLocks       [targetLockStripes]sync.Mutex
 }
 
 type operationJob struct {
-	operationID string
-	input       domain.HelmOperationInput
+	operationID   string
+	helmInput     *domain.HelmOperationInput
+	workloadInput *domain.WorkloadOperationInput
 }
 
 func New(dependencies Dependencies) (*Service, error) {
 	if dependencies.Store == nil || dependencies.Cipher == nil || dependencies.TargetValidator == nil ||
-		dependencies.KubeFactory == nil || dependencies.RepositoryChecker == nil || dependencies.Helm == nil {
+		dependencies.KubeFactory == nil || dependencies.RepositoryChecker == nil || dependencies.Helm == nil ||
+		dependencies.OperationGovernor == nil {
 		return nil, errors.New("all platform dependencies are required")
 	}
 	if dependencies.Clock == nil {
@@ -45,6 +51,12 @@ func New(dependencies Dependencies) (*Service, error) {
 	if dependencies.NewID == nil {
 		return nil, errors.New("ID generator is required")
 	}
+	if dependencies.OperationQueueSize == 0 {
+		dependencies.OperationQueueSize = defaultOperationQueueSize
+	}
+	if dependencies.OperationQueueSize < 1 || dependencies.OperationQueueSize > maxOperationQueueSize {
+		return nil, errors.New("operation queue size must be between 1 and 128")
+	}
 	return &Service{
 		store:             dependencies.Store,
 		cipher:            dependencies.Cipher,
@@ -52,10 +64,10 @@ func New(dependencies Dependencies) (*Service, error) {
 		kubeFactory:       dependencies.KubeFactory,
 		repositoryChecker: dependencies.RepositoryChecker,
 		helm:              dependencies.Helm,
+		operationGovernor: dependencies.OperationGovernor,
 		clock:             dependencies.Clock,
 		newID:             dependencies.NewID,
-		queue:             make(chan operationJob, operationQueueSize),
-		releaseLocks:      make(map[string]*sync.Mutex),
+		queue:             make(chan operationJob, dependencies.OperationQueueSize),
 	}, nil
 }
 

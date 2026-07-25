@@ -1,7 +1,7 @@
-import { Copy, Download, RefreshCw } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { api } from '../api'
-import type { KubernetesEvent, PodLogs, Workload, WorkloadDetail } from '../types'
+import { ArrowLeft, Copy, Download, LoaderCircle, RefreshCw, RotateCw, Scaling } from 'lucide-react'
+import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { api, errorMessage } from '../api'
+import type { Environment, KubernetesEvent, Operation, PodLogs, Workload, WorkloadDetail } from '../types'
 import { formatDateTime } from '../utils'
 import { EmptyState, ErrorState, LoadingState } from './DataState'
 import { KubernetesEvents } from './KubernetesEvents'
@@ -9,15 +9,20 @@ import { Modal } from './Modal'
 import { StatusBadge } from './StatusBadge'
 
 type DetailTab = 'overview' | 'events' | 'yaml' | 'logs'
+type WorkloadAction = 'scale' | 'restart'
 
 interface WorkloadDetailModalProps {
   clusterId: string
+  clusterName: string
+  environment: Environment
   workload: Workload
   open: boolean
   onClose: () => void
+  notify: (tone: 'success' | 'error', message: string) => void
+  openOperations: () => void
 }
 
-export function WorkloadDetailModal({ clusterId, workload, open, onClose }: WorkloadDetailModalProps) {
+export function WorkloadDetailModal({ clusterId, clusterName, environment, workload, open, onClose, notify, openOperations }: WorkloadDetailModalProps) {
   const [tab, setTab] = useState<DetailTab>('overview')
   const [detail, setDetail] = useState<WorkloadDetail | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
@@ -25,6 +30,7 @@ export function WorkloadDetailModal({ clusterId, workload, open, onClose }: Work
   const [events, setEvents] = useState<KubernetesEvent[]>([])
   const [eventsLoading, setEventsLoading] = useState(false)
   const [eventsError, setEventsError] = useState<unknown>(null)
+  const [eventsLoaded, setEventsLoaded] = useState(false)
   const [selectedContainer, setSelectedContainer] = useState('')
   const [tailLines, setTailLines] = useState(200)
   const [previous, setPrevious] = useState(false)
@@ -32,7 +38,14 @@ export function WorkloadDetailModal({ clusterId, workload, open, onClose }: Work
   const [logsLoading, setLogsLoading] = useState(false)
   const [logsError, setLogsError] = useState<unknown>(null)
   const [copied, setCopied] = useState(false)
+  const [action, setAction] = useState<WorkloadAction | null>(null)
+  const [replicas, setReplicas] = useState('0')
+  const [confirmation, setConfirmation] = useState('')
+  const [actionError, setActionError] = useState('')
+  const [submitting, setSubmitting] = useState(false)
   const logRequestRef = useRef<AbortController | null>(null)
+  const isPod = workload.kind.toLowerCase() === 'pod'
+  const isDeployment = workload.kind.toLowerCase() === 'deployment'
 
   const resourcePath = useMemo(() => {
     const segments = [clusterId, workload.kind.toLowerCase(), workload.namespace, workload.name].map(encodeURIComponent)
@@ -54,14 +67,19 @@ export function WorkloadDetailModal({ clusterId, workload, open, onClose }: Work
     setDetailLoading(true)
     setDetailError(null)
     setEvents([])
-    setEventsLoading(true)
+    setEventsLoading(false)
     setEventsError(null)
+    setEventsLoaded(false)
     setLogs(null)
     setLogsError(null)
     setSelectedContainer('')
     setPrevious(false)
     setTailLines(200)
     setCopied(false)
+    setAction(null)
+    setConfirmation('')
+    setActionError('')
+    setSubmitting(false)
 
     api.get<WorkloadDetail>(resourcePath, controller.signal)
       .then((value) => { if (active) setDetail(value) })
@@ -69,17 +87,34 @@ export function WorkloadDetailModal({ clusterId, workload, open, onClose }: Work
         if (active && !(error instanceof DOMException && error.name === 'AbortError')) setDetailError(error)
       })
       .finally(() => { if (active) setDetailLoading(false) })
-    api.get<KubernetesEvent[]>(`${resourcePath}/events?limit=50`, controller.signal)
-      .then((value) => { if (active) setEvents(value) })
-      .catch((error: unknown) => {
-        if (active && !(error instanceof DOMException && error.name === 'AbortError')) setEventsError(error)
-      })
-      .finally(() => { if (active) setEventsLoading(false) })
     return () => {
       active = false
       controller.abort()
     }
   }, [open, resourcePath])
+
+  useEffect(() => {
+    if (!open || tab !== 'events' || eventsLoaded) return
+    const controller = new AbortController()
+    let active = true
+    setEventsLoading(true)
+    setEventsError(null)
+    api.get<KubernetesEvent[]>(`${resourcePath}/events?limit=50`, controller.signal)
+      .then((value) => { if (active) setEvents(value) })
+      .catch((error: unknown) => {
+        if (active && !(error instanceof DOMException && error.name === 'AbortError')) setEventsError(error)
+      })
+      .finally(() => {
+        if (active) {
+          setEventsLoading(false)
+          setEventsLoaded(true)
+        }
+      })
+    return () => {
+      active = false
+      controller.abort()
+    }
+  }, [eventsLoaded, open, resourcePath, tab])
 
   useEffect(() => () => {
     logRequestRef.current?.abort()
@@ -94,7 +129,7 @@ export function WorkloadDetailModal({ clusterId, workload, open, onClose }: Work
   }, [detail, selectedContainer])
 
   const loadLogs = useCallback(async () => {
-    if (!open || workload.kind !== 'Pod' || !selectedContainer) return
+    if (!open || !isPod || !selectedContainer) return
     logRequestRef.current?.abort()
     const controller = new AbortController()
     logRequestRef.current = controller
@@ -123,7 +158,7 @@ export function WorkloadDetailModal({ clusterId, workload, open, onClose }: Work
         setLogsLoading(false)
       }
     }
-  }, [clusterId, open, previous, selectedContainer, tailLines, workload.kind, workload.name, workload.namespace])
+  }, [clusterId, isPod, open, previous, selectedContainer, tailLines, workload.name, workload.namespace])
 
   useEffect(() => {
     if (tab === 'logs') {
@@ -139,7 +174,57 @@ export function WorkloadDetailModal({ clusterId, workload, open, onClose }: Work
     { id: 'events', label: '事件' },
     { id: 'yaml', label: 'YAML' },
   ]
-  if (workload.kind === 'Pod') tabs.push({ id: 'logs', label: '日志' })
+  if (isPod) tabs.push({ id: 'logs', label: '日志' })
+
+  const openAction = (nextAction: WorkloadAction) => {
+    if (!detail) return
+    setAction(nextAction)
+    setReplicas(String(detail.desired))
+    setConfirmation('')
+    setActionError('')
+  }
+
+  const submitAction = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!detail || !action || submitting) return
+
+    let replicaCount: number | undefined
+    if (action === 'scale') {
+      if (replicas.trim() === '') {
+        setActionError('请输入副本数')
+        return
+      }
+      replicaCount = Number(replicas)
+      if (!Number.isInteger(replicaCount) || replicaCount < 0 || replicaCount > 1000) {
+        setActionError('副本数必须是 0 到 1000 之间的整数')
+        return
+      }
+    }
+    if (environment === 'production' && confirmation !== clusterName) {
+      setActionError(`请输入集群名称 ${clusterName} 以确认生产操作`)
+      return
+    }
+
+    const payload: { resource_version: string; confirmation: string; replicas?: number } = {
+      resource_version: detail.resource_version,
+      confirmation: environment === 'production' ? confirmation : '',
+    }
+    if (replicaCount !== undefined) payload.replicas = replicaCount
+
+    setSubmitting(true)
+    setActionError('')
+    try {
+      const endpoint = action === 'scale' ? 'scales' : 'restarts'
+      const operation = await api.post<Operation>(`${resourcePath}/${endpoint}`, payload)
+      notify('success', `${action === 'scale' ? '扩缩容' : '滚动重启'}任务 ${operation.id} 已提交`)
+      onClose()
+      openOperations()
+    } catch (error) {
+      setActionError(errorMessage(error))
+    } finally {
+      setSubmitting(false)
+    }
+  }
 
   const copyYAML = async () => {
     if (!detail || !navigator.clipboard?.writeText) return
@@ -172,9 +257,24 @@ export function WorkloadDetailModal({ clusterId, workload, open, onClose }: Work
               </button>
             ))}
           </div>
-          {tab === 'overview' && <Overview detail={detail} />}
+          {tab === 'overview' && (action ? (
+            <WorkloadOperationForm
+              action={action}
+              clusterName={clusterName}
+              detail={detail}
+              environment={environment}
+              replicas={replicas}
+              confirmation={confirmation}
+              error={actionError}
+              submitting={submitting}
+              onReplicas={(value) => { setReplicas(value); setActionError('') }}
+              onConfirmation={(value) => { setConfirmation(value); setActionError('') }}
+              onCancel={() => setAction(null)}
+              onSubmit={submitAction}
+            />
+          ) : <><DeploymentActions visible={isDeployment} onAction={openAction} /><Overview detail={detail} /></>)}
           {tab === 'events' && (
-            eventsLoading ? <LoadingState label="正在读取事件" /> : eventsError ? <ErrorState error={eventsError} /> : <KubernetesEvents events={events} />
+            !eventsLoaded || eventsLoading ? <LoadingState label="正在读取事件" /> : eventsError ? <ErrorState error={eventsError} onRetry={() => setEventsLoaded(false)} /> : <KubernetesEvents events={events} />
           )}
           {tab === 'yaml' && (
             <div className="code-panel">
@@ -220,6 +320,80 @@ export function WorkloadDetailModal({ clusterId, workload, open, onClose }: Work
         </div>
       ) : null}
     </Modal>
+  )
+}
+
+function DeploymentActions({ visible, onAction }: { visible: boolean; onAction: (action: WorkloadAction) => void }) {
+  if (!visible) return null
+  return (
+    <div className="workload-actions" aria-label="Deployment 操作">
+      <button type="button" className="button button-secondary" onClick={() => onAction('scale')}><Scaling size={16} /> 扩缩容</button>
+      <button type="button" className="button button-secondary" onClick={() => onAction('restart')}><RotateCw size={16} /> 滚动重启</button>
+    </div>
+  )
+}
+
+function WorkloadOperationForm({
+  action,
+  clusterName,
+  detail,
+  environment,
+  replicas,
+  confirmation,
+  error,
+  submitting,
+  onReplicas,
+  onConfirmation,
+  onCancel,
+  onSubmit,
+}: {
+  action: WorkloadAction
+  clusterName: string
+  detail: WorkloadDetail
+  environment: Environment
+  replicas: string
+  confirmation: string
+  error: string
+  submitting: boolean
+  onReplicas: (value: string) => void
+  onConfirmation: (value: string) => void
+  onCancel: () => void
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void
+}) {
+  const isScale = action === 'scale'
+  return (
+    <form className="workload-operation" onSubmit={onSubmit}>
+      <div className="workload-operation-heading">
+        <button type="button" className="icon-button" aria-label="返回概览" title="返回概览" disabled={submitting} onClick={onCancel}><ArrowLeft size={18} /></button>
+        <div><h3>{isScale ? 'Deployment 扩缩容' : 'Deployment 滚动重启'}</h3><p>{detail.namespace} / {detail.name}</p></div>
+      </div>
+      <dl className="operation-target">
+        <div><dt>当前副本</dt><dd>{detail.ready}/{detail.desired}</dd></div>
+        <div><dt>Resource Version</dt><dd className="mono">{detail.resource_version}</dd></div>
+      </dl>
+      {isScale ? (
+        <div className="field">
+          <label htmlFor="workload-replicas">副本数</label>
+          <input id="workload-replicas" type="number" min={0} max={1000} step={1} value={replicas} onChange={(event) => onReplicas(event.target.value)} autoFocus />
+          <small>允许 0 到 1000 个副本</small>
+        </div>
+      ) : <p className="operation-description">将更新 Pod 模板注解，由 Kubernetes 按 Deployment 策略逐步替换实例。</p>}
+      {environment === 'production' && (
+        <div className="field">
+          <label htmlFor="workload-confirmation">输入集群名称确认</label>
+          <input id="workload-confirmation" value={confirmation} onChange={(event) => onConfirmation(event.target.value)} placeholder={clusterName} autoComplete="off" />
+          <small>生产操作必须完整输入 {clusterName}</small>
+        </div>
+      )}
+      {error && <div className="form-error" role="alert">{error}</div>}
+      <div className="form-actions">
+        <button type="button" className="button button-secondary" disabled={submitting} onClick={onCancel}>取消</button>
+        <button type="submit" className="button button-primary" disabled={submitting}>
+          {submitting ? <LoaderCircle className="spin" size={16} /> : isScale ? <Scaling size={16} /> : <RotateCw size={16} />}
+          {isScale ? '提交扩缩容' : '提交滚动重启'}
+        </button>
+      </div>
+    </form>
   )
 }
 

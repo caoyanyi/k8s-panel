@@ -129,6 +129,8 @@ func (s *Server) routes() {
 	s.mux.Handle("GET /api/v1/clusters/{id}/workloads/{kind}/{namespace}/{name}", s.protected(http.HandlerFunc(s.getWorkloadDetail)))
 	s.mux.Handle("GET /api/v1/clusters/{id}/workloads/{kind}/{namespace}/{name}/events", s.protected(http.HandlerFunc(s.listWorkloadEvents)))
 	s.mux.Handle("GET /api/v1/clusters/{id}/pods/{namespace}/{name}/logs", s.protected(http.HandlerFunc(s.getPodLogs)))
+	s.mux.Handle("POST /api/v1/clusters/{id}/workloads/{kind}/{namespace}/{name}/scales", s.protected(http.HandlerFunc(s.scaleWorkload)))
+	s.mux.Handle("POST /api/v1/clusters/{id}/workloads/{kind}/{namespace}/{name}/restarts", s.protected(http.HandlerFunc(s.restartWorkload)))
 
 	s.mux.Handle("GET /api/v1/chart-repositories", s.protected(http.HandlerFunc(s.listRepositories)))
 	s.mux.Handle("POST /api/v1/chart-repositories", s.protected(http.HandlerFunc(s.createRepository)))
@@ -145,6 +147,7 @@ func (s *Server) routes() {
 	s.mux.Handle("GET /api/v1/operations", s.protected(http.HandlerFunc(s.listOperations)))
 	s.mux.Handle("GET /api/v1/operations/{id}", s.protected(http.HandlerFunc(s.getOperation)))
 	s.mux.Handle("GET /api/v1/audit-events", s.protected(http.HandlerFunc(s.listAuditEvents)))
+	s.mux.Handle("GET /api/v1/system/resources", s.protected(http.HandlerFunc(s.systemResources)))
 
 	s.mux.HandleFunc("/", s.static)
 }

@@ -20,6 +20,8 @@ const labels: Record<string, string> = {
   active: '活跃',
   true: '正常',
   normal: '正常',
+  constrained: '资源承压',
+  critical: '资源紧张',
   deployed: '已部署',
   superseded: '已替代',
   uninstalled: '已卸载',

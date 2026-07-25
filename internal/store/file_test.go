@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -74,7 +75,7 @@ func TestFileStoreRejectsDuplicateClusterName(t *testing.T) {
 	}
 }
 
-func TestFileStoreMarksInterruptedOperationsUnknown(t *testing.T) {
+func TestFileStoreMarksUnrecoverableOperationsUnknown(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "panel.json")
@@ -83,15 +84,15 @@ func TestFileStoreMarksInterruptedOperationsUnknown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
-	op := domain.Operation{
-		ID:        "op_one",
-		Kind:      domain.OperationHelmInstall,
-		State:     domain.OperationRunning,
-		CreatedAt: started,
-		UpdatedAt: started,
+	operations := []domain.Operation{
+		{ID: "op_running", Kind: domain.OperationHelmInstall, State: domain.OperationRunning, CreatedAt: started, UpdatedAt: started},
+		{ID: "op_queued", Kind: domain.OperationWorkloadScale, State: domain.OperationQueued, CreatedAt: started, UpdatedAt: started},
+		{ID: "op_finished", Kind: domain.OperationHelmInstall, State: domain.OperationSucceeded, CreatedAt: started, UpdatedAt: started},
 	}
-	if err := store.CreateOperation(context.Background(), op); err != nil {
-		t.Fatalf("CreateOperation() error = %v", err)
+	for _, operation := range operations {
+		if err := store.CreateOperation(context.Background(), operation); err != nil {
+			t.Fatalf("CreateOperation(%s) error = %v", operation.ID, err)
+		}
 	}
 
 	restarted := started.Add(time.Minute)
@@ -99,17 +100,56 @@ func TestFileStoreMarksInterruptedOperationsUnknown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open() second error = %v", err)
 	}
-	got, err := reopened.GetOperation(context.Background(), op.ID)
-	if err != nil {
-		t.Fatalf("GetOperation() error = %v", err)
+	for _, id := range []string{"op_running", "op_queued"} {
+		got, getErr := reopened.GetOperation(context.Background(), id)
+		if getErr != nil {
+			t.Fatalf("GetOperation(%s) error = %v", id, getErr)
+		}
+		if got.State != domain.OperationUnknown || got.ErrorCode != "process_restarted" || !got.UpdatedAt.Equal(restarted) {
+			t.Errorf("reconciled operation = %#v", got)
+		}
 	}
-	if got.State != domain.OperationUnknown {
-		t.Errorf("state = %q, want %q", got.State, domain.OperationUnknown)
+	finished, err := reopened.GetOperation(context.Background(), "op_finished")
+	if err != nil || finished.State != domain.OperationSucceeded {
+		t.Errorf("finished operation = %#v, %v", finished, err)
 	}
-	if got.ErrorCode != "process_restarted" {
-		t.Errorf("error code = %q, want process_restarted", got.ErrorCode)
+}
+
+func TestHistoryRetentionKeepsActiveOperationsAndNewestRecords(t *testing.T) {
+	t.Parallel()
+
+	operations := make([]domain.Operation, 0, maxStoredOperations+2)
+	operations = append(operations, domain.Operation{ID: "op_active", State: domain.OperationRunning})
+	for index := 0; index < maxStoredOperations; index++ {
+		operations = append(operations, domain.Operation{ID: fmt.Sprintf("op_%04d", index), State: domain.OperationSucceeded})
 	}
-	if !got.UpdatedAt.Equal(restarted) {
-		t.Errorf("updated at = %v, want %v", got.UpdatedAt, restarted)
+	operations = append(operations, domain.Operation{ID: "op_new", State: domain.OperationQueued})
+	trimmedOperations := trimOperationHistory(operations)
+	if len(trimmedOperations) != maxStoredOperations {
+		t.Fatalf("operation history size = %d", len(trimmedOperations))
 	}
+	if !containsOperation(trimmedOperations, "op_active") || !containsOperation(trimmedOperations, "op_new") {
+		t.Fatalf("active operations were pruned: %#v", trimmedOperations)
+	}
+	if containsOperation(trimmedOperations, "op_0000") || containsOperation(trimmedOperations, "op_0001") {
+		t.Fatal("oldest completed operations were retained")
+	}
+
+	audits := make([]domain.AuditEvent, maxStoredAuditEvents+1)
+	for index := range audits {
+		audits[index].ID = fmt.Sprintf("audit_%04d", index)
+	}
+	trimmedAudits := trimAuditHistory(audits)
+	if len(trimmedAudits) != maxStoredAuditEvents || trimmedAudits[0].ID != "audit_0001" {
+		t.Fatalf("audit history was not trimmed from the oldest edge: first=%q size=%d", trimmedAudits[0].ID, len(trimmedAudits))
+	}
+}
+
+func containsOperation(operations []domain.Operation, id string) bool {
+	for _, operation := range operations {
+		if operation.ID == id {
+			return true
+		}
+	}
+	return false
 }
