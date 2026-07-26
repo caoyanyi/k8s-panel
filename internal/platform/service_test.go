@@ -332,6 +332,137 @@ func TestServiceExecutesControlledWorkloadOperations(t *testing.T) {
 	}
 }
 
+func TestServicePreviewsAndExecutesControlledImageUpdate(t *testing.T) {
+	t.Parallel()
+
+	gateway := &fakeKubeGateway{probe: domain.ClusterProbe{Version: "v1.36.2"}}
+	service, _, _ := newTestService(t, serviceFakes{kube: gateway})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go service.Run(ctx, 1)
+
+	cluster, err := service.CreateCluster(context.Background(), "admin", "req_cluster", domain.ClusterInput{
+		Name: "production-east", Environment: domain.EnvironmentProduction, Server: "https://api.example.com", BearerToken: "token",
+	})
+	if err != nil {
+		t.Fatalf("CreateCluster() error = %v", err)
+	}
+	input := domain.WorkloadImageOperationInput{
+		ClusterID: cluster.ID,
+		Change: domain.WorkloadImageChange{
+			Reference:       domain.WorkloadReference{Kind: "Deployment", Namespace: "payments", Name: "gateway"},
+			ResourceVersion: "42",
+			Container:       "app",
+			CurrentImage:    "registry.example.com/gateway:1.4.0",
+			Image:           "registry.example.com/gateway:1.5.0",
+		},
+	}
+	preview, err := service.PreviewWorkloadImage(context.Background(), "admin", "req_preview", input)
+	if err != nil {
+		t.Fatalf("PreviewWorkloadImage() error = %v", err)
+	}
+	if preview.Container != "app" || len(preview.Changes) != 1 {
+		t.Errorf("preview = %#v", preview)
+	}
+	if _, err := service.SubmitWorkloadImageUpdate(context.Background(), "admin", "req_rejected", input); err == nil {
+		t.Fatal("production image update without confirmation succeeded")
+	} else {
+		var validationErr *domain.ValidationError
+		if !errors.As(err, &validationErr) || validationErr.Field != "confirmation" {
+			t.Fatalf("confirmation error = %v", err)
+		}
+	}
+	input.Confirmation = "production-east"
+	operation, err := service.SubmitWorkloadImageUpdate(context.Background(), "admin", "req_image", input)
+	if err != nil {
+		t.Fatalf("SubmitWorkloadImageUpdate() error = %v", err)
+	}
+	waitForOperationState(t, service, operation.ID, domain.OperationSucceeded)
+
+	gateway.mutationMu.Lock()
+	previewed := gateway.previewedImage
+	updated := gateway.updatedImage
+	gateway.mutationMu.Unlock()
+	if previewed.Container != "app" || updated.Image != input.Change.Image || updated.ResourceVersion != "42" {
+		t.Errorf("previewed = %#v, updated = %#v", previewed, updated)
+	}
+	if operation.Kind != domain.OperationWorkloadImage || strings.Contains(operation.Summary, input.Change.CurrentImage) ||
+		strings.Contains(operation.Summary, input.Change.Image) {
+		t.Errorf("operation = %#v", operation)
+	}
+	audits, err := service.ListAuditEvents(context.Background(), 100)
+	if err != nil {
+		t.Fatalf("ListAuditEvents() error = %v", err)
+	}
+	var foundPreview bool
+	for _, audit := range audits {
+		if audit.Action == "workload.image_preview" && audit.Result == "succeeded" {
+			foundPreview = true
+			if strings.Contains(audit.Summary, input.Change.Image) {
+				t.Errorf("preview audit leaked image: %#v", audit)
+			}
+		}
+	}
+	if !foundPreview {
+		t.Error("successful image preview audit not found")
+	}
+}
+
+func TestServiceDefersImageUpdateDuringCriticalResourcePressure(t *testing.T) {
+	t.Parallel()
+
+	critical := 0.97
+	sampler := &mutableResourceSampler{sample: resourceguard.Sample{MemoryRatio: &critical}}
+	governor, err := resourceguard.New(resourceguard.Config{
+		Enabled: true, MaxConcurrent: 2, HighWatermark: 0.80, CriticalWatermark: 0.95,
+		RetryInterval: time.Millisecond, Sampler: sampler,
+	})
+	if err != nil {
+		t.Fatalf("resourceguard.New() error = %v", err)
+	}
+	gateway := &fakeKubeGateway{probe: domain.ClusterProbe{Version: "v1.36.2"}}
+	service, _, _ := newTestService(t, serviceFakes{kube: gateway, governor: governor})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go service.Run(ctx, 1)
+	cluster, err := service.CreateCluster(context.Background(), "admin", "req_cluster", domain.ClusterInput{
+		Name: "development", Environment: domain.EnvironmentDevelopment, Server: "https://api.example.com", BearerToken: "token",
+	})
+	if err != nil {
+		t.Fatalf("CreateCluster() error = %v", err)
+	}
+	input := domain.WorkloadImageOperationInput{
+		ClusterID: cluster.ID,
+		Change: domain.WorkloadImageChange{
+			Reference: domain.WorkloadReference{Kind: "deployment", Namespace: "payments", Name: "gateway"}, ResourceVersion: "42",
+			Container: "app", CurrentImage: "gateway:1.4.0", Image: "gateway:1.5.0",
+		},
+	}
+	if _, err := service.PreviewWorkloadImage(context.Background(), "admin", "req_preview", input); !errors.Is(err, domain.ErrBusy) {
+		t.Fatalf("PreviewWorkloadImage() under critical pressure error = %v", err)
+	}
+	operation, err := service.SubmitWorkloadImageUpdate(context.Background(), "admin", "req_image", input)
+	if err != nil {
+		t.Fatalf("SubmitWorkloadImageUpdate() error = %v", err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	queued, err := service.GetOperation(context.Background(), operation.ID)
+	if err != nil || queued.State != domain.OperationQueued {
+		t.Fatalf("operation under pressure = %#v, error = %v", queued, err)
+	}
+	gateway.mutationMu.Lock()
+	calledUnderPressure := gateway.updatedImage.Container != ""
+	gateway.mutationMu.Unlock()
+	if calledUnderPressure {
+		t.Fatal("image update ran during critical pressure")
+	}
+	normal := 0.20
+	sampler.mu.Lock()
+	sampler.sample = resourceguard.Sample{MemoryRatio: &normal}
+	sampler.mu.Unlock()
+	waitForOperationState(t, service, operation.ID, domain.OperationSucceeded)
+}
+
 func TestServiceDefersOperationsDuringCriticalResourcePressure(t *testing.T) {
 	t.Parallel()
 
@@ -524,6 +655,8 @@ type fakeKubeGateway struct {
 	scaledReplicas   int32
 	restartedVersion string
 	restartedAt      time.Time
+	previewedImage   domain.WorkloadImageChange
+	updatedImage     domain.WorkloadImageChange
 }
 
 func (g *fakeKubeGateway) Probe(context.Context) (domain.ClusterProbe, error) {
@@ -580,6 +713,26 @@ func (g *fakeKubeGateway) RestartWorkload(_ context.Context, reference domain.Wo
 	g.restartedVersion = resourceVersion
 	g.restartedAt = restartedAt
 	return domain.Workload{Kind: "Deployment", Namespace: reference.Namespace, Name: reference.Name}, nil
+}
+
+func (g *fakeKubeGateway) PreviewWorkloadImage(_ context.Context, change domain.WorkloadImageChange) (domain.WorkloadImagePreview, error) {
+	g.mutationMu.Lock()
+	defer g.mutationMu.Unlock()
+	g.previewedImage = change
+	return domain.WorkloadImagePreview{
+		Kind: "Deployment", Namespace: change.Reference.Namespace, Name: change.Reference.Name,
+		Container: change.Container, ResourceVersion: change.ResourceVersion,
+		Changes: []domain.WorkloadFieldChange{{
+			Field: "spec.template.spec.containers[name=" + change.Container + "].image", Before: change.CurrentImage, After: change.Image,
+		}},
+	}, nil
+}
+
+func (g *fakeKubeGateway) UpdateWorkloadImage(_ context.Context, change domain.WorkloadImageChange) (domain.Workload, error) {
+	g.mutationMu.Lock()
+	defer g.mutationMu.Unlock()
+	g.updatedImage = change
+	return domain.Workload{Kind: "Deployment", Namespace: change.Reference.Namespace, Name: change.Reference.Name, Images: []string{change.Image}}, nil
 }
 
 func testOperationGovernor(t *testing.T) OperationGovernor {

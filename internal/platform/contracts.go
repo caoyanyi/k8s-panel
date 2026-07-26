@@ -53,6 +53,8 @@ type KubeGateway interface {
 	PodLogs(context.Context, domain.PodLogRequest) (domain.PodLogs, error)
 	ScaleWorkload(context.Context, domain.WorkloadReference, string, int32) (domain.Workload, error)
 	RestartWorkload(context.Context, domain.WorkloadReference, string, time.Time) (domain.Workload, error)
+	PreviewWorkloadImage(context.Context, domain.WorkloadImageChange) (domain.WorkloadImagePreview, error)
+	UpdateWorkloadImage(context.Context, domain.WorkloadImageChange) (domain.Workload, error)
 }
 
 type KubeFactory interface {

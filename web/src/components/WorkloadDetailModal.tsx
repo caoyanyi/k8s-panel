@@ -1,7 +1,7 @@
-import { ArrowLeft, Copy, Download, LoaderCircle, RefreshCw, RotateCw, Scaling } from 'lucide-react'
+import { ArrowLeft, Copy, Download, LoaderCircle, RefreshCw, RotateCw, Scaling, ScanSearch } from 'lucide-react'
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api, errorMessage } from '../api'
-import type { Environment, KubernetesEvent, Operation, PodLogs, Workload, WorkloadDetail } from '../types'
+import type { Environment, KubernetesEvent, Operation, PodLogs, Workload, WorkloadDetail, WorkloadImagePreview } from '../types'
 import { formatDateTime } from '../utils'
 import { EmptyState, ErrorState, LoadingState } from './DataState'
 import { KubernetesEvents } from './KubernetesEvents'
@@ -9,7 +9,8 @@ import { Modal } from './Modal'
 import { StatusBadge } from './StatusBadge'
 
 type DetailTab = 'overview' | 'events' | 'yaml' | 'logs'
-type WorkloadAction = 'scale' | 'restart'
+type BasicWorkloadAction = 'scale' | 'restart'
+type WorkloadAction = BasicWorkloadAction | 'image'
 
 interface WorkloadDetailModalProps {
   clusterId: string
@@ -43,7 +44,12 @@ export function WorkloadDetailModal({ clusterId, clusterName, environment, workl
   const [confirmation, setConfirmation] = useState('')
   const [actionError, setActionError] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [imageContainer, setImageContainer] = useState('')
+  const [image, setImage] = useState('')
+  const [imagePreview, setImagePreview] = useState<WorkloadImagePreview | null>(null)
+  const [previewing, setPreviewing] = useState(false)
   const logRequestRef = useRef<AbortController | null>(null)
+  const imageRequestRef = useRef<AbortController | null>(null)
   const isPod = workload.kind.toLowerCase() === 'pod'
   const isDeployment = workload.kind.toLowerCase() === 'deployment'
 
@@ -56,6 +62,8 @@ export function WorkloadDetailModal({ clusterId, clusterName, environment, workl
     if (!open) {
       logRequestRef.current?.abort()
       logRequestRef.current = null
+      imageRequestRef.current?.abort()
+      imageRequestRef.current = null
       return
     }
     const controller = new AbortController()
@@ -80,6 +88,12 @@ export function WorkloadDetailModal({ clusterId, clusterName, environment, workl
     setConfirmation('')
     setActionError('')
     setSubmitting(false)
+    setImageContainer('')
+    setImage('')
+    setImagePreview(null)
+    setPreviewing(false)
+    imageRequestRef.current?.abort()
+    imageRequestRef.current = null
 
     api.get<WorkloadDetail>(resourcePath, controller.signal)
       .then((value) => { if (active) setDetail(value) })
@@ -119,6 +133,8 @@ export function WorkloadDetailModal({ clusterId, clusterName, environment, workl
   useEffect(() => () => {
     logRequestRef.current?.abort()
     logRequestRef.current = null
+    imageRequestRef.current?.abort()
+    imageRequestRef.current = null
   }, [])
 
   useEffect(() => {
@@ -182,11 +198,20 @@ export function WorkloadDetailModal({ clusterId, clusterName, environment, workl
     setReplicas(String(detail.desired))
     setConfirmation('')
     setActionError('')
+    setImagePreview(null)
+    setPreviewing(false)
+    imageRequestRef.current?.abort()
+    imageRequestRef.current = null
+    if (nextAction === 'image') {
+      const container = detail.containers.find((item) => item.type === 'container')
+      setImageContainer(container?.name ?? '')
+      setImage(container?.image ?? '')
+    }
   }
 
   const submitAction = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (!detail || !action || submitting) return
+    if (!detail || !action || action === 'image' || submitting) return
 
     let replicaCount: number | undefined
     if (action === 'scale') {
@@ -217,6 +242,95 @@ export function WorkloadDetailModal({ clusterId, clusterName, environment, workl
       const endpoint = action === 'scale' ? 'scales' : 'restarts'
       const operation = await api.post<Operation>(`${resourcePath}/${endpoint}`, payload)
       notify('success', `${action === 'scale' ? '扩缩容' : '滚动重启'}任务 ${operation.id} 已提交`)
+      onClose()
+      openOperations()
+    } catch (error) {
+      setActionError(errorMessage(error))
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const invalidateImagePreview = () => {
+    imageRequestRef.current?.abort()
+    imageRequestRef.current = null
+    setPreviewing(false)
+    setImagePreview(null)
+    setActionError('')
+  }
+
+  const selectImageContainer = (name: string) => {
+    const container = detail?.containers.find((item) => item.type === 'container' && item.name === name)
+    invalidateImagePreview()
+    setImageContainer(name)
+    setImage(container?.image ?? '')
+  }
+
+  const changeImage = (value: string) => {
+    invalidateImagePreview()
+    setImage(value)
+  }
+
+  const previewImageUpdate = async () => {
+    if (!detail || action !== 'image' || previewing || submitting) return
+    const container = detail.containers.find((item) => item.type === 'container' && item.name === imageContainer)
+    const validationError = validateImageValue(image, container?.image ?? '')
+    if (!container || validationError) {
+      setActionError(container ? validationError : '请选择普通容器')
+      return
+    }
+    const controller = new AbortController()
+    imageRequestRef.current?.abort()
+    imageRequestRef.current = controller
+    setImagePreview(null)
+    setPreviewing(true)
+    setActionError('')
+    try {
+      const preview = await api.post<WorkloadImagePreview>(`${resourcePath}/image-previews`, {
+        container: container.name,
+        current_image: container.image,
+        image,
+        resource_version: detail.resource_version,
+      }, controller.signal)
+      if (imageRequestRef.current === controller) setImagePreview(preview)
+    } catch (error) {
+      if (imageRequestRef.current === controller && !(error instanceof DOMException && error.name === 'AbortError')) {
+        setActionError(errorMessage(error))
+      }
+    } finally {
+      if (imageRequestRef.current === controller) {
+        imageRequestRef.current = null
+        setPreviewing(false)
+      }
+    }
+  }
+
+  const submitImageUpdate = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!detail || action !== 'image' || !imagePreview || previewing || submitting) return
+    const container = detail.containers.find((item) => item.type === 'container' && item.name === imageContainer)
+    const change = imagePreview.changes[0]
+    if (!container || imagePreview.resource_version !== detail.resource_version || imagePreview.container !== container.name ||
+      imagePreview.changes.length !== 1 || change.before !== container.image || change.after !== image) {
+      setImagePreview(null)
+      setActionError('变更预览已失效，请重新预览')
+      return
+    }
+    if (environment === 'production' && confirmation !== clusterName) {
+      setActionError(`请输入集群名称 ${clusterName} 以确认生产操作`)
+      return
+    }
+    setSubmitting(true)
+    setActionError('')
+    try {
+      const operation = await api.post<Operation>(`${resourcePath}/image-updates`, {
+        container: container.name,
+        current_image: container.image,
+        image,
+        resource_version: detail.resource_version,
+        confirmation: environment === 'production' ? confirmation : '',
+      })
+      notify('success', `镜像更新任务 ${operation.id} 已提交`)
       onClose()
       openOperations()
     } catch (error) {
@@ -257,7 +371,26 @@ export function WorkloadDetailModal({ clusterId, clusterName, environment, workl
               </button>
             ))}
           </div>
-          {tab === 'overview' && (action ? (
+          {tab === 'overview' && (action ? (action === 'image' ? (
+            <ImageUpdateForm
+              clusterName={clusterName}
+              detail={detail}
+              environment={environment}
+              container={imageContainer}
+              image={image}
+              preview={imagePreview}
+              confirmation={confirmation}
+              error={actionError}
+              previewing={previewing}
+              submitting={submitting}
+              onContainer={selectImageContainer}
+              onImage={changeImage}
+              onConfirmation={(value) => { setConfirmation(value); setActionError('') }}
+              onCancel={() => { invalidateImagePreview(); setAction(null) }}
+              onPreview={() => void previewImageUpdate()}
+              onSubmit={submitImageUpdate}
+            />
+          ) : (
             <WorkloadOperationForm
               action={action}
               clusterName={clusterName}
@@ -272,7 +405,7 @@ export function WorkloadDetailModal({ clusterId, clusterName, environment, workl
               onCancel={() => setAction(null)}
               onSubmit={submitAction}
             />
-          ) : <><DeploymentActions visible={isDeployment} onAction={openAction} /><Overview detail={detail} /></>)}
+          )) : <><DeploymentActions visible={isDeployment} canUpdateImage={detail.containers.some((container) => container.type === 'container')} onAction={openAction} /><Overview detail={detail} /></>)}
           {tab === 'events' && (
             !eventsLoaded || eventsLoading ? <LoadingState label="正在读取事件" /> : eventsError ? <ErrorState error={eventsError} onRetry={() => setEventsLoaded(false)} /> : <KubernetesEvents events={events} />
           )}
@@ -323,12 +456,13 @@ export function WorkloadDetailModal({ clusterId, clusterName, environment, workl
   )
 }
 
-function DeploymentActions({ visible, onAction }: { visible: boolean; onAction: (action: WorkloadAction) => void }) {
+function DeploymentActions({ visible, canUpdateImage, onAction }: { visible: boolean; canUpdateImage: boolean; onAction: (action: WorkloadAction) => void }) {
   if (!visible) return null
   return (
     <div className="workload-actions" aria-label="Deployment 操作">
       <button type="button" className="button button-secondary" onClick={() => onAction('scale')}><Scaling size={16} /> 扩缩容</button>
       <button type="button" className="button button-secondary" onClick={() => onAction('restart')}><RotateCw size={16} /> 滚动重启</button>
+      <button type="button" className="button button-secondary" disabled={!canUpdateImage} onClick={() => onAction('image')}><RefreshCw size={16} /> 更新镜像</button>
     </div>
   )
 }
@@ -347,7 +481,7 @@ function WorkloadOperationForm({
   onCancel,
   onSubmit,
 }: {
-  action: WorkloadAction
+  action: BasicWorkloadAction
   clusterName: string
   detail: WorkloadDetail
   environment: Environment
@@ -391,6 +525,105 @@ function WorkloadOperationForm({
         <button type="submit" className="button button-primary" disabled={submitting}>
           {submitting ? <LoaderCircle className="spin" size={16} /> : isScale ? <Scaling size={16} /> : <RotateCw size={16} />}
           {isScale ? '提交扩缩容' : '提交滚动重启'}
+        </button>
+      </div>
+    </form>
+  )
+}
+
+function ImageUpdateForm({
+  clusterName,
+  detail,
+  environment,
+  container,
+  image,
+  preview,
+  confirmation,
+  error,
+  previewing,
+  submitting,
+  onContainer,
+  onImage,
+  onConfirmation,
+  onCancel,
+  onPreview,
+  onSubmit,
+}: {
+  clusterName: string
+  detail: WorkloadDetail
+  environment: Environment
+  container: string
+  image: string
+  preview: WorkloadImagePreview | null
+  confirmation: string
+  error: string
+  previewing: boolean
+  submitting: boolean
+  onContainer: (value: string) => void
+  onImage: (value: string) => void
+  onConfirmation: (value: string) => void
+  onCancel: () => void
+  onPreview: () => void
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void
+}) {
+  const containers = detail.containers.filter((item) => item.type === 'container')
+  const current = containers.find((item) => item.name === container)
+  const busy = previewing || submitting
+  return (
+    <form className="workload-operation" onSubmit={onSubmit}>
+      <div className="workload-operation-heading">
+        <button type="button" className="icon-button" aria-label="返回概览" title="返回概览" disabled={busy} onClick={onCancel}><ArrowLeft size={18} /></button>
+        <div><h3>Deployment 镜像更新</h3><p>{detail.namespace} / {detail.name}</p></div>
+      </div>
+      <dl className="operation-target">
+        <div><dt>目标容器</dt><dd className="mono">{container || '-'}</dd></div>
+        <div><dt>Resource Version</dt><dd className="mono">{detail.resource_version}</dd></div>
+      </dl>
+      <div className="form-grid image-update-fields">
+        <div className="field">
+          <label htmlFor="image-container">容器</label>
+          <select id="image-container" value={container} disabled={busy} onChange={(event) => onContainer(event.target.value)}>
+            {containers.map((item) => <option key={item.name} value={item.name}>{item.name}</option>)}
+          </select>
+        </div>
+        <div className="field">
+          <label htmlFor="current-container-image">当前镜像</label>
+          <input id="current-container-image" className="mono" value={current?.image ?? ''} readOnly />
+        </div>
+        <div className="field field-full">
+          <label htmlFor="next-container-image">新镜像</label>
+          <input id="next-container-image" className="mono" value={image} maxLength={1024} disabled={busy || !current} onChange={(event) => onImage(event.target.value)} autoComplete="off" autoFocus />
+        </div>
+      </div>
+      {preview && (
+        <section className="image-change-preview" aria-live="polite">
+          <div className="image-change-preview-heading"><h4>服务端 dry-run 通过</h4><span>{preview.changes.length} 个字段</span></div>
+          {preview.changes.map((change) => (
+            <div className="image-change-row" key={change.field}>
+              <code>{change.field}</code>
+              <dl>
+                <div><dt>变更前</dt><dd>{change.before}</dd></div>
+                <div><dt>变更后</dt><dd>{change.after}</dd></div>
+              </dl>
+            </div>
+          ))}
+        </section>
+      )}
+      {environment === 'production' && (
+        <div className="field">
+          <label htmlFor="image-update-confirmation">输入集群名称确认</label>
+          <input id="image-update-confirmation" value={confirmation} disabled={busy} onChange={(event) => onConfirmation(event.target.value)} placeholder={clusterName} autoComplete="off" />
+          <small>生产操作必须完整输入 {clusterName}</small>
+        </div>
+      )}
+      {error && <div className="form-error" role="alert">{error}</div>}
+      <div className="form-actions">
+        <button type="button" className="button button-secondary" disabled={busy} onClick={onCancel}>取消</button>
+        <button type="button" className="button button-secondary" disabled={busy || !current} onClick={onPreview}>
+          {previewing ? <LoaderCircle className="spin" size={16} /> : <ScanSearch size={16} />} 预览变更
+        </button>
+        <button type="submit" className="button button-primary" disabled={busy || !preview}>
+          {submitting ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />} 提交镜像更新
         </button>
       </div>
     </form>
@@ -442,4 +675,11 @@ function downloadText(filename: string, content: string) {
   anchor.download = filename
   anchor.click()
   URL.revokeObjectURL(url)
+}
+
+function validateImageValue(image: string, currentImage: string): string {
+  if (!image || image !== image.trim() || /\s/u.test(image)) return '镜像引用不能为空或包含空白字符'
+  if (new TextEncoder().encode(image).length > 1024) return '镜像引用不能超过 1024 字节'
+  if (image === currentImage) return '新镜像必须与当前镜像不同'
+  return ''
 }

@@ -73,6 +73,7 @@ const (
 	OperationHelmUninstall   OperationKind = "helm.uninstall"
 	OperationWorkloadScale   OperationKind = "workload.scale"
 	OperationWorkloadRestart OperationKind = "workload.restart"
+	OperationWorkloadImage   OperationKind = "workload.image_update"
 )
 
 type OperationState string
@@ -134,6 +135,35 @@ type WorkloadOperationInput struct {
 	ResourceVersion string
 	Replicas        *int32
 	Confirmation    string
+}
+
+type WorkloadImageChange struct {
+	Reference       WorkloadReference
+	ResourceVersion string
+	Container       string
+	CurrentImage    string
+	Image           string
+}
+
+type WorkloadImageOperationInput struct {
+	ClusterID    string
+	Change       WorkloadImageChange
+	Confirmation string
+}
+
+type WorkloadFieldChange struct {
+	Field  string `json:"field"`
+	Before string `json:"before"`
+	After  string `json:"after"`
+}
+
+type WorkloadImagePreview struct {
+	Kind            string                `json:"kind"`
+	Namespace       string                `json:"namespace"`
+	Name            string                `json:"name"`
+	Container       string                `json:"container"`
+	ResourceVersion string                `json:"resource_version"`
+	Changes         []WorkloadFieldChange `json:"changes"`
 }
 
 type ClusterProbe struct {
@@ -235,10 +265,11 @@ type Workload struct {
 }
 
 const (
-	MaxPodLogTailLines    = 2000
-	MaxWorkloadEventLimit = 100
-	MaxNodeEventLimit     = 100
-	MaxWorkloadReplicas   = 1000
+	MaxPodLogTailLines     = 2000
+	MaxWorkloadEventLimit  = 100
+	MaxNodeEventLimit      = 100
+	MaxWorkloadReplicas    = 1000
+	MaxContainerImageBytes = 1024
 )
 
 type WorkloadReference struct {

@@ -48,7 +48,7 @@ export function OperationsPage() {
       <OperationCapacityBand capacity={capacity.data} loading={capacity.loading} error={capacity.error} onRetry={() => void capacity.refresh()} />
       <section className="section-block table-section">
         {operations.loading && !operations.data ? <LoadingState label="正在读取操作记录" /> : operations.error ? <ErrorState error={operations.error} onRetry={() => void operations.refresh()} /> : !operations.data?.length ? <EmptyState title="暂无操作记录" /> : (
-          <div className="table-wrap"><table>
+          <div className="table-wrap" role="region" aria-label="操作记录" tabIndex={0}><table>
             <thead><tr><th>目标</th><th>动作</th><th>状态</th><th>作用域</th><th>提交人</th><th>提交时间</th><th>结果</th><th>请求 ID</th></tr></thead>
             <tbody>{operations.data.map((operation) => <tr key={operation.id}>
               <td><div className="primary-cell"><strong>{operation.target}</strong><span className="mono subtle-id">{operation.id}</span></div></td>
@@ -101,6 +101,7 @@ function operationLabel(kind: string) {
     'helm.uninstall': 'Helm 卸载',
     'workload.scale': '工作负载扩缩容',
     'workload.restart': '工作负载滚动重启',
+    'workload.image_update': '工作负载镜像更新',
   } as Record<string, string>)[kind] ?? kind
 }
 

@@ -34,9 +34,10 @@ type Service struct {
 }
 
 type operationJob struct {
-	operationID   string
-	helmInput     *domain.HelmOperationInput
-	workloadInput *domain.WorkloadOperationInput
+	operationID        string
+	helmInput          *domain.HelmOperationInput
+	workloadInput      *domain.WorkloadOperationInput
+	workloadImageInput *domain.WorkloadImageOperationInput
 }
 
 func New(dependencies Dependencies) (*Service, error) {

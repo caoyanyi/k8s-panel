@@ -392,3 +392,72 @@ func TestValidateWorkloadOperationInput(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateWorkloadImageOperationInput(t *testing.T) {
+	t.Parallel()
+
+	valid := WorkloadImageOperationInput{
+		ClusterID: "clu_one",
+		Change: WorkloadImageChange{
+			Reference:       WorkloadReference{Kind: "deployment", Namespace: "payments", Name: "gateway"},
+			ResourceVersion: "42",
+			Container:       "app",
+			CurrentImage:    "registry.example.com/gateway:1.4.0",
+			Image:           "registry.example.com/gateway:1.5.0",
+		},
+	}
+	tests := []struct {
+		name      string
+		input     WorkloadImageOperationInput
+		wantField string
+	}{
+		{name: "valid", input: valid},
+		{name: "only deployment", input: func() WorkloadImageOperationInput {
+			input := valid
+			input.Change.Reference.Kind = "statefulset"
+			return input
+		}(), wantField: "kind"},
+		{name: "missing cluster", input: func() WorkloadImageOperationInput {
+			input := valid
+			input.ClusterID = ""
+			return input
+		}(), wantField: "cluster_id"},
+		{name: "invalid container", input: func() WorkloadImageOperationInput {
+			input := valid
+			input.Change.Container = "APP"
+			return input
+		}(), wantField: "container"},
+		{name: "unchanged image", input: func() WorkloadImageOperationInput {
+			input := valid
+			input.Change.Image = input.Change.CurrentImage
+			return input
+		}(), wantField: "image"},
+		{name: "image whitespace", input: func() WorkloadImageOperationInput {
+			input := valid
+			input.Change.Image = "registry.example.com/gateway:1.5.0\n"
+			return input
+		}(), wantField: "image"},
+		{name: "oversized image", input: func() WorkloadImageOperationInput {
+			input := valid
+			input.Change.Image = strings.Repeat("a", MaxContainerImageBytes+1)
+			return input
+		}(), wantField: "image"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := ValidateWorkloadImageOperationInput(tt.input)
+			if tt.wantField == "" {
+				if err != nil {
+					t.Fatalf("ValidateWorkloadImageOperationInput() error = %v", err)
+				}
+				return
+			}
+			var validationErr *ValidationError
+			if !errors.As(err, &validationErr) || validationErr.Field != tt.wantField {
+				t.Fatalf("validation error = %v, want field %q", err, tt.wantField)
+			}
+		})
+	}
+}

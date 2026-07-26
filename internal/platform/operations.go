@@ -117,6 +117,84 @@ func (s *Service) SubmitWorkloadOperation(
 	return s.createAndEnqueueOperation(ctx, operation, operationJob{operationID: id, workloadInput: &input})
 }
 
+func (s *Service) PreviewWorkloadImage(
+	ctx context.Context,
+	actor string,
+	requestID string,
+	input domain.WorkloadImageOperationInput,
+) (domain.WorkloadImagePreview, error) {
+	input = normalizeWorkloadImageInput(input)
+	if err := domain.ValidateWorkloadImageOperationInput(input); err != nil {
+		return domain.WorkloadImagePreview{}, err
+	}
+	cluster, err := s.store.GetCluster(ctx, input.ClusterID)
+	if err != nil {
+		return domain.WorkloadImagePreview{}, err
+	}
+	if cluster.Status != domain.ClusterConnected && cluster.Status != domain.ClusterDegraded {
+		return domain.WorkloadImagePreview{}, domain.ErrInvalidState
+	}
+	if snapshot := s.operationGovernor.Snapshot(); snapshot.Adaptive && snapshot.OperationLimit == 0 {
+		return domain.WorkloadImagePreview{}, domain.ErrBusy
+	}
+	connection, err := s.clusterConnection(cluster)
+	if err != nil {
+		return domain.WorkloadImagePreview{}, err
+	}
+	gateway, err := s.kubeFactory.New(connection)
+	if err != nil {
+		return domain.WorkloadImagePreview{}, err
+	}
+	preview, previewErr := gateway.PreviewWorkloadImage(ctx, input.Change)
+	result := "succeeded"
+	summary := workloadImageSummary(input.Change)
+	if previewErr != nil {
+		result = "failed"
+		summary = "image preview failed"
+	}
+	if err := s.audit(
+		ctx, actor, requestID, "workload.image_preview", result, input.ClusterID,
+		input.Change.Reference.Namespace, input.Change.Reference.Name, summary, "",
+	); err != nil {
+		return domain.WorkloadImagePreview{}, fmt.Errorf("write workload image preview audit: %w", err)
+	}
+	return preview, previewErr
+}
+
+func (s *Service) SubmitWorkloadImageUpdate(
+	ctx context.Context,
+	actor string,
+	requestID string,
+	input domain.WorkloadImageOperationInput,
+) (domain.Operation, error) {
+	input = normalizeWorkloadImageInput(input)
+	if err := domain.ValidateWorkloadImageOperationInput(input); err != nil {
+		return domain.Operation{}, err
+	}
+	cluster, err := s.store.GetCluster(ctx, input.ClusterID)
+	if err != nil {
+		return domain.Operation{}, err
+	}
+	if cluster.Status != domain.ClusterConnected && cluster.Status != domain.ClusterDegraded {
+		return domain.Operation{}, domain.ErrInvalidState
+	}
+	if cluster.Environment == domain.EnvironmentProduction && input.Confirmation != cluster.Name {
+		return domain.Operation{}, domain.Invalid("confirmation", "must match the production cluster name")
+	}
+	input.Confirmation = ""
+	id, err := s.newID("op")
+	if err != nil {
+		return domain.Operation{}, fmt.Errorf("create operation ID: %w", err)
+	}
+	now := s.now()
+	operation := domain.Operation{
+		ID: id, RequestID: requestID, Kind: domain.OperationWorkloadImage, State: domain.OperationQueued,
+		ClusterID: input.ClusterID, Namespace: input.Change.Reference.Namespace, Target: input.Change.Reference.Name,
+		SubmittedBy: actor, Summary: workloadImageSummary(input.Change), CreatedAt: now, UpdatedAt: now,
+	}
+	return s.createAndEnqueueOperation(ctx, operation, operationJob{operationID: id, workloadImageInput: &input})
+}
+
 func (s *Service) createAndEnqueueOperation(
 	ctx context.Context,
 	operation domain.Operation,
@@ -233,6 +311,14 @@ func (s *Service) executeOperationJob(ctx context.Context, operation domain.Oper
 			return err
 		}
 		return s.helm.Execute(ctx, operation.Kind, request)
+	}
+	if job.workloadImageInput != nil {
+		gateway, err := s.kubeGateway(ctx, job.workloadImageInput.ClusterID)
+		if err != nil {
+			return err
+		}
+		_, err = gateway.UpdateWorkloadImage(ctx, job.workloadImageInput.Change)
+		return err
 	}
 	if job.workloadInput == nil {
 		return errors.New("operation job has no input")
@@ -385,6 +471,23 @@ func workloadOperationSummary(kind domain.OperationKind, input domain.WorkloadOp
 	return "rolling restart, resource_version=" + input.ResourceVersion
 }
 
+func workloadImageSummary(change domain.WorkloadImageChange) string {
+	return fmt.Sprintf("container=%s, fields=1, resource_version=%s", change.Container, change.ResourceVersion)
+}
+
+func normalizeWorkloadImageInput(input domain.WorkloadImageOperationInput) domain.WorkloadImageOperationInput {
+	input.ClusterID = strings.TrimSpace(input.ClusterID)
+	input.Change.Reference.Kind = strings.ToLower(strings.TrimSpace(input.Change.Reference.Kind))
+	input.Change.ResourceVersion = strings.TrimSpace(input.Change.ResourceVersion)
+	input.Change.Container = strings.TrimSpace(input.Change.Container)
+	return input
+}
+
+func isWorkloadOperation(kind domain.OperationKind) bool {
+	return kind == domain.OperationWorkloadScale || kind == domain.OperationWorkloadRestart ||
+		kind == domain.OperationWorkloadImage
+}
+
 func operationErrorCode(kind domain.OperationKind, err error) string {
 	switch {
 	case errors.Is(err, domain.ErrForbidden):
@@ -394,14 +497,14 @@ func operationErrorCode(kind domain.OperationKind, err error) string {
 	case errors.Is(err, domain.ErrTimeout), errors.Is(err, context.DeadlineExceeded):
 		return "upstream_timeout"
 	case errors.Is(err, domain.ErrConflict):
-		if kind == domain.OperationWorkloadScale || kind == domain.OperationWorkloadRestart {
+		if isWorkloadOperation(kind) {
 			return "resource_version_conflict"
 		}
 		return "release_conflict"
 	case errors.Is(err, domain.ErrNotFound):
 		return "target_not_found"
 	default:
-		if kind == domain.OperationWorkloadScale || kind == domain.OperationWorkloadRestart {
+		if isWorkloadOperation(kind) {
 			return "workload_operation_failed"
 		}
 		return "helm_operation_failed"
@@ -409,7 +512,7 @@ func operationErrorCode(kind domain.OperationKind, err error) string {
 }
 
 func operationFailureMessage(kind domain.OperationKind) string {
-	if kind == domain.OperationWorkloadScale || kind == domain.OperationWorkloadRestart {
+	if isWorkloadOperation(kind) {
 		return "工作负载操作执行失败，请刷新资源并检查错误码"
 	}
 	return "Helm 操作执行失败，请查看错误码和目标集群状态"

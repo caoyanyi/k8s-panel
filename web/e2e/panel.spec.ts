@@ -125,6 +125,60 @@ test('production deployment scale enters the adaptive operation queue', async ({
   expect(consoleErrors).toEqual([])
 })
 
+test('production deployment image update requires a fresh dry-run preview', async ({ page }, testInfo) => {
+  const consoleErrors: string[] = []
+  page.on('console', (message) => {
+    if (message.type() === 'error') consoleErrors.push(message.text())
+  })
+  page.on('pageerror', (error) => consoleErrors.push(error.message))
+  await mockWorkloadDiagnostics(page)
+
+  await page.goto('/#workloads')
+  await expect(page.getByText('gateway-api', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: '查看 gateway-api' }).click()
+  const dialog = page.getByRole('dialog', { name: 'Deployment · gateway-api' })
+  await expect(dialog.getByText('uid-gateway-api')).toBeVisible()
+  await dialog.getByRole('button', { name: '更新镜像' }).click()
+  await dialog.getByLabel('新镜像').fill('registry.example.com/payments/gateway:1.5.0')
+
+  const previewRequestPromise = page.waitForRequest((request) => request.method() === 'POST' && request.url().endsWith('/workloads/deployment/payments/gateway-api/image-previews'))
+  await dialog.getByRole('button', { name: '预览变更' }).click()
+  const previewRequest = await previewRequestPromise
+  expect(previewRequest.postDataJSON()).toEqual({
+    container: 'app',
+    current_image: 'registry.example.com/payments/gateway:1.4.0',
+    image: 'registry.example.com/payments/gateway:1.5.0',
+    resource_version: '73',
+  })
+  await expect(dialog.getByText('服务端 dry-run 通过')).toBeVisible()
+  expect(await dialog.evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1)
+  const previewAccessibility = await new AxeBuilder({ page }).include('.modal').analyze()
+  expect(previewAccessibility.violations.filter((violation) => ['serious', 'critical'].includes(violation.impact ?? ''))).toEqual([])
+  await page.screenshot({ path: `test-results/${testInfo.project.name}-image-preview.png` })
+  await dialog.getByLabel('输入集群名称确认').fill('production-cn')
+
+  const updateRequestPromise = page.waitForRequest((request) => request.method() === 'POST' && request.url().endsWith('/workloads/deployment/payments/gateway-api/image-updates'))
+  await dialog.getByRole('button', { name: '提交镜像更新' }).click()
+  const updateRequest = await updateRequestPromise
+  expect(updateRequest.postDataJSON()).toEqual({
+    container: 'app',
+    current_image: 'registry.example.com/payments/gateway:1.4.0',
+    image: 'registry.example.com/payments/gateway:1.5.0',
+    resource_version: '73',
+    confirmation: 'production-cn',
+  })
+  await expect(page.getByRole('heading', { name: '操作中心' })).toBeVisible()
+  await expect(page.getByText('工作负载镜像更新')).toBeVisible()
+  await expect(page.getByText('资源承压')).toBeVisible()
+
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
+  expect(overflow).toBeLessThanOrEqual(1)
+  const result = await new AxeBuilder({ page }).analyze()
+  expect(result.violations.filter((violation) => ['serious', 'critical'].includes(violation.impact ?? ''))).toEqual([])
+  await page.screenshot({ path: `test-results/${testInfo.project.name}-image-update.png`, fullPage: true })
+  expect(consoleErrors).toEqual([])
+})
+
 test('cluster resources show node diagnostics and namespaces', async ({ page }, testInfo) => {
   const consoleErrors: string[] = []
   page.on('console', (message) => {
@@ -178,6 +232,9 @@ function requiredEnvironment(name: string) {
 }
 
 async function mockWorkloadDiagnostics(page: Page) {
+  let operationKind = 'workload.scale'
+  let operationID = 'op_scale'
+  let operationSummary = 'replicas=5, resource_version=73'
   await page.route('**/api/v1/**', async (route) => {
     const url = new URL(route.request().url())
     const path = url.pathname
@@ -205,23 +262,48 @@ async function mockWorkloadDiagnostics(page: Page) {
         },
       ]
     } else if (path.endsWith('/workloads/deployment/payments/gateway-api/scales') && route.request().method() === 'POST') {
+      operationKind = 'workload.scale'
+      operationID = 'op_scale'
+      operationSummary = 'replicas=5, resource_version=73'
       data = {
         id: 'op_scale', request_id: 'req_scale', kind: 'workload.scale', state: 'queued',
         cluster_id: 'clu_1', namespace: 'payments', target: 'gateway-api', submitted_by: 'diagnostics-admin',
         summary: 'replicas=5, resource_version=73', created_at: '2026-07-25T08:05:00Z', updated_at: '2026-07-25T08:05:00Z',
+      }
+    } else if (path.endsWith('/workloads/deployment/payments/gateway-api/image-previews') && route.request().method() === 'POST') {
+      data = {
+        kind: 'Deployment', namespace: 'payments', name: 'gateway-api', container: 'app', resource_version: '73',
+        changes: [{
+          field: 'spec.template.spec.containers[name=app].image',
+          before: 'registry.example.com/payments/gateway:1.4.0',
+          after: 'registry.example.com/payments/gateway:1.5.0',
+        }],
+      }
+    } else if (path.endsWith('/workloads/deployment/payments/gateway-api/image-updates') && route.request().method() === 'POST') {
+      operationKind = 'workload.image_update'
+      operationID = 'op_image'
+      operationSummary = 'container=app, fields=1, resource_version=73'
+      data = {
+        id: operationID, request_id: 'req_image', kind: operationKind, state: 'queued',
+        cluster_id: 'clu_1', namespace: 'payments', target: 'gateway-api', submitted_by: 'diagnostics-admin',
+        summary: operationSummary, created_at: '2026-07-25T08:05:00Z', updated_at: '2026-07-25T08:05:00Z',
       }
     } else if (path.endsWith('/workloads/deployment/payments/gateway-api')) {
       data = {
         kind: 'Deployment', namespace: 'payments', name: 'gateway-api', ready: 3, desired: 3, status: 'Ready',
         images: ['registry.example.com/payments/gateway:1.4.0'], created_at: '2026-07-24T08:00:00Z',
-        uid: 'uid-gateway-api', resource_version: '73', labels: { app: 'gateway' }, containers: [], conditions: [],
+        uid: 'uid-gateway-api', resource_version: '73', labels: { app: 'gateway' }, conditions: [],
+        containers: [{
+          name: 'app', image: 'registry.example.com/payments/gateway:1.4.0', type: 'container',
+          ready: true, restart_count: 0, state: 'Running',
+        }],
         yaml: 'apiVersion: apps/v1\nkind: Deployment\n',
       }
     } else if (path === '/api/v1/operations') {
       data = [{
-        id: 'op_scale', request_id: 'req_scale', kind: 'workload.scale', state: 'queued',
+        id: operationID, request_id: operationKind === 'workload.image_update' ? 'req_image' : 'req_scale', kind: operationKind, state: 'queued',
         cluster_id: 'clu_1', namespace: 'payments', target: 'gateway-api', submitted_by: 'diagnostics-admin',
-        summary: 'replicas=5, resource_version=73', created_at: '2026-07-25T08:05:00Z', updated_at: '2026-07-25T08:05:00Z',
+        summary: operationSummary, created_at: '2026-07-25T08:05:00Z', updated_at: '2026-07-25T08:05:00Z',
       }]
     } else if (path === '/api/v1/system/resources') {
       data = {

@@ -530,6 +530,164 @@ func TestClientMutatesDeploymentWithResourceVersion(t *testing.T) {
 	}
 }
 
+func TestClientPreviewsAndUpdatesDeploymentImage(t *testing.T) {
+	t.Parallel()
+
+	type patchRequest struct {
+		DryRun string
+		Body   map[string]any
+	}
+	requests := make([]patchRequest, 0, 2)
+	getCount := 0
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/apis/apps/v1/namespaces/payments/deployments/gateway" {
+			http.NotFound(w, r)
+			return
+		}
+		switch r.Method {
+		case http.MethodGet:
+			getCount++
+			writeTestDeployment(t, w, "42", "registry.example.com/gateway:1.4.0")
+		case http.MethodPatch:
+			if got := r.Header.Get("Content-Type"); got != "application/strategic-merge-patch+json" {
+				t.Errorf("Content-Type = %q", got)
+			}
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode image patch: %v", err)
+			}
+			requests = append(requests, patchRequest{DryRun: r.URL.Query().Get("dryRun"), Body: body})
+			resourceVersion := "43"
+			if r.URL.Query().Get("dryRun") == "All" {
+				resourceVersion = "42"
+			}
+			writeTestDeployment(t, w, resourceVersion, "registry.example.com/gateway:1.5.0")
+		default:
+			http.Error(w, "unsupported method", http.StatusMethodNotAllowed)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	certificate := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+	client, err := NewClient(Connection{Server: server.URL, CACert: string(certificate), BearerToken: "test-token"}, loopbackPolicy(t))
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	change := domain.WorkloadImageChange{
+		Reference:       domain.WorkloadReference{Kind: "deployment", Namespace: "payments", Name: "gateway"},
+		ResourceVersion: "42",
+		Container:       "app",
+		CurrentImage:    "registry.example.com/gateway:1.4.0",
+		Image:           "registry.example.com/gateway:1.5.0",
+	}
+	preview, err := client.PreviewWorkloadImage(context.Background(), change)
+	if err != nil {
+		t.Fatalf("PreviewWorkloadImage() error = %v", err)
+	}
+	if preview.Container != "app" || preview.ResourceVersion != "42" || len(preview.Changes) != 1 ||
+		preview.Changes[0].Before != change.CurrentImage || preview.Changes[0].After != change.Image {
+		t.Errorf("preview = %#v", preview)
+	}
+	updated, err := client.UpdateWorkloadImage(context.Background(), change)
+	if err != nil {
+		t.Fatalf("UpdateWorkloadImage() error = %v", err)
+	}
+	if updated.Name != "gateway" || len(updated.Images) != 1 || updated.Images[0] != change.Image {
+		t.Errorf("updated workload = %#v", updated)
+	}
+	if getCount != 2 || len(requests) != 2 || requests[0].DryRun != "All" || requests[1].DryRun != "" {
+		t.Fatalf("GET count = %d, patch requests = %#v", getCount, requests)
+	}
+	for _, request := range requests {
+		if len(request.Body) != 2 {
+			t.Errorf("patch top-level fields = %#v", request.Body)
+		}
+		metadata, _ := request.Body["metadata"].(map[string]any)
+		spec, _ := request.Body["spec"].(map[string]any)
+		template, _ := spec["template"].(map[string]any)
+		templateSpec, _ := template["spec"].(map[string]any)
+		containers, _ := templateSpec["containers"].([]any)
+		if metadata["resourceVersion"] != "42" || len(containers) != 1 {
+			t.Errorf("image patch = %#v", request.Body)
+			continue
+		}
+		container, _ := containers[0].(map[string]any)
+		if len(container) != 2 || container["name"] != "app" || container["image"] != change.Image {
+			t.Errorf("container patch = %#v", container)
+		}
+	}
+}
+
+func TestClientRejectsStaleDeploymentImageBeforePatch(t *testing.T) {
+	t.Parallel()
+
+	patchCount := 0
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPatch {
+			patchCount++
+		}
+		writeTestDeployment(t, w, "44", "registry.example.com/gateway:1.4.1")
+	}))
+	t.Cleanup(server.Close)
+	certificate := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+	client, err := NewClient(Connection{Server: server.URL, CACert: string(certificate), BearerToken: "test-token"}, loopbackPolicy(t))
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	_, err = client.PreviewWorkloadImage(context.Background(), domain.WorkloadImageChange{
+		Reference:       domain.WorkloadReference{Kind: "deployment", Namespace: "payments", Name: "gateway"},
+		ResourceVersion: "42",
+		Container:       "app",
+		CurrentImage:    "registry.example.com/gateway:1.4.0",
+		Image:           "registry.example.com/gateway:1.5.0",
+	})
+	if !errors.Is(err, domain.ErrConflict) || patchCount != 0 {
+		t.Fatalf("PreviewWorkloadImage() error = %v, patch count = %d", err, patchCount)
+	}
+}
+
+func TestClientMapsOversizedMutationResponseToUpstream(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(strings.Repeat("x", int(maxMutationBytes+1))))
+	}))
+	t.Cleanup(server.Close)
+	certificate := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+	client, err := NewClient(Connection{Server: server.URL, CACert: string(certificate), BearerToken: "test-token"}, loopbackPolicy(t))
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+
+	_, err = client.PreviewWorkloadImage(context.Background(), domain.WorkloadImageChange{
+		Reference:       domain.WorkloadReference{Kind: "deployment", Namespace: "payments", Name: "gateway"},
+		ResourceVersion: "42",
+		Container:       "app",
+		CurrentImage:    "registry.example.com/gateway:1.4.0",
+		Image:           "registry.example.com/gateway:1.5.0",
+	})
+	if !errors.Is(err, domain.ErrUpstream) {
+		t.Fatalf("PreviewWorkloadImage() error = %v, want ErrUpstream", err)
+	}
+}
+
+func writeTestDeployment(t *testing.T, w http.ResponseWriter, resourceVersion, image string) {
+	t.Helper()
+	writeTestJSON(t, w, map[string]any{
+		"metadata": map[string]any{
+			"name": "gateway", "namespace": "payments", "resourceVersion": resourceVersion,
+			"creationTimestamp": "2026-07-24T08:00:00Z",
+		},
+		"spec": map[string]any{
+			"replicas": 3,
+			"template": map[string]any{"spec": map[string]any{"containers": []any{
+				map[string]any{"name": "app", "image": image},
+			}}},
+		},
+		"status": map[string]any{"readyReplicas": 3},
+	})
+}
+
 func TestClientMapsPatchConflict(t *testing.T) {
 	t.Parallel()
 

@@ -238,6 +238,103 @@ describe('WorkloadDetailModal', () => {
     expect(notify).toHaveBeenCalledWith('success', '滚动重启任务 op_restart 已提交')
     expect(openOperations).toHaveBeenCalled()
   })
+
+  it('previews and submits a production deployment image update', async () => {
+    const workload: Workload = {
+      kind: 'Deployment', namespace: 'payments', name: 'gateway', ready: 3, desired: 3,
+      status: 'Ready', images: ['registry.example.com/gateway:1.4.0'], created_at: '2026-07-24T08:00:00Z',
+    }
+    const detail: WorkloadDetail = {
+      ...workload,
+      uid: 'uid-gateway',
+      resource_version: '61',
+      labels: {},
+      containers: [
+        { name: 'app', image: workload.images[0], type: 'container', ready: true, restart_count: 0, state: 'Running' },
+        { name: 'setup', image: 'registry.example.com/setup:1.0.0', type: 'init', ready: true, restart_count: 0, state: 'Terminated' },
+      ],
+      conditions: [],
+      yaml: 'kind: Deployment\n',
+    }
+    const notify = vi.fn()
+    const openOperations = vi.fn()
+    const onClose = vi.fn()
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input)
+      if (init?.method === 'POST' && path.endsWith('/image-previews')) {
+        const body = JSON.parse(String(init.body)) as { image: string }
+        return Promise.resolve(dataResponse({
+          kind: 'Deployment', namespace: 'payments', name: 'gateway', container: 'app', resource_version: '61',
+          changes: [{
+            field: 'spec.template.spec.containers[name=app].image',
+            before: 'registry.example.com/gateway:1.4.0',
+            after: body.image,
+          }],
+        }))
+      }
+      if (init?.method === 'POST' && path.endsWith('/image-updates')) {
+        return Promise.resolve(dataResponse({
+          id: 'op_image', request_id: 'req_image', kind: 'workload.image_update', state: 'queued',
+          cluster_id: 'clu_1', namespace: 'payments', target: 'gateway', submitted_by: 'admin',
+          created_at: '2026-07-25T08:00:00Z', updated_at: '2026-07-25T08:00:00Z',
+        }))
+      }
+      return Promise.resolve(dataResponse(detail))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const user = userEvent.setup()
+
+    render(<WorkloadDetailModal
+      clusterId="clu_1"
+      clusterName="production-east"
+      environment="production"
+      workload={workload}
+      open
+      onClose={onClose}
+      notify={notify}
+      openOperations={openOperations}
+    />)
+    const dialog = await screen.findByRole('dialog', { name: 'Deployment · gateway' })
+    await within(dialog).findByText('uid-gateway')
+    await user.click(within(dialog).getByRole('button', { name: '更新镜像' }))
+    expect(within(dialog).getByLabelText('容器')).toHaveValue('app')
+    expect(within(dialog).queryByRole('option', { name: 'setup' })).not.toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: '提交镜像更新' })).toBeDisabled()
+
+    await user.clear(within(dialog).getByLabelText('新镜像'))
+    await user.type(within(dialog).getByLabelText('新镜像'), 'registry.example.com/gateway:1.5.0')
+    await user.click(within(dialog).getByRole('button', { name: '预览变更' }))
+    expect(await within(dialog).findByText('服务端 dry-run 通过')).toBeInTheDocument()
+    expect(within(dialog).getByText('registry.example.com/gateway:1.4.0')).toBeInTheDocument()
+    expect(within(dialog).getByText('registry.example.com/gateway:1.5.0')).toBeInTheDocument()
+
+    await user.type(within(dialog).getByLabelText('新镜像'), '-candidate')
+    expect(within(dialog).queryByText('服务端 dry-run 通过')).not.toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: '提交镜像更新' })).toBeDisabled()
+    await user.clear(within(dialog).getByLabelText('新镜像'))
+    await user.type(within(dialog).getByLabelText('新镜像'), 'registry.example.com/gateway:1.5.0')
+    await user.click(within(dialog).getByRole('button', { name: '预览变更' }))
+    await within(dialog).findByText('服务端 dry-run 通过')
+    await user.type(within(dialog).getByLabelText('输入集群名称确认'), 'production-east')
+    await user.click(within(dialog).getByRole('button', { name: '提交镜像更新' }))
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/clusters/clu_1/workloads/deployment/payments/gateway/image-updates',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          container: 'app',
+          current_image: 'registry.example.com/gateway:1.4.0',
+          image: 'registry.example.com/gateway:1.5.0',
+          resource_version: '61',
+          confirmation: 'production-east',
+        }),
+      }),
+    ))
+    expect(notify).toHaveBeenCalledWith('success', '镜像更新任务 op_image 已提交')
+    expect(onClose).toHaveBeenCalled()
+    expect(openOperations).toHaveBeenCalled()
+  })
 })
 
 function dataResponse(data: unknown): Response {

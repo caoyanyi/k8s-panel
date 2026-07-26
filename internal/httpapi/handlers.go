@@ -302,6 +302,68 @@ func (s *Server) restartWorkload(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) previewWorkloadImage(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Container       string `json:"container"`
+		CurrentImage    string `json:"current_image"`
+		Image           string `json:"image"`
+		ResourceVersion string `json:"resource_version"`
+	}
+	if err := decodeJSON(w, r, &input); err != nil {
+		writeInvalidJSON(w, r)
+		return
+	}
+	preview, err := s.service.PreviewWorkloadImage(
+		r.Context(), principal(r).Username, requestID(r), workloadImageOperationInput(
+			r, input.Container, input.CurrentImage, input.Image, input.ResourceVersion, "",
+		),
+	)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeData(w, http.StatusOK, preview)
+}
+
+func (s *Server) updateWorkloadImage(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Container       string `json:"container"`
+		CurrentImage    string `json:"current_image"`
+		Image           string `json:"image"`
+		ResourceVersion string `json:"resource_version"`
+		Confirmation    string `json:"confirmation"`
+	}
+	if err := decodeJSON(w, r, &input); err != nil {
+		writeInvalidJSON(w, r)
+		return
+	}
+	operation, err := s.service.SubmitWorkloadImageUpdate(
+		r.Context(), principal(r).Username, requestID(r), workloadImageOperationInput(
+			r, input.Container, input.CurrentImage, input.Image, input.ResourceVersion, input.Confirmation,
+		),
+	)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	w.Header().Set("Location", "/api/v1/operations/"+operation.ID)
+	writeData(w, http.StatusAccepted, operation)
+}
+
+func workloadImageOperationInput(
+	r *http.Request,
+	container, currentImage, image, resourceVersion, confirmation string,
+) domain.WorkloadImageOperationInput {
+	return domain.WorkloadImageOperationInput{
+		ClusterID: r.PathValue("id"),
+		Change: domain.WorkloadImageChange{
+			Reference: workloadReference(r), ResourceVersion: resourceVersion,
+			Container: container, CurrentImage: currentImage, Image: image,
+		},
+		Confirmation: confirmation,
+	}
+}
+
 func (s *Server) submitWorkloadOperation(
 	w http.ResponseWriter,
 	r *http.Request,

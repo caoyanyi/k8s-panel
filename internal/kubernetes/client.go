@@ -23,6 +23,7 @@ import (
 
 const (
 	maxResponseBytes  = 8 * 1024 * 1024
+	maxMutationBytes  = 2 * 1024 * 1024
 	maxLogBytes       = 2 * 1024 * 1024
 	maxListBytes      = 32 * 1024 * 1024
 	maxListItems      = 5000
@@ -312,6 +313,127 @@ func (c *Client) RestartWorkload(
 	})
 }
 
+func (c *Client) PreviewWorkloadImage(
+	ctx context.Context,
+	change domain.WorkloadImageChange,
+) (domain.WorkloadImagePreview, error) {
+	change = normalizeWorkloadImageChange(change)
+	payload, err := c.patchDeploymentImage(ctx, change, true)
+	if err != nil {
+		return domain.WorkloadImagePreview{}, err
+	}
+	image, found, err := deploymentContainerImage(payload, change.Container)
+	if err != nil {
+		return domain.WorkloadImagePreview{}, err
+	}
+	if !found || image != change.Image {
+		return domain.WorkloadImagePreview{}, fmt.Errorf("Kubernetes dry-run returned an unexpected container image: %w", domain.ErrUpstream)
+	}
+	return domain.WorkloadImagePreview{
+		Kind:            "Deployment",
+		Namespace:       change.Reference.Namespace,
+		Name:            change.Reference.Name,
+		Container:       change.Container,
+		ResourceVersion: change.ResourceVersion,
+		Changes: []domain.WorkloadFieldChange{{
+			Field:  "spec.template.spec.containers[name=" + change.Container + "].image",
+			Before: change.CurrentImage,
+			After:  change.Image,
+		}},
+	}, nil
+}
+
+func (c *Client) UpdateWorkloadImage(
+	ctx context.Context,
+	change domain.WorkloadImageChange,
+) (domain.Workload, error) {
+	change = normalizeWorkloadImageChange(change)
+	payload, err := c.patchDeploymentImage(ctx, change, false)
+	if err != nil {
+		return domain.Workload{}, err
+	}
+	image, found, err := deploymentContainerImage(payload, change.Container)
+	if err != nil {
+		return domain.Workload{}, err
+	}
+	if !found || image != change.Image {
+		return domain.Workload{}, fmt.Errorf("Kubernetes update returned an unexpected container image: %w", domain.ErrUpstream)
+	}
+	return decodeWorkload("deployment", payload)
+}
+
+func (c *Client) patchDeploymentImage(
+	ctx context.Context,
+	change domain.WorkloadImageChange,
+	dryRun bool,
+) ([]byte, error) {
+	if err := domain.ValidateWorkloadImageChange(change); err != nil {
+		return nil, err
+	}
+	path := workloadResourcePath(change.Reference)
+	currentPayload, _, err := c.requestPayload(
+		ctx, http.MethodGet, path, nil, "application/json", "", nil, maxMutationBytes, false,
+	)
+	if err != nil {
+		return nil, err
+	}
+	var current workloadDetailResource
+	if err := json.Unmarshal(currentPayload, &current); err != nil {
+		return nil, fmt.Errorf("decode Kubernetes Deployment for image update: %w", domain.ErrUpstream)
+	}
+	if current.Metadata.ResourceVersion != change.ResourceVersion {
+		return nil, fmt.Errorf("Deployment resource version changed: %w", domain.ErrConflict)
+	}
+	currentImage, found := containerImage(current.Spec.Template.Spec.Containers, change.Container)
+	if !found || currentImage != change.CurrentImage {
+		return nil, fmt.Errorf("Deployment container image changed: %w", domain.ErrConflict)
+	}
+	patch := map[string]any{
+		"metadata": map[string]any{"resourceVersion": change.ResourceVersion},
+		"spec": map[string]any{"template": map[string]any{"spec": map[string]any{
+			"containers": []map[string]string{{"name": change.Container, "image": change.Image}},
+		}}},
+	}
+	body, err := json.Marshal(patch)
+	if err != nil {
+		return nil, fmt.Errorf("encode Kubernetes image patch: %w", err)
+	}
+	var query url.Values
+	if dryRun {
+		query = make(url.Values)
+		query.Set("dryRun", "All")
+	}
+	payload, _, err := c.requestPayload(
+		ctx, http.MethodPatch, path, query, "application/json", "application/strategic-merge-patch+json",
+		body, maxMutationBytes, false,
+	)
+	return payload, err
+}
+
+func normalizeWorkloadImageChange(change domain.WorkloadImageChange) domain.WorkloadImageChange {
+	change.Reference.Kind = strings.ToLower(strings.TrimSpace(change.Reference.Kind))
+	change.ResourceVersion = strings.TrimSpace(change.ResourceVersion)
+	return change
+}
+
+func deploymentContainerImage(payload []byte, name string) (string, bool, error) {
+	var resource workloadDetailResource
+	if err := json.Unmarshal(payload, &resource); err != nil {
+		return "", false, fmt.Errorf("decode Kubernetes Deployment image: %w", domain.ErrUpstream)
+	}
+	image, found := containerImage(resource.Spec.Template.Spec.Containers, name)
+	return image, found, nil
+}
+
+func containerImage(containers []containerSpec, name string) (string, bool) {
+	for _, container := range containers {
+		if container.Name == name {
+			return container.Image, true
+		}
+	}
+	return "", false
+}
+
 func (c *Client) patchDeployment(
 	ctx context.Context,
 	reference domain.WorkloadReference,
@@ -583,7 +705,7 @@ func (c *Client) requestPayload(
 		if truncate {
 			return payload[:maxBytes], true, nil
 		}
-		return nil, false, errors.New("Kubernetes response exceeded size limit")
+		return nil, false, fmt.Errorf("Kubernetes response exceeded size limit: %w", domain.ErrUpstream)
 	}
 	return payload, false, nil
 }

@@ -131,6 +131,8 @@ func (s *Server) routes() {
 	s.mux.Handle("GET /api/v1/clusters/{id}/pods/{namespace}/{name}/logs", s.protected(http.HandlerFunc(s.getPodLogs)))
 	s.mux.Handle("POST /api/v1/clusters/{id}/workloads/{kind}/{namespace}/{name}/scales", s.protected(http.HandlerFunc(s.scaleWorkload)))
 	s.mux.Handle("POST /api/v1/clusters/{id}/workloads/{kind}/{namespace}/{name}/restarts", s.protected(http.HandlerFunc(s.restartWorkload)))
+	s.mux.Handle("POST /api/v1/clusters/{id}/workloads/{kind}/{namespace}/{name}/image-previews", s.protected(http.HandlerFunc(s.previewWorkloadImage)))
+	s.mux.Handle("POST /api/v1/clusters/{id}/workloads/{kind}/{namespace}/{name}/image-updates", s.protected(http.HandlerFunc(s.updateWorkloadImage)))
 
 	s.mux.Handle("GET /api/v1/chart-repositories", s.protected(http.HandlerFunc(s.listRepositories)))
 	s.mux.Handle("POST /api/v1/chart-repositories", s.protected(http.HandlerFunc(s.createRepository)))

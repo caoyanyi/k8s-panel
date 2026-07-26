@@ -28,12 +28,18 @@ describe('OperationsPage', () => {
         id: 'op_1', request_id: 'req_1', kind: 'workload.scale', state: 'queued',
         cluster_id: 'clu_1', namespace: 'payments', target: 'gateway', submitted_by: 'admin',
         summary: 'replicas=5, resource_version=42', created_at: '2026-07-25T08:00:00Z', updated_at: '2026-07-25T08:00:00Z',
+      }, {
+        id: 'op_2', request_id: 'req_2', kind: 'workload.image_update', state: 'queued',
+        cluster_id: 'clu_1', namespace: 'payments', target: 'gateway', submitted_by: 'admin',
+        summary: 'container=app, fields=1, resource_version=42', created_at: '2026-07-25T08:01:00Z', updated_at: '2026-07-25T08:01:00Z',
       }]))
     }))
 
     render(<OperationsPage />)
 
     expect(await screen.findByText('工作负载扩缩容')).toBeInTheDocument()
+    expect(screen.getByText('工作负载镜像更新')).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: '操作记录' })).toHaveAttribute('tabindex', '0')
     expect(screen.getByText('资源承压')).toBeInTheDocument()
     expect(screen.getByText('内存 84%')).toBeInTheDocument()
     expect(screen.getByText('负载 62%')).toBeInTheDocument()

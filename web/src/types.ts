@@ -140,6 +140,21 @@ export interface WorkloadDetail extends Workload {
   yaml: string
 }
 
+export interface WorkloadFieldChange {
+  field: string
+  before: string
+  after: string
+}
+
+export interface WorkloadImagePreview {
+  kind: string
+  namespace: string
+  name: string
+  container: string
+  resource_version: string
+  changes: WorkloadFieldChange[]
+}
+
 export interface KubernetesEvent {
   name: string
   type: string

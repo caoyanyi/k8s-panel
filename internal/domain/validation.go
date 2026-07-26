@@ -123,6 +123,47 @@ func ValidateWorkloadOperationInput(kind OperationKind, input WorkloadOperationI
 	return nil
 }
 
+func ValidateWorkloadImageOperationInput(input WorkloadImageOperationInput) error {
+	if strings.TrimSpace(input.ClusterID) == "" {
+		return Invalid("cluster_id", "is required")
+	}
+	return ValidateWorkloadImageChange(input.Change)
+}
+
+func ValidateWorkloadImageChange(change WorkloadImageChange) error {
+	if err := ValidateWorkloadReference(change.Reference); err != nil {
+		return err
+	}
+	if strings.ToLower(strings.TrimSpace(change.Reference.Kind)) != "deployment" {
+		return Invalid("kind", "only Deployment image updates are supported")
+	}
+	resourceVersion := strings.TrimSpace(change.ResourceVersion)
+	if resourceVersion == "" || len(resourceVersion) > 256 || strings.IndexFunc(resourceVersion, unicode.IsControl) >= 0 {
+		return Invalid("resource_version", "must be a valid value no longer than 256 characters")
+	}
+	if !validDNSLabel(change.Container) {
+		return Invalid("container", "must be a valid Kubernetes container name")
+	}
+	if err := validateContainerImage("current_image", change.CurrentImage); err != nil {
+		return err
+	}
+	if err := validateContainerImage("image", change.Image); err != nil {
+		return err
+	}
+	if change.CurrentImage == change.Image {
+		return Invalid("image", "must differ from the current image")
+	}
+	return nil
+}
+
+func validateContainerImage(field, image string) error {
+	if image == "" || len(image) > MaxContainerImageBytes || image != strings.TrimSpace(image) ||
+		strings.IndexFunc(image, func(value rune) bool { return unicode.IsSpace(value) || unicode.IsControl(value) }) >= 0 {
+		return Invalid(field, "must be a non-empty image reference no longer than 1024 bytes without whitespace")
+	}
+	return nil
+}
+
 func ValidatePodLogRequest(input PodLogRequest) error {
 	if err := ValidateWorkloadReference(WorkloadReference{Kind: "pod", Namespace: input.Namespace, Name: input.Pod}); err != nil {
 		return err

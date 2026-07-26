@@ -361,6 +361,40 @@ func TestServerSubmitsControlledWorkloadOperationsAndExposesCapacity(t *testing.
 	if restart.Code != http.StatusAccepted || !strings.Contains(restart.Body.String(), `"kind":"workload.restart"`) {
 		t.Fatalf("restart status = %d, body = %s", restart.Code, restart.Body.String())
 	}
+	preview := authenticatedRequest(t, handler, cookie, http.MethodPost, base+"/image-previews", `{
+		"container":"app","current_image":"gateway:1.4.0","image":"gateway:1.5.0","resource_version":"44"
+	}`)
+	if preview.Code != http.StatusOK || !strings.Contains(preview.Body.String(), `"field":"spec.template.spec.containers[name=app].image"`) ||
+		!strings.Contains(preview.Body.String(), `"before":"gateway:1.4.0"`) {
+		t.Fatalf("image preview status = %d, body = %s", preview.Code, preview.Body.String())
+	}
+	stalePreview := authenticatedRequest(t, handler, cookie, http.MethodPost, base+"/image-previews", `{
+		"container":"app","current_image":"gateway:1.4.0","image":"gateway:1.5.0","resource_version":"stale"
+	}`)
+	if stalePreview.Code != http.StatusConflict {
+		t.Fatalf("stale image preview status = %d, body = %s", stalePreview.Code, stalePreview.Body.String())
+	}
+	assertErrorCode(t, stalePreview.Body.Bytes(), "conflict")
+	invalidPreview := authenticatedRequest(t, handler, cookie, http.MethodPost, base+"/image-previews", `{
+		"container":"app","current_image":"gateway:1.4.0","image":"gateway:1.5.0","resource_version":"44","unknown":true
+	}`)
+	if invalidPreview.Code != http.StatusBadRequest {
+		t.Fatalf("invalid image preview status = %d, body = %s", invalidPreview.Code, invalidPreview.Body.String())
+	}
+	unconfirmedImage := authenticatedRequest(t, handler, cookie, http.MethodPost, base+"/image-updates", `{
+		"container":"app","current_image":"gateway:1.4.0","image":"gateway:1.5.0","resource_version":"44"
+	}`)
+	if unconfirmedImage.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("unconfirmed image update status = %d, body = %s", unconfirmedImage.Code, unconfirmedImage.Body.String())
+	}
+	assertErrorField(t, unconfirmedImage.Body.Bytes(), "confirmation")
+	imageUpdate := authenticatedRequest(t, handler, cookie, http.MethodPost, base+"/image-updates", `{
+		"container":"app","current_image":"gateway:1.4.0","image":"gateway:1.5.0","resource_version":"44","confirmation":"production-east"
+	}`)
+	if imageUpdate.Code != http.StatusAccepted || imageUpdate.Header().Get("Location") == "" ||
+		!strings.Contains(imageUpdate.Body.String(), `"kind":"workload.image_update"`) {
+		t.Fatalf("image update status = %d, body = %s", imageUpdate.Code, imageUpdate.Body.String())
+	}
 
 	unsupported := authenticatedRequest(
 		t, handler, cookie, http.MethodPost,
@@ -557,6 +591,21 @@ func (testKube) ScaleWorkload(_ context.Context, reference domain.WorkloadRefere
 }
 func (testKube) RestartWorkload(_ context.Context, reference domain.WorkloadReference, _ string, _ time.Time) (domain.Workload, error) {
 	return domain.Workload{Kind: "Deployment", Namespace: reference.Namespace, Name: reference.Name}, nil
+}
+func (testKube) PreviewWorkloadImage(_ context.Context, change domain.WorkloadImageChange) (domain.WorkloadImagePreview, error) {
+	if change.ResourceVersion == "stale" {
+		return domain.WorkloadImagePreview{}, domain.ErrConflict
+	}
+	return domain.WorkloadImagePreview{
+		Kind: "Deployment", Namespace: change.Reference.Namespace, Name: change.Reference.Name,
+		Container: change.Container, ResourceVersion: change.ResourceVersion,
+		Changes: []domain.WorkloadFieldChange{{
+			Field: "spec.template.spec.containers[name=" + change.Container + "].image", Before: change.CurrentImage, After: change.Image,
+		}},
+	}, nil
+}
+func (testKube) UpdateWorkloadImage(_ context.Context, change domain.WorkloadImageChange) (domain.Workload, error) {
+	return domain.Workload{Kind: "Deployment", Namespace: change.Reference.Namespace, Name: change.Reference.Name, Images: []string{change.Image}}, nil
 }
 
 func testGovernor(t *testing.T) platform.OperationGovernor {

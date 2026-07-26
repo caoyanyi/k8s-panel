@@ -225,7 +225,7 @@ tbody tr:hover td { background: #fafcfb; }
 td strong { color: var(--text); font-size: 12px; }
 .primary-cell { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 .primary-cell > span, .primary-cell > small { color: var(--muted); }
-.subtle-id { color: #7d8982; max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.subtle-id, .primary-cell > .subtle-id { color: #59675f; max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .clipped-cell { max-width: 290px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .actions-column { width: 132px; text-align: right; }
 .row-actions { display: flex; justify-content: flex-end; gap: 2px; }
@@ -321,6 +321,18 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); }
 .operation-target dt { margin-bottom: 7px; color: var(--muted); font-size: 10px; font-weight: 650; }
 .operation-target dd { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .operation-description { padding: 10px 12px; border-left: 3px solid var(--primary); background: #f3f7ff; color: #3f526e; font-size: 12px; line-height: 1.5; }
+.workload-operation .form-actions { flex-wrap: wrap; }
+.image-update-fields input[readonly] { background: var(--surface-muted); color: #46534c; }
+.image-change-preview { display: grid; gap: 12px; padding: 12px 0 12px 14px; border-left: 3px solid #3b745e; background: #f3f8f5; }
+.image-change-preview-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.image-change-preview-heading h4 { font-size: 12px; }
+.image-change-preview-heading span { color: #3b745e; font-size: 10px; font-weight: 700; }
+.image-change-row { min-width: 0; display: grid; gap: 9px; }
+.image-change-row > code { padding-right: 12px; overflow-wrap: anywhere; color: #3e554b; font-size: 10px; }
+.image-change-row dl { margin: 0; padding-right: 12px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.image-change-row dl > div { min-width: 0; }
+.image-change-row dt { margin-bottom: 4px; color: var(--muted); font-size: 9px; font-weight: 700; }
+.image-change-row dd { margin: 0; overflow-wrap: anywhere; font-family: "SFMono-Regular", Consolas, monospace; font-size: 11px; line-height: 1.45; }
 .detail-overview { display: grid; gap: 22px; }
 .detail-grid { margin: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-top: 1px solid var(--line); border-left: 1px solid var(--line); }
 .detail-grid > div { min-height: 72px; padding: 12px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); overflow: hidden; }
@@ -424,6 +436,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); }
   .workload-actions { justify-content: stretch; }
   .workload-actions .button { flex: 1; }
   .operation-target { grid-template-columns: 1fr; }
+  .image-update-fields { grid-template-columns: 1fr; }
+  .image-change-row dl { grid-template-columns: 1fr; }
   .address-list { grid-template-columns: 1fr; }
   .condition-list > div { grid-template-columns: 78px minmax(90px, 1fr); }
   .condition-list > div > time { text-align: right; }
