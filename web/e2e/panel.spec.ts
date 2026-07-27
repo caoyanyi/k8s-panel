@@ -32,6 +32,9 @@ test('login, navigation, validation and logout', async ({ page }, testInfo) => {
   await navigate(page, testInfo.project.name, '网络')
   await expect(page.getByRole('heading', { name: '网络资源' })).toBeVisible()
   await expect(page.getByText('尚未选择集群')).toBeVisible()
+  await navigate(page, testInfo.project.name, '配置')
+  await expect(page.getByRole('heading', { name: '配置资源' })).toBeVisible()
+  await expect(page.getByText('尚未选择集群')).toBeVisible()
   await navigate(page, testInfo.project.name, 'Helm')
   await expect(page.getByRole('heading', { name: 'Helm' })).toBeVisible()
   await navigate(page, testInfo.project.name, '操作中心')
@@ -331,6 +334,37 @@ test('network inventory loads one bounded resource kind at a time', async ({ pag
   expect(consoleErrors).toEqual([])
 })
 
+test('configuration inventory keeps Secret reads namespace scoped', async ({ page }, testInfo) => {
+  const consoleErrors: string[] = []
+  const requestedKinds: string[] = []
+  page.on('console', (message) => {
+    if (message.type() === 'error') consoleErrors.push(message.text())
+  })
+  page.on('pageerror', (error) => consoleErrors.push(error.message))
+  await mockConfigurationResources(page, requestedKinds)
+
+  await page.goto('/#configuration')
+  await expect(page.getByRole('heading', { name: '配置资源' })).toBeVisible()
+  await expect(page.getByText('app-settings', { exact: true })).toBeVisible()
+  expect(requestedKinds).toContain('configmaps:all')
+  expect(requestedKinds.some((request) => request.startsWith('secrets:'))).toBe(false)
+
+  await page.getByRole('button', { name: 'Secret' }).click()
+  await expect(page.getByText('请选择命名空间')).toBeVisible()
+  expect(requestedKinds.some((request) => request.startsWith('secrets:'))).toBe(false)
+  await page.getByLabel('命名空间').selectOption('payments')
+  await expect(page.getByText('registry-secret', { exact: true })).toBeVisible()
+  expect(requestedKinds).toContain('secrets:payments')
+  await expect(page.getByText('kubernetes.io/dockerconfigjson')).toBeVisible()
+
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
+  expect(overflow).toBeLessThanOrEqual(1)
+  const result = await new AxeBuilder({ page }).analyze()
+  expect(result.violations.filter((violation) => ['serious', 'critical'].includes(violation.impact ?? ''))).toEqual([])
+  await page.screenshot({ path: `test-results/${testInfo.project.name}-configuration-inventory.png`, fullPage: true })
+  expect(consoleErrors).toEqual([])
+})
+
 async function navigate(page: Page, projectName: string, label: string) {
   if (projectName.includes('mobile')) {
     await page.getByRole('button', { name: '打开导航' }).click()
@@ -412,6 +446,37 @@ async function mockNetworkResources(page: Page, requestedKinds: string[]) {
         namespace: 'payments', name: 'gateway-ingress', class_name: 'nginx',
         hosts: ['gateway.example.com'], host_count: 1, addresses: ['203.0.113.30'], address_count: 1,
         tls: true, rule_count: 1, path_count: 2, created_at: '2026-07-24T08:00:00Z',
+      }]
+    } else {
+      data = []
+    }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data }) })
+  })
+}
+
+async function mockConfigurationResources(page: Page, requestedKinds: string[]) {
+  await page.route('**/api/v1/**', async (route) => {
+    const url = new URL(route.request().url())
+    const path = url.pathname
+    let data: unknown
+    if (path === '/api/v1/session') {
+      data = { username: 'configuration-admin', role: 'admin', expires_at: '2026-07-28T16:00:00Z' }
+    } else if (path === '/api/v1/clusters') {
+      data = [{
+        id: 'clu_1', name: 'production-cn', environment: 'production', server: 'https://api.example.com',
+        status: 'connected', version: 'v1.36.2', credentials_configured: true,
+        created_at: '2026-07-20T08:00:00Z', updated_at: '2026-07-27T08:00:00Z',
+      }]
+    } else if (path === '/api/v1/clusters/clu_1/namespaces') {
+      data = [{ name: 'payments', status: 'Active', labels: {}, finalizers: [], created_at: '2026-07-20T08:00:00Z' }]
+    } else if (path === '/api/v1/clusters/clu_1/configmaps') {
+      requestedKinds.push(`configmaps:${url.searchParams.get('namespace') ?? 'all'}`)
+      data = [{ namespace: 'payments', name: 'app-settings', data_count: 3, created_at: '2026-07-24T08:00:00Z' }]
+    } else if (path === '/api/v1/clusters/clu_1/secrets') {
+      requestedKinds.push(`secrets:${url.searchParams.get('namespace') ?? 'all'}`)
+      data = [{
+        namespace: 'payments', name: 'registry-secret', type: 'kubernetes.io/dockerconfigjson', data_count: 1,
+        created_at: '2026-07-25T08:00:00Z',
       }]
     } else {
       data = []

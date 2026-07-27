@@ -677,6 +677,14 @@ func TestServiceRejectsKubernetesReadsDuringCriticalResourcePressure(t *testing.
 			_, err := service.Ingresses(context.Background(), cluster.ID, "payments")
 			return err
 		}},
+		{name: "config maps", call: func() error {
+			_, err := service.ConfigMaps(context.Background(), cluster.ID, "payments")
+			return err
+		}},
+		{name: "secrets", call: func() error {
+			_, err := service.Secrets(context.Background(), "admin", "req_secrets", cluster.ID, "payments")
+			return err
+		}},
 		{name: "workload detail", call: func() error {
 			_, err := service.WorkloadDetail(context.Background(), cluster.ID, reference)
 			return err
@@ -715,6 +723,9 @@ func TestServiceRejectsKubernetesReadsDuringCriticalResourcePressure(t *testing.
 	}
 	if serviceCalls, ingressCalls := gateway.serviceCalls.Load(), gateway.ingressCalls.Load(); serviceCalls != 0 || ingressCalls != 0 {
 		t.Fatalf("network reads reached Kubernetes under critical pressure: services=%d ingresses=%d", serviceCalls, ingressCalls)
+	}
+	if configMapCalls, secretCalls := gateway.configMapCalls.Load(), gateway.secretCalls.Load(); configMapCalls != 0 || secretCalls != 0 {
+		t.Fatalf("configuration reads reached Kubernetes under critical pressure: configmaps=%d secrets=%d", configMapCalls, secretCalls)
 	}
 	capacity := service.OperationCapacity().KubernetesReads
 	if !capacity.Adaptive || capacity.Pressure != resourceguard.PressureCritical || capacity.Limit != 0 || capacity.Maximum != 4 {
@@ -760,6 +771,69 @@ func TestServiceListsNetworkResourcesAndValidatesNamespaceBeforeGateway(t *testi
 	}
 	if gateway.serviceCalls.Load() != serviceCalls || gateway.ingressCalls.Load() != ingressCalls {
 		t.Fatal("invalid namespace reached Kubernetes gateway")
+	}
+}
+
+func TestServiceListsConfigurationResourcesAndValidatesSecretScopeBeforeGateway(t *testing.T) {
+	t.Parallel()
+
+	gateway := &fakeKubeGateway{
+		probe:      domain.ClusterProbe{Version: "v1.36.2"},
+		configMaps: []domain.KubernetesConfigMap{{Namespace: "payments", Name: "settings", DataCount: 3}},
+		secrets:    []domain.KubernetesSecret{{Namespace: "payments", Name: "registry", Type: "Opaque", DataCount: 1}},
+	}
+	service, _, _ := newTestService(t, serviceFakes{kube: gateway})
+	cluster, err := service.CreateCluster(context.Background(), "admin", "req_cluster", domain.ClusterInput{
+		Name: "cluster", Environment: domain.EnvironmentDevelopment, Server: "https://api.example.com", BearerToken: "token",
+	})
+	if err != nil {
+		t.Fatalf("CreateCluster() error = %v", err)
+	}
+
+	configMaps, err := service.ConfigMaps(context.Background(), cluster.ID, "")
+	if err != nil || len(configMaps) != 1 || configMaps[0].Name != "settings" {
+		t.Fatalf("ConfigMaps() = %#v, %v", configMaps, err)
+	}
+	secrets, err := service.Secrets(context.Background(), "admin", "req_secrets", cluster.ID, "payments")
+	if err != nil || len(secrets) != 1 || secrets[0].Name != "registry" {
+		t.Fatalf("Secrets() = %#v, %v", secrets, err)
+	}
+	if gateway.configMapNamespace != "" || gateway.secretNamespace != "payments" {
+		t.Fatalf("configuration namespaces = configmaps %q, secrets %q", gateway.configMapNamespace, gateway.secretNamespace)
+	}
+
+	configMapCalls := gateway.configMapCalls.Load()
+	secretCalls := gateway.secretCalls.Load()
+	if _, err := service.ConfigMaps(context.Background(), cluster.ID, "bad/namespace"); err == nil {
+		t.Fatal("ConfigMaps() accepted an invalid namespace")
+	}
+	if _, err := service.Secrets(context.Background(), "admin", "req_empty", cluster.ID, ""); err == nil {
+		t.Fatal("Secrets() accepted an empty namespace")
+	}
+	if _, err := service.Secrets(context.Background(), "admin", "req_invalid", cluster.ID, "bad/namespace"); err == nil {
+		t.Fatal("Secrets() accepted an invalid namespace")
+	}
+	if gateway.configMapCalls.Load() != configMapCalls || gateway.secretCalls.Load() != secretCalls {
+		t.Fatal("invalid configuration scope reached Kubernetes gateway")
+	}
+
+	audits, err := service.ListAuditEvents(context.Background(), 100)
+	if err != nil {
+		t.Fatalf("ListAuditEvents() error = %v", err)
+	}
+	found := false
+	for _, event := range audits {
+		if event.Action != "secret.metadata.list" {
+			continue
+		}
+		found = true
+		if event.RequestID != "req_secrets" || event.Namespace != "payments" || event.Target != "secrets" ||
+			event.Summary != "count=1" || strings.Contains(event.Summary, "registry") {
+			t.Errorf("secret metadata audit = %#v", event)
+		}
+	}
+	if !found {
+		t.Fatal("secret.metadata.list audit event was not written")
 	}
 }
 
@@ -1549,10 +1623,16 @@ type fakeKubeGateway struct {
 	nodeEventLimit      int
 	services            []domain.KubernetesService
 	ingresses           []domain.KubernetesIngress
+	configMaps          []domain.KubernetesConfigMap
+	secrets             []domain.KubernetesSecret
 	serviceCalls        atomic.Int64
 	ingressCalls        atomic.Int64
+	configMapCalls      atomic.Int64
+	secretCalls         atomic.Int64
 	serviceNamespace    string
 	ingressNamespace    string
+	configMapNamespace  string
+	secretNamespace     string
 	mutationMu          sync.Mutex
 	scaledVersion       string
 	scaledReplicas      int32
@@ -1649,6 +1729,20 @@ func (g *fakeKubeGateway) Ingresses(_ context.Context, namespace string) ([]doma
 	g.ingressNamespace = namespace
 	g.mutationMu.Unlock()
 	return append([]domain.KubernetesIngress(nil), g.ingresses...), nil
+}
+func (g *fakeKubeGateway) ConfigMaps(_ context.Context, namespace string) ([]domain.KubernetesConfigMap, error) {
+	g.configMapCalls.Add(1)
+	g.mutationMu.Lock()
+	g.configMapNamespace = namespace
+	g.mutationMu.Unlock()
+	return append([]domain.KubernetesConfigMap(nil), g.configMaps...), nil
+}
+func (g *fakeKubeGateway) Secrets(_ context.Context, namespace string) ([]domain.KubernetesSecret, error) {
+	g.secretCalls.Add(1)
+	g.mutationMu.Lock()
+	g.secretNamespace = namespace
+	g.mutationMu.Unlock()
+	return append([]domain.KubernetesSecret(nil), g.secrets...), nil
 }
 func (g *fakeKubeGateway) WorkloadDetail(_ context.Context, reference domain.WorkloadReference) (domain.WorkloadDetail, error) {
 	g.detailReference = reference

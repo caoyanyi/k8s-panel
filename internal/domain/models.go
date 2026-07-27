@@ -325,6 +325,21 @@ type KubernetesIngress struct {
 	CreatedAt    time.Time `json:"created_at"`
 }
 
+type KubernetesConfigMap struct {
+	Namespace string    `json:"namespace"`
+	Name      string    `json:"name"`
+	DataCount int       `json:"data_count"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type KubernetesSecret struct {
+	Namespace string    `json:"namespace"`
+	Name      string    `json:"name"`
+	Type      string    `json:"type"`
+	DataCount int       `json:"data_count"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 type Workload struct {
 	Kind      string    `json:"kind"`
 	Namespace string    `json:"namespace"`

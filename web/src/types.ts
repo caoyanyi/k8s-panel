@@ -162,6 +162,21 @@ export interface KubernetesIngress {
   created_at: string
 }
 
+export interface KubernetesConfigMap {
+  namespace: string
+  name: string
+  data_count: number
+  created_at: string
+}
+
+export interface KubernetesSecret {
+  namespace: string
+  name: string
+  type: string
+  data_count: number
+  created_at: string
+}
+
 export interface WorkloadContainer {
   name: string
   image: string

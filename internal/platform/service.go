@@ -518,6 +518,53 @@ func (s *Service) Ingresses(ctx context.Context, clusterID, namespace string) ([
 	return gateway.Ingresses(ctx, namespace)
 }
 
+func (s *Service) ConfigMaps(ctx context.Context, clusterID, namespace string) ([]domain.KubernetesConfigMap, error) {
+	if namespace != "" {
+		if err := domain.ValidateNamespace(namespace); err != nil {
+			return nil, err
+		}
+	}
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	gateway, err := s.kubeGateway(ctx, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	return gateway.ConfigMaps(ctx, namespace)
+}
+
+func (s *Service) Secrets(
+	ctx context.Context,
+	actor, requestID, clusterID, namespace string,
+) ([]domain.KubernetesSecret, error) {
+	if err := domain.ValidateNamespace(namespace); err != nil {
+		return nil, err
+	}
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	gateway, listErr := s.kubeGateway(ctx, clusterID)
+	var items []domain.KubernetesSecret
+	if listErr == nil {
+		items, listErr = gateway.Secrets(ctx, namespace)
+	}
+	result := "failed"
+	summary := "secret metadata list failed"
+	if listErr == nil {
+		result = "succeeded"
+		summary = fmt.Sprintf("count=%d", len(items))
+	}
+	if err := s.audit(ctx, actor, requestID, "secret.metadata.list", result, clusterID, namespace, "secrets", summary, ""); err != nil {
+		return nil, fmt.Errorf("write secret metadata audit: %w", err)
+	}
+	return items, listErr
+}
+
 func (s *Service) WorkloadDetail(ctx context.Context, clusterID string, reference domain.WorkloadReference) (domain.WorkloadDetail, error) {
 	if err := domain.ValidateWorkloadReference(reference); err != nil {
 		return domain.WorkloadDetail{}, err

@@ -41,6 +41,11 @@ func TestServerAuthenticationAndClusterLifecycle(t *testing.T) {
 	if unauthorizedNetwork.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthorized network status = %d, want 401", unauthorizedNetwork.Code)
 	}
+	unauthorizedConfiguration := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorizedConfiguration, httptest.NewRequest(http.MethodGet, "/api/v1/clusters/clu_1/configmaps", nil))
+	if unauthorizedConfiguration.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized configuration status = %d, want 401", unauthorizedConfiguration.Code)
+	}
 
 	cookie := login(t, handler)
 	createBody := `{
@@ -116,6 +121,29 @@ func TestServerAuthenticationAndClusterLifecycle(t *testing.T) {
 		t.Fatalf("invalid network namespace status = %d, body = %s", invalidNetworkNamespace.Code, invalidNetworkNamespace.Body.String())
 	}
 	assertErrorField(t, invalidNetworkNamespace.Body.Bytes(), "namespace")
+	configMapsPath := "/api/v1/clusters/" + created.Data.ID + "/configmaps"
+	configMaps := authenticatedRequest(t, handler, cookie, http.MethodGet, configMapsPath, "")
+	if configMaps.Code != http.StatusOK || !strings.Contains(configMaps.Body.String(), `"name":"settings"`) ||
+		!strings.Contains(configMaps.Body.String(), `"data_count":3`) {
+		t.Fatalf("configmaps status = %d, body = %s", configMaps.Code, configMaps.Body.String())
+	}
+	invalidConfigMapNamespace := authenticatedRequest(t, handler, cookie, http.MethodGet, configMapsPath+"?namespace=bad%2Fnamespace", "")
+	if invalidConfigMapNamespace.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid configmap namespace status = %d, body = %s", invalidConfigMapNamespace.Code, invalidConfigMapNamespace.Body.String())
+	}
+	assertErrorField(t, invalidConfigMapNamespace.Body.Bytes(), "namespace")
+	secretsPath := "/api/v1/clusters/" + created.Data.ID + "/secrets"
+	missingSecretNamespace := authenticatedRequest(t, handler, cookie, http.MethodGet, secretsPath, "")
+	if missingSecretNamespace.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("missing secret namespace status = %d, body = %s", missingSecretNamespace.Code, missingSecretNamespace.Body.String())
+	}
+	assertErrorField(t, missingSecretNamespace.Body.Bytes(), "namespace")
+	secrets := authenticatedRequest(t, handler, cookie, http.MethodGet, secretsPath+"?namespace=payments", "")
+	if secrets.Code != http.StatusOK || !strings.Contains(secrets.Body.String(), `"name":"registry"`) ||
+		!strings.Contains(secrets.Body.String(), `"type":"kubernetes.io/dockerconfigjson"`) ||
+		strings.Contains(secrets.Body.String(), "registry-password") {
+		t.Fatalf("secrets status = %d, body = %s", secrets.Code, secrets.Body.String())
+	}
 
 	list := authenticatedRequest(t, handler, cookie, http.MethodGet, "/api/v1/clusters", "")
 	if list.Code != http.StatusOK {
@@ -683,6 +711,14 @@ func (testKube) Services(_ context.Context, namespace string) ([]domain.Kubernet
 func (testKube) Ingresses(context.Context, string) ([]domain.KubernetesIngress, error) {
 	return []domain.KubernetesIngress{{
 		Namespace: "payments", Name: "gateway", ClassName: "nginx", Hosts: []string{"gateway.example.com"}, HostCount: 1,
+	}}, nil
+}
+func (testKube) ConfigMaps(context.Context, string) ([]domain.KubernetesConfigMap, error) {
+	return []domain.KubernetesConfigMap{{Namespace: "payments", Name: "settings", DataCount: 3}}, nil
+}
+func (testKube) Secrets(_ context.Context, namespace string) ([]domain.KubernetesSecret, error) {
+	return []domain.KubernetesSecret{{
+		Namespace: namespace, Name: "registry", Type: "kubernetes.io/dockerconfigjson", DataCount: 1,
 	}}, nil
 }
 func (testKube) WorkloadDetail(_ context.Context, reference domain.WorkloadReference) (domain.WorkloadDetail, error) {
