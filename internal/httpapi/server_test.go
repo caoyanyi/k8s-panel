@@ -355,6 +355,32 @@ func TestServerSubmitsControlledWorkloadOperationsAndExposesCapacity(t *testing.
 		!strings.Contains(scale.Body.String(), `"kind":"workload.scale"`) {
 		t.Fatalf("scale status = %d, body = %s", scale.Code, scale.Body.String())
 	}
+	var scaleOperation struct {
+		Data domain.Operation `json:"data"`
+	}
+	decodeTestJSON(t, scale.Body.Bytes(), &scaleOperation)
+	invalidCancel := authenticatedRequest(
+		t, handler, cookie, http.MethodPost,
+		"/api/v1/operations/"+scaleOperation.Data.ID+"/cancellations", `{"unexpected":true}`,
+	)
+	if invalidCancel.Code != http.StatusBadRequest {
+		t.Fatalf("invalid cancel status = %d, body = %s", invalidCancel.Code, invalidCancel.Body.String())
+	}
+	canceled := authenticatedRequest(
+		t, handler, cookie, http.MethodPost,
+		"/api/v1/operations/"+scaleOperation.Data.ID+"/cancellations", `{}`,
+	)
+	if canceled.Code != http.StatusOK || !strings.Contains(canceled.Body.String(), `"state":"canceled"`) {
+		t.Fatalf("cancel status = %d, body = %s", canceled.Code, canceled.Body.String())
+	}
+	duplicateCancel := authenticatedRequest(
+		t, handler, cookie, http.MethodPost,
+		"/api/v1/operations/"+scaleOperation.Data.ID+"/cancellations", `{}`,
+	)
+	if duplicateCancel.Code != http.StatusConflict {
+		t.Fatalf("duplicate cancel status = %d, body = %s", duplicateCancel.Code, duplicateCancel.Body.String())
+	}
+	assertErrorCode(t, duplicateCancel.Body.Bytes(), "invalid_state")
 	restart := authenticatedRequest(t, handler, cookie, http.MethodPost, base+"/restarts", `{
 		"resource_version":"43","confirmation":"production-east"
 	}`)

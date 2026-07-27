@@ -585,6 +585,22 @@ func (s *Server) getOperation(w http.ResponseWriter, r *http.Request) {
 	writeData(w, http.StatusOK, item)
 }
 
+func (s *Server) cancelOperation(w http.ResponseWriter, r *http.Request) {
+	var input struct{}
+	if err := decodeJSON(w, r, &input); err != nil {
+		writeInvalidJSON(w, r)
+		return
+	}
+	item, err := s.service.CancelOperation(
+		r.Context(), principal(r).Username, requestID(r), r.PathValue("id"),
+	)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeData(w, http.StatusOK, item)
+}
+
 func (s *Server) listAuditEvents(w http.ResponseWriter, r *http.Request) {
 	limit, err := parseLimit(r.URL.Query().Get("limit"))
 	if err != nil {

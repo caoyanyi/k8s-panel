@@ -83,6 +83,7 @@ const (
 	OperationRunning   OperationState = "running"
 	OperationSucceeded OperationState = "succeeded"
 	OperationFailed    OperationState = "failed"
+	OperationCanceled  OperationState = "canceled"
 	OperationUnknown   OperationState = "unknown"
 )
 

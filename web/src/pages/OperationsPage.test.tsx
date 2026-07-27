@@ -1,4 +1,5 @@
 import { act, render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { OperationsPage } from './OperationsPage'
 
@@ -9,7 +10,17 @@ describe('OperationsPage', () => {
   })
 
   it('shows adaptive operation capacity without exposing host details', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockImplementation((input: RequestInfo | URL) => {
+    let canceled = false
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === 'POST' && String(input).endsWith('/operations/op_1/cancellations')) {
+        canceled = true
+        return Promise.resolve(dataResponse({
+          id: 'op_1', request_id: 'req_1', kind: 'workload.scale', state: 'canceled',
+          cluster_id: 'clu_1', namespace: 'payments', target: 'gateway', submitted_by: 'admin',
+          summary: 'replicas=5, resource_version=42', created_at: '2026-07-25T08:00:00Z',
+          finished_at: '2026-07-25T08:02:00Z', updated_at: '2026-07-25T08:02:00Z',
+        }))
+      }
       if (String(input).endsWith('/system/resources')) {
         return Promise.resolve(dataResponse({
           adaptive: true,
@@ -25,17 +36,20 @@ describe('OperationsPage', () => {
         }))
       }
       return Promise.resolve(dataResponse([{
-        id: 'op_1', request_id: 'req_1', kind: 'workload.scale', state: 'queued',
+        id: 'op_1', request_id: 'req_1', kind: 'workload.scale', state: canceled ? 'canceled' : 'queued',
         cluster_id: 'clu_1', namespace: 'payments', target: 'gateway', submitted_by: 'admin',
         summary: 'replicas=5, resource_version=42', created_at: '2026-07-25T08:00:00Z', updated_at: '2026-07-25T08:00:00Z',
       }, {
-        id: 'op_2', request_id: 'req_2', kind: 'workload.image_update', state: 'queued',
+        id: 'op_2', request_id: 'req_2', kind: 'workload.image_update', state: 'running',
         cluster_id: 'clu_1', namespace: 'payments', target: 'gateway', submitted_by: 'admin',
         summary: 'container=app, fields=1, resource_version=42', created_at: '2026-07-25T08:01:00Z', updated_at: '2026-07-25T08:01:00Z',
       }]))
-    }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const notify = vi.fn()
+    const user = userEvent.setup()
 
-    render(<OperationsPage />)
+    render(<OperationsPage notify={notify} />)
 
     expect(await screen.findByText('工作负载扩缩容')).toBeInTheDocument()
     expect(screen.getByText('工作负载镜像更新')).toBeInTheDocument()
@@ -47,6 +61,15 @@ describe('OperationsPage', () => {
     expect(screen.getByText('队列 3 / 64')).toBeInTheDocument()
     expect(document.body.textContent).not.toContain('/proc')
     expect(document.body.textContent).not.toContain('/sys/fs/cgroup')
+    expect(screen.queryByRole('button', { name: '取消任务 op_2' })).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: '取消任务 op_1' }))
+    expect(await screen.findByText('已取消')).toBeInTheDocument()
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/operations/op_1/cancellations', expect.objectContaining({
+      method: 'POST', body: '{}',
+    }))
+    expect(notify).toHaveBeenCalledWith('success', '任务 op_1 已取消')
+    expect(screen.queryByRole('button', { name: '取消任务 op_1' })).not.toBeInTheDocument()
   })
 
   it('pauses polling while hidden and refreshes after becoming visible', async () => {
@@ -63,7 +86,7 @@ describe('OperationsPage', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
 
-    render(<OperationsPage />)
+    render(<OperationsPage notify={vi.fn()} />)
     await act(async () => { await Promise.resolve(); await Promise.resolve() })
     expect(screen.getByText('内存 -')).toBeInTheDocument()
     expect(screen.getByText('自适应已关闭')).toBeInTheDocument()

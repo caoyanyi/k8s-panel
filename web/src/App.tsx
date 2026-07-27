@@ -107,7 +107,7 @@ function AuthenticatedApp({ principal, onAnonymous }: { principal: Principal; on
         {route === 'resources' && <ClusterResourcesPage />}
         {route === 'workloads' && <WorkloadsPage notify={notify} openOperations={() => navigate('operations')} />}
         {route === 'helm' && <HelmPage notify={notify} openOperations={() => navigate('operations')} />}
-        {route === 'operations' && <OperationsPage />}
+        {route === 'operations' && <OperationsPage notify={notify} />}
         {route === 'audit' && <AuditPage />}
       </Layout>
     </PanelContext.Provider>

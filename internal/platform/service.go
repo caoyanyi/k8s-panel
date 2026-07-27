@@ -19,18 +19,20 @@ const (
 )
 
 type Service struct {
-	store             Store
-	cipher            SecretCipher
-	targetValidator   TargetValidator
-	kubeFactory       KubeFactory
-	repositoryChecker RepositoryChecker
-	helm              HelmGateway
-	operationGovernor OperationGovernor
-	clock             func() time.Time
-	newID             func(string) (string, error)
-	queue             chan operationJob
-	runOnce           sync.Once
-	targetLocks       [targetLockStripes]sync.Mutex
+	store               Store
+	cipher              SecretCipher
+	targetValidator     TargetValidator
+	kubeFactory         KubeFactory
+	repositoryChecker   RepositoryChecker
+	helm                HelmGateway
+	operationGovernor   OperationGovernor
+	clock               func() time.Time
+	newID               func(string) (string, error)
+	queue               chan operationJob
+	runOnce             sync.Once
+	targetLocks         [targetLockStripes]chan struct{}
+	operationControlsMu sync.Mutex
+	operationControls   map[string]*operationControl
 }
 
 type operationJob struct {
@@ -38,6 +40,12 @@ type operationJob struct {
 	helmInput          *domain.HelmOperationInput
 	workloadInput      *domain.WorkloadOperationInput
 	workloadImageInput *domain.WorkloadImageOperationInput
+	control            *operationControl
+}
+
+type operationControl struct {
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 func New(dependencies Dependencies) (*Service, error) {
@@ -58,7 +66,7 @@ func New(dependencies Dependencies) (*Service, error) {
 	if dependencies.OperationQueueSize < 1 || dependencies.OperationQueueSize > maxOperationQueueSize {
 		return nil, errors.New("operation queue size must be between 1 and 128")
 	}
-	return &Service{
+	service := &Service{
 		store:             dependencies.Store,
 		cipher:            dependencies.Cipher,
 		targetValidator:   dependencies.TargetValidator,
@@ -69,7 +77,12 @@ func New(dependencies Dependencies) (*Service, error) {
 		clock:             dependencies.Clock,
 		newID:             dependencies.NewID,
 		queue:             make(chan operationJob, dependencies.OperationQueueSize),
-	}, nil
+		operationControls: make(map[string]*operationControl, dependencies.OperationQueueSize),
+	}
+	for index := range service.targetLocks {
+		service.targetLocks[index] = make(chan struct{}, 1)
+	}
+	return service, nil
 }
 
 func (s *Service) CreateCluster(

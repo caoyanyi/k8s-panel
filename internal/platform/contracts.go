@@ -25,6 +25,7 @@ type Store interface {
 	CreateOperation(context.Context, domain.Operation) error
 	GetOperation(context.Context, string) (domain.Operation, error)
 	UpdateOperation(context.Context, domain.Operation) error
+	TransitionOperation(context.Context, domain.OperationState, domain.Operation, *domain.AuditEvent) error
 	ListOperations(context.Context, int) ([]domain.Operation, error)
 
 	CreateAuditEvent(context.Context, domain.AuditEvent) error

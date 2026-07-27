@@ -12,6 +12,7 @@ const labels: Record<string, string> = {
   running: '执行中',
   succeeded: '成功',
   failed: '失败',
+  canceled: '已取消',
   unknown: '待确认',
   ready: '就绪',
   notready: '未就绪',

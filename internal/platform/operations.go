@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 
 	"github.com/caoyanyi/k8s-panel/internal/domain"
 )
@@ -14,12 +13,17 @@ func (s *Service) Run(ctx context.Context, workers int) {
 	if workers < 1 {
 		workers = 1
 	}
+	started := false
 	s.runOnce.Do(func() {
+		started = true
 		for range workers {
 			go s.worker(ctx)
 		}
 	})
 	<-ctx.Done()
+	if started {
+		s.cancelAllOperationControls()
+	}
 }
 
 func (s *Service) SubmitHelmOperation(
@@ -195,12 +199,53 @@ func (s *Service) SubmitWorkloadImageUpdate(
 	return s.createAndEnqueueOperation(ctx, operation, operationJob{operationID: id, workloadImageInput: &input})
 }
 
+func (s *Service) CancelOperation(
+	ctx context.Context,
+	actor string,
+	requestID string,
+	operationID string,
+) (domain.Operation, error) {
+	if err := domain.ValidateOperationID(operationID); err != nil {
+		return domain.Operation{}, err
+	}
+	operation, err := s.store.GetOperation(ctx, operationID)
+	if err != nil {
+		return domain.Operation{}, err
+	}
+	if operation.State != domain.OperationQueued {
+		return domain.Operation{}, domain.ErrInvalidState
+	}
+	auditID, err := s.newID("audit")
+	if err != nil {
+		return domain.Operation{}, fmt.Errorf("create cancellation audit ID: %w", err)
+	}
+	now := s.now()
+	operation.State = domain.OperationCanceled
+	operation.ErrorCode = ""
+	operation.ErrorMessage = ""
+	operation.FinishedAt = now
+	operation.UpdatedAt = now
+	audit := domain.AuditEvent{
+		ID: auditID, RequestID: requestID, OperationID: operation.ID, Actor: actor,
+		Action: "operation.cancel", Result: "succeeded", ClusterID: operation.ClusterID,
+		Namespace: operation.Namespace, Target: operation.Target, Summary: "kind=" + string(operation.Kind), CreatedAt: now,
+	}
+	if err := s.store.TransitionOperation(ctx, domain.OperationQueued, operation, &audit); err != nil {
+		return domain.Operation{}, err
+	}
+	s.signalOperationCancellation(operation.ID)
+	return operation, nil
+}
+
 func (s *Service) createAndEnqueueOperation(
 	ctx context.Context,
 	operation domain.Operation,
 	job operationJob,
 ) (domain.Operation, error) {
+	control := s.registerOperationControl(operation.ID)
+	job.control = control
 	if err := s.store.CreateOperation(ctx, operation); err != nil {
+		s.releaseOperationControl(operation.ID, control)
 		return domain.Operation{}, err
 	}
 	if err := s.audit(
@@ -212,19 +257,25 @@ func (s *Service) createAndEnqueueOperation(
 		operation.ErrorMessage = "操作审计写入失败，任务未执行"
 		operation.FinishedAt = s.now()
 		operation.UpdatedAt = operation.FinishedAt
-		_ = s.store.UpdateOperation(context.WithoutCancel(ctx), operation)
+		_ = s.store.TransitionOperation(
+			context.WithoutCancel(ctx), domain.OperationQueued, operation, nil,
+		)
+		s.releaseOperationControl(operation.ID, control)
 		return domain.Operation{}, fmt.Errorf("write operation audit: %w", err)
 	}
 	select {
 	case s.queue <- job:
 		return operation, nil
 	default:
+		s.releaseOperationControl(operation.ID, control)
 		operation.State = domain.OperationFailed
 		operation.ErrorCode = "queue_full"
 		operation.ErrorMessage = "操作队列已满，请稍后重试"
 		operation.FinishedAt = s.now()
 		operation.UpdatedAt = operation.FinishedAt
-		if err := s.store.UpdateOperation(context.WithoutCancel(ctx), operation); err != nil {
+		if err := s.store.TransitionOperation(
+			context.WithoutCancel(ctx), domain.OperationQueued, operation, nil,
+		); err != nil {
 			return domain.Operation{}, err
 		}
 		_ = s.audit(
@@ -247,14 +298,24 @@ func (s *Service) worker(ctx context.Context) {
 }
 
 func (s *Service) executeOperation(ctx context.Context, job operationJob) {
-	operation, err := s.store.GetOperation(ctx, job.operationID)
+	executionContext, finish := s.operationExecutionContext(ctx, job)
+	defer finish()
+
+	operation, err := s.store.GetOperation(executionContext, job.operationID)
 	if err != nil {
 		return
 	}
-	lock := s.targetLock(operation.ClusterID, operation.Namespace, operation.Target)
-	lock.Lock()
-	defer lock.Unlock()
-	_, release, err := s.operationGovernor.Acquire(ctx)
+	if operation.State != domain.OperationQueued {
+		return
+	}
+	releaseTarget, err := s.acquireTargetLock(
+		executionContext, operation.ClusterID, operation.Namespace, operation.Target,
+	)
+	if err != nil {
+		return
+	}
+	defer releaseTarget()
+	_, release, err := s.operationGovernor.Acquire(executionContext)
 	if err != nil {
 		return
 	}
@@ -263,10 +324,12 @@ func (s *Service) executeOperation(ctx context.Context, job operationJob) {
 	operation.State = domain.OperationRunning
 	operation.StartedAt = s.now()
 	operation.UpdatedAt = operation.StartedAt
-	if err := s.store.UpdateOperation(ctx, operation); err != nil {
+	if err := s.store.TransitionOperation(
+		executionContext, domain.OperationQueued, operation, nil,
+	); err != nil {
 		return
 	}
-	err = s.executeOperationJob(ctx, operation, job)
+	err = s.executeOperationJob(executionContext, operation, job)
 	now := s.now()
 	operation.FinishedAt = now
 	operation.UpdatedAt = now
@@ -302,6 +365,70 @@ func (s *Service) executeOperation(ctx context.Context, job operationJob) {
 		operation.ErrorMessage = "操作结果审计写入失败，请人工确认目标状态"
 	}
 	_ = s.store.UpdateOperation(context.WithoutCancel(ctx), operation)
+}
+
+func (s *Service) registerOperationControl(operationID string) *operationControl {
+	controlContext, cancel := context.WithCancel(context.Background())
+	control := &operationControl{ctx: controlContext, cancel: cancel}
+	s.operationControlsMu.Lock()
+	previous := s.operationControls[operationID]
+	s.operationControls[operationID] = control
+	s.operationControlsMu.Unlock()
+	if previous != nil {
+		previous.cancel()
+	}
+	return control
+}
+
+func (s *Service) signalOperationCancellation(operationID string) {
+	s.operationControlsMu.Lock()
+	control := s.operationControls[operationID]
+	delete(s.operationControls, operationID)
+	s.operationControlsMu.Unlock()
+	if control != nil {
+		control.cancel()
+	}
+}
+
+func (s *Service) releaseOperationControl(operationID string, control *operationControl) {
+	if control == nil {
+		return
+	}
+	control.cancel()
+	s.operationControlsMu.Lock()
+	if s.operationControls[operationID] == control {
+		delete(s.operationControls, operationID)
+	}
+	s.operationControlsMu.Unlock()
+}
+
+func (s *Service) cancelAllOperationControls() {
+	s.operationControlsMu.Lock()
+	controls := make([]*operationControl, 0, len(s.operationControls))
+	for operationID, control := range s.operationControls {
+		controls = append(controls, control)
+		delete(s.operationControls, operationID)
+	}
+	s.operationControlsMu.Unlock()
+	for _, control := range controls {
+		control.cancel()
+	}
+}
+
+func (s *Service) operationExecutionContext(
+	parent context.Context,
+	job operationJob,
+) (context.Context, func()) {
+	if job.control == nil {
+		return parent, func() {}
+	}
+	executionContext, cancel := context.WithCancel(parent)
+	stop := context.AfterFunc(job.control.ctx, cancel)
+	return executionContext, func() {
+		stop()
+		cancel()
+		s.releaseOperationControl(job.operationID, job.control)
+	}
 }
 
 func (s *Service) executeOperationJob(ctx context.Context, operation domain.Operation, job operationJob) error {
@@ -404,14 +531,30 @@ func (s *Service) OperationCapacity() OperationCapacity {
 	}
 }
 
-func (s *Service) targetLock(clusterID, namespace, name string) *sync.Mutex {
+func (s *Service) acquireTargetLock(
+	ctx context.Context,
+	clusterID, namespace, name string,
+) (func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	lock := s.targetLock(clusterID, namespace, name)
+	select {
+	case lock <- struct{}{}:
+		return func() { <-lock }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (s *Service) targetLock(clusterID, namespace, name string) chan struct{} {
 	value := clusterID + "\x00" + namespace + "\x00" + name
 	var hash uint64 = 14695981039346656037
 	for index := range len(value) {
 		hash ^= uint64(value[index])
 		hash *= 1099511628211
 	}
-	return &s.targetLocks[hash%targetLockStripes]
+	return s.targetLocks[hash%targetLockStripes]
 }
 
 func (s *Service) audit(

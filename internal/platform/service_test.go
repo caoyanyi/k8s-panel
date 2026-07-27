@@ -528,6 +528,205 @@ func TestServiceDefersOperationsDuringCriticalResourcePressure(t *testing.T) {
 	waitForOperationState(t, service, operation.ID, domain.OperationSucceeded)
 }
 
+func TestServiceCancelsQueuedOperationAndInterruptsResourceWait(t *testing.T) {
+	t.Parallel()
+
+	governor := &cancelAwareGovernor{
+		started:  make(chan struct{}, 1),
+		canceled: make(chan struct{}, 1),
+	}
+	gateway := &fakeKubeGateway{probe: domain.ClusterProbe{Version: "v1.36.2"}}
+	service, _, _ := newTestService(t, serviceFakes{kube: gateway, governor: governor})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go service.Run(ctx, 1)
+
+	cluster, err := service.CreateCluster(context.Background(), "admin", "req_cluster", domain.ClusterInput{
+		Name: "development", Environment: domain.EnvironmentDevelopment, Server: "https://api.example.com", BearerToken: "token",
+	})
+	if err != nil {
+		t.Fatalf("CreateCluster() error = %v", err)
+	}
+	replicas := int32(2)
+	operation, err := service.SubmitWorkloadOperation(
+		context.Background(), "admin", "req_scale", domain.OperationWorkloadScale, domain.WorkloadOperationInput{
+			ClusterID: cluster.ID, Reference: domain.WorkloadReference{Kind: "deployment", Namespace: "payments", Name: "gateway"},
+			ResourceVersion: "42", Replicas: &replicas,
+		},
+	)
+	if err != nil {
+		t.Fatalf("SubmitWorkloadOperation() error = %v", err)
+	}
+	select {
+	case <-governor.started:
+	case <-time.After(time.Second):
+		t.Fatal("operation did not start waiting for a resource slot")
+	}
+
+	canceled, err := service.CancelOperation(context.Background(), "admin", "req_cancel", operation.ID)
+	if err != nil {
+		t.Fatalf("CancelOperation() error = %v", err)
+	}
+	if canceled.State != domain.OperationCanceled || canceled.FinishedAt.IsZero() || canceled.ErrorCode != "" {
+		t.Fatalf("canceled operation = %#v", canceled)
+	}
+	select {
+	case <-governor.canceled:
+	case <-time.After(time.Second):
+		t.Fatal("resource wait was not interrupted after cancellation")
+	}
+	if _, err := service.CancelOperation(context.Background(), "admin", "req_duplicate", operation.ID); !errors.Is(err, domain.ErrInvalidState) {
+		t.Fatalf("duplicate CancelOperation() error = %v, want ErrInvalidState", err)
+	}
+	gateway.mutationMu.Lock()
+	mutated := gateway.scaledVersion != ""
+	gateway.mutationMu.Unlock()
+	if mutated {
+		t.Fatal("canceled workload operation reached Kubernetes")
+	}
+	audits, err := service.ListAuditEvents(context.Background(), 100)
+	if err != nil {
+		t.Fatalf("ListAuditEvents() error = %v", err)
+	}
+	cancelAudits := 0
+	for _, audit := range audits {
+		if audit.Action == "operation.cancel" && audit.Result == "succeeded" && audit.OperationID == operation.ID {
+			cancelAudits++
+		}
+	}
+	if cancelAudits != 1 {
+		t.Fatalf("successful cancellation audits = %d, want 1", cancelAudits)
+	}
+}
+
+func TestServiceCancelsOperationWaitingForTargetLock(t *testing.T) {
+	t.Parallel()
+
+	started := make(chan string, 1)
+	release := make(chan struct{}, 1)
+	helm := &blockingHelmGateway{started: started, release: release}
+	service, _, _ := newTestService(t, serviceFakes{
+		kube: &fakeKubeGateway{probe: domain.ClusterProbe{Version: "v1.36.2"}}, helm: helm,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	cluster, err := service.CreateCluster(context.Background(), "admin", "req_cluster", domain.ClusterInput{
+		Name: "development", Environment: domain.EnvironmentDevelopment, Server: "https://api.example.com", BearerToken: "token",
+	})
+	if err != nil {
+		t.Fatalf("CreateCluster() error = %v", err)
+	}
+	repository, err := service.CreateRepository(context.Background(), "admin", "req_repo", domain.RepositoryInput{
+		Name: "stable", URL: "https://charts.example.com",
+	})
+	if err != nil {
+		t.Fatalf("CreateRepository() error = %v", err)
+	}
+	releaseTarget, err := service.acquireTargetLock(context.Background(), cluster.ID, "payments", "gateway")
+	if err != nil {
+		t.Fatalf("acquireTargetLock() error = %v", err)
+	}
+	t.Cleanup(releaseTarget)
+	go service.Run(ctx, 1)
+
+	submit := func(requestID, releaseName string) domain.Operation {
+		t.Helper()
+		operation, submitErr := service.SubmitHelmOperation(
+			context.Background(), "admin", requestID, domain.OperationHelmInstall, domain.HelmOperationInput{
+				ClusterID: cluster.ID, Namespace: "payments", ReleaseName: releaseName,
+				Chart: "gateway", RepositoryID: repository.ID,
+			},
+		)
+		if submitErr != nil {
+			t.Fatalf("SubmitHelmOperation(%s) error = %v", releaseName, submitErr)
+		}
+		return operation
+	}
+
+	blocked := submit("req_blocked", "gateway")
+	deadline := time.Now().Add(time.Second)
+	for service.OperationCapacity().QueueDepth != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("blocked operation was not claimed by a worker")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if _, err := service.CancelOperation(context.Background(), "admin", "req_cancel", blocked.ID); err != nil {
+		t.Fatalf("CancelOperation() error = %v", err)
+	}
+
+	otherTarget := "worker"
+	for service.targetLock(cluster.ID, "payments", otherTarget) == service.targetLock(cluster.ID, "payments", "gateway") {
+		otherTarget += "-x"
+	}
+	next := submit("req_next", otherTarget)
+	select {
+	case name := <-started:
+		if name != otherTarget {
+			t.Fatalf("next started release = %q, want %q", name, otherTarget)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("canceled target-lock wait did not release its worker")
+	}
+	release <- struct{}{}
+	waitForOperationState(t, service, next.ID, domain.OperationSucceeded)
+}
+
+func TestServiceTargetLockHonorsCanceledContext(t *testing.T) {
+	t.Parallel()
+
+	service, _, _ := newTestService(t, serviceFakes{})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := service.acquireTargetLock(ctx, "clu_1", "payments", "gateway"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("acquireTargetLock() error = %v, want context canceled", err)
+	}
+}
+
+func TestServiceRejectsCancellationAfterOperationStarts(t *testing.T) {
+	t.Parallel()
+
+	started := make(chan string, 1)
+	release := make(chan struct{}, 1)
+	helm := &blockingHelmGateway{started: started, release: release}
+	service, _, _ := newTestService(t, serviceFakes{
+		kube: &fakeKubeGateway{probe: domain.ClusterProbe{Version: "v1.36.2"}}, helm: helm,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go service.Run(ctx, 1)
+
+	cluster, err := service.CreateCluster(context.Background(), "admin", "req_cluster", domain.ClusterInput{
+		Name: "development", Environment: domain.EnvironmentDevelopment, Server: "https://api.example.com", BearerToken: "token",
+	})
+	if err != nil {
+		t.Fatalf("CreateCluster() error = %v", err)
+	}
+	repository, err := service.CreateRepository(context.Background(), "admin", "req_repo", domain.RepositoryInput{
+		Name: "stable", URL: "https://charts.example.com",
+	})
+	if err != nil {
+		t.Fatalf("CreateRepository() error = %v", err)
+	}
+	operation, err := service.SubmitHelmOperation(context.Background(), "admin", "req_install", domain.OperationHelmInstall, domain.HelmOperationInput{
+		ClusterID: cluster.ID, Namespace: "payments", ReleaseName: "gateway", Chart: "gateway", RepositoryID: repository.ID,
+	})
+	if err != nil {
+		t.Fatalf("SubmitHelmOperation() error = %v", err)
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("Helm operation did not start")
+	}
+	if _, err := service.CancelOperation(context.Background(), "admin", "req_cancel", operation.ID); !errors.Is(err, domain.ErrInvalidState) {
+		t.Fatalf("CancelOperation() error = %v, want ErrInvalidState", err)
+	}
+	release <- struct{}{}
+	waitForOperationState(t, service, operation.ID, domain.OperationSucceeded)
+}
+
 func TestServiceRejectsOperationsWhenBoundedQueueIsFull(t *testing.T) {
 	t.Parallel()
 
@@ -755,6 +954,24 @@ func (s staticResourceSampler) Sample() resourceguard.Sample { return s.sample }
 type mutableResourceSampler struct {
 	mu     sync.RWMutex
 	sample resourceguard.Sample
+}
+
+type cancelAwareGovernor struct {
+	started  chan struct{}
+	canceled chan struct{}
+}
+
+func (g *cancelAwareGovernor) Acquire(ctx context.Context) (resourceguard.Snapshot, func(), error) {
+	g.started <- struct{}{}
+	<-ctx.Done()
+	g.canceled <- struct{}{}
+	return resourceguard.Snapshot{}, nil, ctx.Err()
+}
+
+func (g *cancelAwareGovernor) Snapshot() resourceguard.Snapshot {
+	return resourceguard.Snapshot{
+		Adaptive: true, Pressure: resourceguard.PressureCritical, OperationLimit: 0, MaximumOperations: 1,
+	}
 }
 
 func (s *mutableResourceSampler) Sample() resourceguard.Sample {

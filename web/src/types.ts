@@ -1,6 +1,6 @@
 export type Environment = 'development' | 'staging' | 'production'
 export type ClusterStatus = 'pending' | 'connected' | 'degraded' | 'unreachable' | 'disabled'
-export type OperationState = 'queued' | 'running' | 'succeeded' | 'failed' | 'unknown'
+export type OperationState = 'queued' | 'running' | 'succeeded' | 'failed' | 'canceled' | 'unknown'
 export type ResourcePressure = 'unknown' | 'normal' | 'constrained' | 'critical'
 
 export interface Principal {

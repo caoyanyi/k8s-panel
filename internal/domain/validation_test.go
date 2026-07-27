@@ -461,3 +461,33 @@ func TestValidateWorkloadImageOperationInput(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateOperationID(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name      string
+		id        string
+		wantError bool
+	}{
+		{name: "valid", id: "op_0123456789abcdef"},
+		{name: "empty", id: "", wantError: true},
+		{name: "path traversal", id: "../op_1", wantError: true},
+		{name: "too long", id: strings.Repeat("a", 65), wantError: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			err := ValidateOperationID(test.id)
+			if test.wantError {
+				var validationErr *ValidationError
+				if !errors.As(err, &validationErr) || validationErr.Field != "operation_id" {
+					t.Fatalf("ValidateOperationID() error = %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ValidateOperationID() error = %v", err)
+			}
+		})
+	}
+}

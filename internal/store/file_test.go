@@ -115,6 +115,94 @@ func TestFileStoreMarksUnrecoverableOperationsUnknown(t *testing.T) {
 	}
 }
 
+func TestFileStoreTransitionsOperationAndAuditAtomically(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "panel.json")
+	started := time.Date(2026, 7, 24, 8, 0, 0, 0, time.UTC)
+	finished := started.Add(time.Minute)
+	fileStore, err := Open(path, func() time.Time { return started })
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	operation := domain.Operation{
+		ID: "op_queued", Kind: domain.OperationWorkloadScale, State: domain.OperationQueued,
+		Target: "gateway", CreatedAt: started, UpdatedAt: started,
+	}
+	if err := fileStore.CreateOperation(context.Background(), operation); err != nil {
+		t.Fatalf("CreateOperation() error = %v", err)
+	}
+	canceledContext, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := fileStore.TransitionOperation(
+		canceledContext, domain.OperationQueued, operation, nil,
+	); !errors.Is(err, context.Canceled) {
+		t.Fatalf("TransitionOperation(canceled context) error = %v", err)
+	}
+	if err := fileStore.TransitionOperation(
+		context.Background(), domain.OperationQueued, domain.Operation{}, nil,
+	); err == nil {
+		t.Fatal("TransitionOperation() accepted an empty operation ID")
+	}
+	if err := fileStore.TransitionOperation(
+		context.Background(), domain.OperationQueued, operation,
+		&domain.AuditEvent{ID: "audit_invalid", OperationID: "op_other"},
+	); err == nil {
+		t.Fatal("TransitionOperation() accepted a mismatched audit operation ID")
+	}
+	missing := operation
+	missing.ID = "op_missing"
+	if err := fileStore.TransitionOperation(
+		context.Background(), domain.OperationQueued, missing, nil,
+	); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("TransitionOperation(missing) error = %v, want ErrNotFound", err)
+	}
+	canceled := operation
+	canceled.State = domain.OperationCanceled
+	canceled.FinishedAt = finished
+	canceled.UpdatedAt = finished
+	audit := domain.AuditEvent{
+		ID: "audit_cancel", RequestID: "req_cancel", OperationID: operation.ID,
+		Actor: "admin", Action: "operation.cancel", Result: "succeeded", Target: operation.Target, CreatedAt: finished,
+	}
+	if err := fileStore.TransitionOperation(
+		context.Background(), domain.OperationQueued, canceled, &audit,
+	); err != nil {
+		t.Fatalf("TransitionOperation() error = %v", err)
+	}
+	if err := fileStore.TransitionOperation(
+		context.Background(), domain.OperationQueued, canceled, &audit,
+	); !errors.Is(err, domain.ErrInvalidState) {
+		t.Fatalf("duplicate TransitionOperation() error = %v, want ErrInvalidState", err)
+	}
+
+	reopened, err := Open(path, func() time.Time { return finished })
+	if err != nil {
+		t.Fatalf("Open() second error = %v", err)
+	}
+	got, err := reopened.GetOperation(context.Background(), operation.ID)
+	if err != nil || got.State != domain.OperationCanceled || !got.FinishedAt.Equal(finished) {
+		t.Fatalf("canceled operation = %#v, error = %v", got, err)
+	}
+	audits, err := reopened.ListAuditEvents(context.Background(), 100)
+	if err != nil || len(audits) != 1 || audits[0].ID != audit.ID || audits[0].OperationID != operation.ID {
+		t.Fatalf("cancel audits = %#v, error = %v", audits, err)
+	}
+	other := operation
+	other.ID = "op_other"
+	if err := reopened.CreateOperation(context.Background(), other); err != nil {
+		t.Fatalf("CreateOperation(other) error = %v", err)
+	}
+	other.State = domain.OperationCanceled
+	duplicateAudit := audit
+	duplicateAudit.OperationID = other.ID
+	if err := reopened.TransitionOperation(
+		context.Background(), domain.OperationQueued, other, &duplicateAudit,
+	); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("TransitionOperation(duplicate audit) error = %v, want ErrConflict", err)
+	}
+}
+
 func TestHistoryRetentionKeepsActiveOperationsAndNewestRecords(t *testing.T) {
 	t.Parallel()
 

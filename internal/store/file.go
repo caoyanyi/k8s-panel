@@ -335,6 +335,54 @@ func (s *File) UpdateOperation(ctx context.Context, operation domain.Operation) 
 	return domain.ErrNotFound
 }
 
+func (s *File) TransitionOperation(
+	ctx context.Context,
+	expected domain.OperationState,
+	operation domain.Operation,
+	audit *domain.AuditEvent,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if operation.ID == "" {
+		return errors.New("operation ID is required")
+	}
+	if audit != nil && (audit.ID == "" || audit.OperationID != operation.ID) {
+		return errors.New("operation transition audit is invalid")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	operationIndex := -1
+	for index := range s.data.Operations {
+		if s.data.Operations[index].ID == operation.ID {
+			operationIndex = index
+			break
+		}
+	}
+	if operationIndex < 0 {
+		return domain.ErrNotFound
+	}
+	if s.data.Operations[operationIndex].State != expected {
+		return domain.ErrInvalidState
+	}
+	if audit != nil {
+		for _, existing := range s.data.AuditEvents {
+			if existing.ID == audit.ID {
+				return domain.ErrConflict
+			}
+		}
+	}
+
+	next := cloneState(s.data)
+	next.Operations[operationIndex] = operation
+	if audit != nil {
+		next.AuditEvents = append(next.AuditEvents, *audit)
+		next.AuditEvents = trimAuditHistory(next.AuditEvents)
+	}
+	return s.commit(next)
+}
+
 func (s *File) ListOperations(ctx context.Context, limit int) ([]domain.Operation, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

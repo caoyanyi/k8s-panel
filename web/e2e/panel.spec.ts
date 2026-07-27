@@ -92,7 +92,7 @@ test('workload diagnostics show details, events, YAML and bounded logs', async (
   expect(consoleErrors).toEqual([])
 })
 
-test('production deployment scale enters the adaptive operation queue', async ({ page }, testInfo) => {
+test('queued deployment scale can be canceled while resources are constrained', async ({ page }, testInfo) => {
   const consoleErrors: string[] = []
   page.on('console', (message) => {
     if (message.type() === 'error') consoleErrors.push(message.text())
@@ -119,9 +119,18 @@ test('production deployment scale enters the adaptive operation queue', async ({
   await expect(page.getByText('资源承压')).toBeVisible()
   await expect(page.getByText('队列 1 / 64')).toBeVisible()
 
+  const cancelRequestPromise = page.waitForRequest((request) => request.method() === 'POST' && request.url().endsWith('/operations/op_scale/cancellations'))
+  await page.getByRole('button', { name: '取消任务 op_scale' }).click()
+  const cancelRequest = await cancelRequestPromise
+  expect(cancelRequest.postDataJSON()).toEqual({})
+  await expect(page.getByText('已取消', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '取消任务 op_scale' })).toHaveCount(0)
+
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
   expect(overflow).toBeLessThanOrEqual(1)
-  await page.screenshot({ path: `test-results/${testInfo.project.name}-controlled-scale.png`, fullPage: true })
+  const result = await new AxeBuilder({ page }).analyze()
+  expect(result.violations.filter((violation) => ['serious', 'critical'].includes(violation.impact ?? ''))).toEqual([])
+  await page.screenshot({ path: `test-results/${testInfo.project.name}-canceled-scale.png`, fullPage: true })
   expect(consoleErrors).toEqual([])
 })
 
@@ -235,6 +244,7 @@ async function mockWorkloadDiagnostics(page: Page) {
   let operationKind = 'workload.scale'
   let operationID = 'op_scale'
   let operationSummary = 'replicas=5, resource_version=73'
+  let operationState = 'queued'
   await page.route('**/api/v1/**', async (route) => {
     const url = new URL(route.request().url())
     const path = url.pathname
@@ -265,6 +275,7 @@ async function mockWorkloadDiagnostics(page: Page) {
       operationKind = 'workload.scale'
       operationID = 'op_scale'
       operationSummary = 'replicas=5, resource_version=73'
+      operationState = 'queued'
       data = {
         id: 'op_scale', request_id: 'req_scale', kind: 'workload.scale', state: 'queued',
         cluster_id: 'clu_1', namespace: 'payments', target: 'gateway-api', submitted_by: 'diagnostics-admin',
@@ -283,6 +294,7 @@ async function mockWorkloadDiagnostics(page: Page) {
       operationKind = 'workload.image_update'
       operationID = 'op_image'
       operationSummary = 'container=app, fields=1, resource_version=73'
+      operationState = 'queued'
       data = {
         id: operationID, request_id: 'req_image', kind: operationKind, state: 'queued',
         cluster_id: 'clu_1', namespace: 'payments', target: 'gateway-api', submitted_by: 'diagnostics-admin',
@@ -299,9 +311,17 @@ async function mockWorkloadDiagnostics(page: Page) {
         }],
         yaml: 'apiVersion: apps/v1\nkind: Deployment\n',
       }
+    } else if (path === `/api/v1/operations/${operationID}/cancellations` && route.request().method() === 'POST') {
+      operationState = 'canceled'
+      data = {
+        id: operationID, request_id: operationKind === 'workload.image_update' ? 'req_image' : 'req_scale', kind: operationKind, state: operationState,
+        cluster_id: 'clu_1', namespace: 'payments', target: 'gateway-api', submitted_by: 'diagnostics-admin',
+        summary: operationSummary, created_at: '2026-07-25T08:05:00Z', updated_at: '2026-07-25T08:06:00Z',
+        finished_at: '2026-07-25T08:06:00Z',
+      }
     } else if (path === '/api/v1/operations') {
       data = [{
-        id: operationID, request_id: operationKind === 'workload.image_update' ? 'req_image' : 'req_scale', kind: operationKind, state: 'queued',
+        id: operationID, request_id: operationKind === 'workload.image_update' ? 'req_image' : 'req_scale', kind: operationKind, state: operationState,
         cluster_id: 'clu_1', namespace: 'payments', target: 'gateway-api', submitted_by: 'diagnostics-admin',
         summary: operationSummary, created_at: '2026-07-25T08:05:00Z', updated_at: '2026-07-25T08:05:00Z',
       }]
@@ -309,7 +329,7 @@ async function mockWorkloadDiagnostics(page: Page) {
       data = {
         adaptive: true, pressure: 'constrained', memory_ratio: 0.84, load_ratio: 0.62,
         active_operations: 1, operation_limit: 1, maximum_operations: 2,
-        queue_depth: 1, queue_capacity: 64, sampled_at: '2026-07-25T08:05:00Z',
+        queue_depth: operationState === 'queued' ? 1 : 0, queue_capacity: 64, sampled_at: '2026-07-25T08:05:00Z',
       }
     } else if (path.endsWith('/workloads/pod/payments/gateway-0/events')) {
       data = [{

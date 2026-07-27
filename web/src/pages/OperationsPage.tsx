@@ -1,6 +1,6 @@
-import { Gauge, RefreshCw } from 'lucide-react'
-import { useCallback, useEffect, useRef } from 'react'
-import { api } from '../api'
+import { CircleX, Gauge, LoaderCircle, RefreshCw } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { api, errorMessage } from '../api'
 import { EmptyState, ErrorState, LoadingState } from '../components/DataState'
 import { PageHeader } from '../components/PageHeader'
 import { StatusBadge } from '../components/StatusBadge'
@@ -8,20 +8,24 @@ import { useResource } from '../hooks'
 import type { Operation, OperationCapacity } from '../types'
 import { formatDateTime } from '../utils'
 
-export function OperationsPage() {
+export function OperationsPage({ notify }: {
+  notify: (tone: 'success' | 'error', message: string) => void
+}) {
   const operations = useResource((signal) => api.get<Operation[]>('/api/v1/operations?limit=100', signal), [])
   const capacity = useResource((signal) => api.get<OperationCapacity>('/api/v1/system/resources', signal), [])
   const refreshInFlight = useRef(false)
+  const cancelRequestRef = useRef<AbortController | null>(null)
+  const [cancelingId, setCancelingId] = useState('')
 
   const refreshAll = useCallback(async () => {
-    if (refreshInFlight.current || operations.loading || capacity.loading) return
+    if (refreshInFlight.current || operations.loading || capacity.loading || cancelingId !== '') return
     refreshInFlight.current = true
     try {
       await Promise.allSettled([operations.refresh(), capacity.refresh()])
     } finally {
       refreshInFlight.current = false
     }
-  }, [capacity.loading, capacity.refresh, operations.loading, operations.refresh])
+  }, [cancelingId, capacity.loading, capacity.refresh, operations.loading, operations.refresh])
 
   useEffect(() => {
     const refresh = () => {
@@ -38,6 +42,34 @@ export function OperationsPage() {
     }
   }, [refreshAll])
 
+  useEffect(() => () => {
+    cancelRequestRef.current?.abort()
+    cancelRequestRef.current = null
+  }, [])
+
+  const cancelOperation = async (operation: Operation) => {
+    if (operation.state !== 'queued' || cancelingId !== '') return
+    const controller = new AbortController()
+    cancelRequestRef.current = controller
+    setCancelingId(operation.id)
+    try {
+      await api.post<Operation>(
+        `/api/v1/operations/${encodeURIComponent(operation.id)}/cancellations`, {}, controller.signal,
+      )
+      notify('success', `任务 ${operation.id} 已取消`)
+      await Promise.allSettled([operations.refresh(), capacity.refresh()])
+    } catch (error) {
+      if (!(error instanceof DOMException && error.name === 'AbortError')) {
+        notify('error', errorMessage(error))
+      }
+    } finally {
+      if (cancelRequestRef.current === controller) {
+        cancelRequestRef.current = null
+        setCancelingId('')
+      }
+    }
+  }
+
   return (
     <div className="page">
       <PageHeader
@@ -49,7 +81,7 @@ export function OperationsPage() {
       <section className="section-block table-section">
         {operations.loading && !operations.data ? <LoadingState label="正在读取操作记录" /> : operations.error ? <ErrorState error={operations.error} onRetry={() => void operations.refresh()} /> : !operations.data?.length ? <EmptyState title="暂无操作记录" /> : (
           <div className="table-wrap" role="region" aria-label="操作记录" tabIndex={0}><table>
-            <thead><tr><th>目标</th><th>动作</th><th>状态</th><th>作用域</th><th>提交人</th><th>提交时间</th><th>结果</th><th>请求 ID</th></tr></thead>
+            <thead><tr><th>目标</th><th>动作</th><th>状态</th><th>作用域</th><th>提交人</th><th>提交时间</th><th>结果</th><th>请求 ID</th><th className="operation-action-column">操作</th></tr></thead>
             <tbody>{operations.data.map((operation) => <tr key={operation.id}>
               <td><div className="primary-cell"><strong>{operation.target}</strong><span className="mono subtle-id">{operation.id}</span></div></td>
               <td>{operationLabel(operation.kind)}</td>
@@ -59,6 +91,18 @@ export function OperationsPage() {
               <td>{formatDateTime(operation.created_at)}</td>
               <td>{operation.error_code ? <span className="error-code">{operation.error_code}</span> : operation.summary || '-'}</td>
               <td className="mono subtle-id">{operation.request_id}</td>
+              <td className="operation-action-column">{operation.state === 'queued' && (
+                <button
+                  type="button"
+                  className="icon-button icon-danger"
+                  aria-label={`取消任务 ${operation.id}`}
+                  title="取消排队任务"
+                  disabled={cancelingId !== ''}
+                  onClick={() => void cancelOperation(operation)}
+                >
+                  {cancelingId === operation.id ? <LoaderCircle className="spin" size={17} /> : <CircleX size={17} />}
+                </button>
+              )}</td>
             </tr>)}</tbody>
           </table></div>
         )}

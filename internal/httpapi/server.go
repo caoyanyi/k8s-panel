@@ -148,6 +148,7 @@ func (s *Server) routes() {
 
 	s.mux.Handle("GET /api/v1/operations", s.protected(http.HandlerFunc(s.listOperations)))
 	s.mux.Handle("GET /api/v1/operations/{id}", s.protected(http.HandlerFunc(s.getOperation)))
+	s.mux.Handle("POST /api/v1/operations/{id}/cancellations", s.protected(http.HandlerFunc(s.cancelOperation)))
 	s.mux.Handle("GET /api/v1/audit-events", s.protected(http.HandlerFunc(s.listAuditEvents)))
 	s.mux.Handle("GET /api/v1/system/resources", s.protected(http.HandlerFunc(s.systemResources)))
 

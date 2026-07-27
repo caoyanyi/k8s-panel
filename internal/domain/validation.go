@@ -130,6 +130,13 @@ func ValidateWorkloadImageOperationInput(input WorkloadImageOperationInput) erro
 	return ValidateWorkloadImageChange(input.Change)
 }
 
+func ValidateOperationID(id string) error {
+	if !strings.HasPrefix(id, "op_") || !resourceNamePattern.MatchString(id) {
+		return Invalid("operation_id", "must be a valid operation identifier")
+	}
+	return nil
+}
+
 func ValidateWorkloadImageChange(change WorkloadImageChange) error {
 	if err := ValidateWorkloadReference(change.Reference); err != nil {
 		return err
