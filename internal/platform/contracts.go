@@ -59,7 +59,7 @@ type KubeGateway interface {
 }
 
 type KubeFactory interface {
-	New(kubernetes.Connection) (KubeGateway, error)
+	New(context.Context, kubernetes.Connection) (KubeGateway, error)
 }
 
 type RepositoryConnection struct {
@@ -101,23 +101,33 @@ type KubernetesReadCapacity struct {
 	Maximum  int                    `json:"maximum"`
 }
 
+type KubernetesClientCacheCapacity struct {
+	Entries  int `json:"entries"`
+	Capacity int `json:"capacity"`
+	Maximum  int `json:"maximum"`
+	Building int `json:"building"`
+}
+
 type OperationCapacity struct {
 	resourceguard.Snapshot
-	QueueDepth      int                    `json:"queue_depth"`
-	QueueCapacity   int                    `json:"queue_capacity"`
-	KubernetesReads KubernetesReadCapacity `json:"kubernetes_reads"`
+	QueueDepth        int                           `json:"queue_depth"`
+	QueueCapacity     int                           `json:"queue_capacity"`
+	KubernetesReads   KubernetesReadCapacity        `json:"kubernetes_reads"`
+	KubernetesClients KubernetesClientCacheCapacity `json:"kubernetes_clients"`
 }
 
 type Dependencies struct {
-	Store              Store
-	Cipher             SecretCipher
-	TargetValidator    TargetValidator
-	KubeFactory        KubeFactory
-	RepositoryChecker  RepositoryChecker
-	Helm               HelmGateway
-	OperationGovernor  OperationGovernor
-	ReadGovernor       ReadGovernor
-	OperationQueueSize int
-	Clock              func() time.Time
-	NewID              func(prefix string) (string, error)
+	Store                     Store
+	Cipher                    SecretCipher
+	TargetValidator           TargetValidator
+	KubeFactory               KubeFactory
+	RepositoryChecker         RepositoryChecker
+	Helm                      HelmGateway
+	OperationGovernor         OperationGovernor
+	ReadGovernor              ReadGovernor
+	OperationQueueSize        int
+	KubernetesClientCacheSize int
+	KubernetesClientCacheTTL  time.Duration
+	Clock                     func() time.Time
+	NewID                     func(prefix string) (string, error)
 }

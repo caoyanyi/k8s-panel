@@ -27,6 +27,7 @@ type Service struct {
 	helm                HelmGateway
 	operationGovernor   OperationGovernor
 	readGovernor        ReadGovernor
+	gatewayCache        *gatewayCache
 	clock               func() time.Time
 	newID               func(string) (string, error)
 	queue               chan operationJob
@@ -67,6 +68,18 @@ func New(dependencies Dependencies) (*Service, error) {
 	if dependencies.OperationQueueSize < 1 || dependencies.OperationQueueSize > maxOperationQueueSize {
 		return nil, errors.New("operation queue size must be between 1 and 128")
 	}
+	if dependencies.KubernetesClientCacheSize == 0 {
+		dependencies.KubernetesClientCacheSize = defaultGatewayCacheSize
+	}
+	if dependencies.KubernetesClientCacheTTL == 0 {
+		dependencies.KubernetesClientCacheTTL = defaultGatewayCacheTTL
+	}
+	gatewayCache, err := newGatewayCache(
+		dependencies.KubernetesClientCacheSize, dependencies.KubernetesClientCacheTTL, dependencies.Clock,
+	)
+	if err != nil {
+		return nil, err
+	}
 	service := &Service{
 		store:             dependencies.Store,
 		cipher:            dependencies.Cipher,
@@ -76,6 +89,7 @@ func New(dependencies Dependencies) (*Service, error) {
 		helm:              dependencies.Helm,
 		operationGovernor: dependencies.OperationGovernor,
 		readGovernor:      dependencies.ReadGovernor,
+		gatewayCache:      gatewayCache,
 		clock:             dependencies.Clock,
 		newID:             dependencies.NewID,
 		queue:             make(chan operationJob, dependencies.OperationQueueSize),
@@ -157,6 +171,7 @@ func (s *Service) GetCluster(ctx context.Context, id string) (ClusterView, error
 }
 
 func (s *Service) TestClusterConnection(ctx context.Context, actor, requestID, id string) (ClusterView, error) {
+	s.gatewayCache.Invalidate(id)
 	return s.testClusterConnection(ctx, actor, requestID, id)
 }
 
@@ -168,15 +183,14 @@ func (s *Service) testClusterConnection(ctx context.Context, actor, requestID, i
 	if cluster.Status == domain.ClusterDisabled {
 		return ClusterView{}, domain.ErrInvalidState
 	}
-	connection, err := s.clusterConnection(cluster)
+	gateway, err := s.gatewayForCluster(ctx, cluster)
 	if err != nil {
 		return ClusterView{}, err
 	}
-	gateway, err := s.kubeFactory.New(connection)
-	if err != nil {
-		return ClusterView{}, fmt.Errorf("create Kubernetes gateway: %w", err)
-	}
 	probe, probeErr := gateway.Probe(ctx)
+	if probeErr != nil {
+		s.gatewayCache.Invalidate(id)
+	}
 	now := s.now()
 	cluster.LastCheckedAt = now
 	cluster.UpdatedAt = now
@@ -212,6 +226,9 @@ func (s *Service) SetClusterEnabled(ctx context.Context, actor, requestID, id st
 	if err := s.store.UpdateCluster(ctx, cluster); err != nil {
 		return ClusterView{}, err
 	}
+	if !enabled {
+		s.gatewayCache.Invalidate(id)
+	}
 	if err := s.audit(ctx, actor, requestID, "cluster.update", "succeeded", id, "", cluster.Name, fmt.Sprintf("enabled=%t", enabled), ""); err != nil {
 		return ClusterView{}, err
 	}
@@ -233,7 +250,11 @@ func (s *Service) DeleteCluster(ctx context.Context, actor, requestID, id, expec
 	if err := s.audit(ctx, actor, requestID, "cluster.delete", "succeeded", id, "", cluster.Name, "connection metadata deleted", ""); err != nil {
 		return err
 	}
-	return s.store.DeleteCluster(ctx, id)
+	if err := s.store.DeleteCluster(ctx, id); err != nil {
+		return err
+	}
+	s.gatewayCache.Invalidate(id)
+	return nil
 }
 
 func (s *Service) Summary(ctx context.Context, clusterID string) (domain.ClusterSummary, error) {
@@ -392,7 +413,8 @@ func (s *Service) acquireKubernetesRead(ctx context.Context) (func(), error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	_, release, ok := s.readGovernor.TryAcquire()
+	snapshot, release, ok := s.readGovernor.TryAcquire()
+	s.gatewayCache.Reconcile(snapshot)
 	if !ok {
 		return nil, domain.ErrBusy
 	}
@@ -407,11 +429,26 @@ func (s *Service) kubeGateway(ctx context.Context, clusterID string) (KubeGatewa
 	if cluster.Status == domain.ClusterDisabled {
 		return nil, domain.ErrInvalidState
 	}
-	connection, err := s.clusterConnection(cluster)
+	return s.gatewayForCluster(ctx, cluster)
+}
+
+func (s *Service) gatewayForCluster(ctx context.Context, cluster domain.Cluster) (KubeGateway, error) {
+	gateway, err := s.gatewayCache.Get(
+		ctx,
+		cluster.ID,
+		clusterGatewayFingerprint(cluster),
+		func(buildContext context.Context) (KubeGateway, error) {
+			connection, err := s.clusterConnection(cluster)
+			if err != nil {
+				return nil, err
+			}
+			return s.kubeFactory.New(buildContext, connection)
+		},
+	)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create Kubernetes gateway: %w", err)
 	}
-	return s.kubeFactory.New(connection)
+	return gateway, nil
 }
 
 func (s *Service) clusterConnection(cluster domain.Cluster) (kubernetes.Connection, error) {

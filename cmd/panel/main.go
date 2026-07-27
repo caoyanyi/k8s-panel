@@ -85,17 +85,19 @@ func main() {
 		fatal("initialize Kubernetes read resource governor", err)
 	}
 	service, err := platform.New(platform.Dependencies{
-		Store:              fileStore,
-		Cipher:             cipher,
-		TargetValidator:    policy,
-		KubeFactory:        kubeFactory{policy: policy},
-		RepositoryChecker:  chartrepo.NewChecker(policy, rootCAs),
-		Helm:               helmadapter.New(settings.HelmTimeout, policy, rootCAs),
-		OperationGovernor:  operationGovernor,
-		ReadGovernor:       readGovernor,
-		OperationQueueSize: settings.OperationQueueSize,
-		Clock:              time.Now,
-		NewID:              secure.RandomID,
+		Store:                     fileStore,
+		Cipher:                    cipher,
+		TargetValidator:           policy,
+		KubeFactory:               kubeFactory{policy: policy},
+		RepositoryChecker:         chartrepo.NewChecker(policy, rootCAs),
+		Helm:                      helmadapter.New(settings.HelmTimeout, policy, rootCAs),
+		OperationGovernor:         operationGovernor,
+		ReadGovernor:              readGovernor,
+		OperationQueueSize:        settings.OperationQueueSize,
+		KubernetesClientCacheSize: settings.KubernetesClientCacheSize,
+		KubernetesClientCacheTTL:  settings.KubernetesClientCacheTTL,
+		Clock:                     time.Now,
+		NewID:                     secure.RandomID,
 	})
 	if err != nil {
 		fatal("initialize platform service", err)
@@ -148,8 +150,8 @@ type kubeFactory struct {
 	policy *outbound.Policy
 }
 
-func (f kubeFactory) New(connection kubernetes.Connection) (platform.KubeGateway, error) {
-	return kubernetes.NewClient(connection, f.policy)
+func (f kubeFactory) New(ctx context.Context, connection kubernetes.Connection) (platform.KubeGateway, error) {
+	return kubernetes.NewClientContext(ctx, connection, f.policy)
 }
 
 func newLogger(level string) *slog.Logger {

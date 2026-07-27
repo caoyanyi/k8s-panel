@@ -175,6 +175,18 @@ func TestNewClientBoundsInitialDNSResolution(t *testing.T) {
 	}
 }
 
+func TestNewClientContextHonorsCancellation(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := NewClientContext(ctx, Connection{
+		Server: "https://api.example.com", BearerToken: "token",
+	}, outbound.NewPolicy(deadlineRequiredResolver{}, nil)); !errors.Is(err, context.Canceled) {
+		t.Fatalf("NewClientContext() error = %v, want context canceled", err)
+	}
+}
+
 func TestClientReadsSanitizedWorkloadDetailEventsAndPodLogs(t *testing.T) {
 	t.Parallel()
 

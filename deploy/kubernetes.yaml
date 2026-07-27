@@ -10,6 +10,8 @@ data:
   operation-queue-size: "64"
   adaptive-operations: "true"
   kubernetes-read-concurrency: "4"
+  kubernetes-client-cache-size: "8"
+  kubernetes-client-cache-ttl: "10m"
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -89,6 +91,16 @@ spec:
                 configMapKeyRef:
                   name: k8s-panel-config
                   key: kubernetes-read-concurrency
+            - name: PANEL_KUBERNETES_CLIENT_CACHE_SIZE
+              valueFrom:
+                configMapKeyRef:
+                  name: k8s-panel-config
+                  key: kubernetes-client-cache-size
+            - name: PANEL_KUBERNETES_CLIENT_CACHE_TTL
+              valueFrom:
+                configMapKeyRef:
+                  name: k8s-panel-config
+                  key: kubernetes-client-cache-ttl
             - name: PANEL_ENCRYPTION_KEY
               valueFrom:
                 secretKeyRef:

@@ -229,6 +229,7 @@ export interface OperationCapacity {
   queue_depth: number
   queue_capacity: number
   kubernetes_reads: KubernetesReadCapacity
+  kubernetes_clients: KubernetesClientCacheCapacity
   sampled_at: string
 }
 
@@ -238,6 +239,13 @@ export interface KubernetesReadCapacity {
   active: number
   limit: number
   maximum: number
+}
+
+export interface KubernetesClientCacheCapacity {
+  entries: number
+  capacity: number
+  maximum: number
+  building: number
 }
 
 export interface AuditEvent {

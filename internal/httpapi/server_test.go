@@ -334,7 +334,8 @@ func TestServerSubmitsControlledWorkloadOperationsAndExposesCapacity(t *testing.
 	capacity := authenticatedRequest(t, handler, cookie, http.MethodGet, "/api/v1/system/resources", "")
 	if capacity.Code != http.StatusOK || !strings.Contains(capacity.Body.String(), `"operation_limit":2`) ||
 		!strings.Contains(capacity.Body.String(), `"queue_capacity":16`) ||
-		!strings.Contains(capacity.Body.String(), `"kubernetes_reads":{"adaptive":false,"pressure":"normal","active":0,"limit":4,"maximum":4}`) {
+		!strings.Contains(capacity.Body.String(), `"kubernetes_reads":{"adaptive":false,"pressure":"normal","active":0,"limit":4,"maximum":4}`) ||
+		!strings.Contains(capacity.Body.String(), `"kubernetes_clients":{"entries":0,"capacity":8,"maximum":8,"building":0}`) {
 		t.Fatalf("capacity status = %d, body = %s", capacity.Code, capacity.Body.String())
 	}
 	unauthorizedCapacity := httptest.NewRecorder()
@@ -586,7 +587,7 @@ func (testValidator) Validate(context.Context, string) error { return nil }
 
 type testKubeFactory struct{}
 
-func (testKubeFactory) New(kubernetes.Connection) (platform.KubeGateway, error) {
+func (testKubeFactory) New(context.Context, kubernetes.Connection) (platform.KubeGateway, error) {
 	return testKube{}, nil
 }
 

@@ -45,10 +45,20 @@ type Client struct {
 }
 
 func NewClient(connection Connection, policy *outbound.Policy) (*Client, error) {
+	return NewClientContext(context.Background(), connection, policy)
+}
+
+func NewClientContext(ctx context.Context, connection Connection, policy *outbound.Policy) (*Client, error) {
 	if policy == nil {
 		return nil, errors.New("outbound policy is required")
 	}
-	validationContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	validationContext, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	baseURL, err := policy.ValidateHTTPSURL(validationContext, connection.Server)
 	if err != nil {
@@ -86,6 +96,12 @@ func NewClient(connection Connection, policy *outbound.Policy) (*Client, error) 
 		token:   connection.BearerToken,
 		http:    &http.Client{Transport: transport, Timeout: 15 * time.Second},
 	}, nil
+}
+
+func (c *Client) CloseIdleConnections() {
+	if c != nil && c.http != nil {
+		c.http.CloseIdleConnections()
+	}
 }
 
 func (c *Client) Probe(ctx context.Context) (domain.ClusterProbe, error) {

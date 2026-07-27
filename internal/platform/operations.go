@@ -23,6 +23,7 @@ func (s *Service) Run(ctx context.Context, workers int) {
 	<-ctx.Done()
 	if started {
 		s.cancelAllOperationControls()
+		s.gatewayCache.Close()
 	}
 }
 
@@ -143,11 +144,7 @@ func (s *Service) PreviewWorkloadImage(
 		return domain.WorkloadImagePreview{}, err
 	}
 	defer release()
-	connection, err := s.clusterConnection(cluster)
-	if err != nil {
-		return domain.WorkloadImagePreview{}, err
-	}
-	gateway, err := s.kubeFactory.New(connection)
+	gateway, err := s.gatewayForCluster(ctx, cluster)
 	if err != nil {
 		return domain.WorkloadImagePreview{}, err
 	}
@@ -532,6 +529,8 @@ func (s *Service) ListAuditEvents(ctx context.Context, limit int) ([]domain.Audi
 
 func (s *Service) OperationCapacity() OperationCapacity {
 	readSnapshot := s.readGovernor.Snapshot()
+	s.gatewayCache.Reconcile(readSnapshot)
+	clientSnapshot := s.gatewayCache.Snapshot()
 	return OperationCapacity{
 		Snapshot:      s.operationGovernor.Snapshot(),
 		QueueDepth:    len(s.queue),
@@ -542,6 +541,12 @@ func (s *Service) OperationCapacity() OperationCapacity {
 			Active:   readSnapshot.ActiveOperations,
 			Limit:    readSnapshot.OperationLimit,
 			Maximum:  readSnapshot.MaximumOperations,
+		},
+		KubernetesClients: KubernetesClientCacheCapacity{
+			Entries:  clientSnapshot.Entries,
+			Capacity: clientSnapshot.Capacity,
+			Maximum:  clientSnapshot.Maximum,
+			Building: clientSnapshot.Building,
 		},
 	}
 }

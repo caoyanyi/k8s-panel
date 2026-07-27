@@ -33,6 +33,7 @@ describe('OperationsPage', () => {
           queue_depth: 3,
           queue_capacity: 64,
           kubernetes_reads: { adaptive: true, pressure: 'constrained', active: 2, limit: 2, maximum: 4 },
+          kubernetes_clients: { entries: 3, capacity: 4, maximum: 8, building: 1 },
           sampled_at: '2026-07-25T08:00:00Z',
         }))
       }
@@ -60,6 +61,7 @@ describe('OperationsPage', () => {
     expect(screen.getByText('负载 62%')).toBeInTheDocument()
     expect(screen.getByText('执行槽 1 / 1')).toBeInTheDocument()
     expect(screen.getByText('读取槽 2 / 2')).toBeInTheDocument()
+    expect(screen.getByText('连接缓存 3 / 4')).toBeInTheDocument()
     expect(screen.getByText('队列 3 / 64')).toBeInTheDocument()
     expect(document.body.textContent).not.toContain('/proc')
     expect(document.body.textContent).not.toContain('/sys/fs/cgroup')
@@ -83,6 +85,7 @@ describe('OperationsPage', () => {
           adaptive: false, pressure: 'unknown', active_operations: 0, operation_limit: 2,
           maximum_operations: 2, queue_depth: 0, queue_capacity: 64, sampled_at: '2026-07-25T08:00:00Z',
           kubernetes_reads: { adaptive: false, pressure: 'normal', active: 0, limit: 4, maximum: 4 },
+          kubernetes_clients: { entries: 0, capacity: 8, maximum: 8, building: 0 },
         }))
       }
       return Promise.resolve(dataResponse([]))

@@ -26,6 +26,8 @@ type Config struct {
 	OperationQueueSize        int
 	AdaptiveOperations        bool
 	KubernetesReadConcurrency int
+	KubernetesClientCacheSize int
+	KubernetesClientCacheTTL  time.Duration
 	MaxConcurrentRequests     int
 	AllowedPrivateCIDRs       []netip.Prefix
 	SecureCookies             bool
@@ -90,6 +92,14 @@ func Load(getenv func(string) string) (Config, error) {
 	loaded.KubernetesReadConcurrency, err = intOrDefault(getenv("PANEL_KUBERNETES_READ_CONCURRENCY"), 4)
 	if err != nil || loaded.KubernetesReadConcurrency < 1 || loaded.KubernetesReadConcurrency > 32 {
 		return Config{}, errors.New("PANEL_KUBERNETES_READ_CONCURRENCY must be between 1 and 32")
+	}
+	loaded.KubernetesClientCacheSize, err = intOrDefault(getenv("PANEL_KUBERNETES_CLIENT_CACHE_SIZE"), 8)
+	if err != nil || loaded.KubernetesClientCacheSize < 1 || loaded.KubernetesClientCacheSize > 64 {
+		return Config{}, errors.New("PANEL_KUBERNETES_CLIENT_CACHE_SIZE must be between 1 and 64")
+	}
+	loaded.KubernetesClientCacheTTL, err = durationOrDefault(getenv("PANEL_KUBERNETES_CLIENT_CACHE_TTL"), 10*time.Minute)
+	if err != nil || loaded.KubernetesClientCacheTTL < time.Minute || loaded.KubernetesClientCacheTTL > time.Hour {
+		return Config{}, errors.New("PANEL_KUBERNETES_CLIENT_CACHE_TTL must be between 1m and 1h")
 	}
 	loaded.MaxConcurrentRequests, err = intOrDefault(getenv("PANEL_MAX_CONCURRENT_REQUESTS"), 16)
 	if err != nil || loaded.MaxConcurrentRequests < 1 || loaded.MaxConcurrentRequests > 128 {

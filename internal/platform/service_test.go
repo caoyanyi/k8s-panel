@@ -77,6 +77,70 @@ func TestServiceCreatesEncryptedClusterAndReadsNamespaces(t *testing.T) {
 	}
 }
 
+func TestServiceReusesAndInvalidatesKubernetesGatewayCache(t *testing.T) {
+	t.Parallel()
+
+	baseCipher, err := secure.NewCipher([]byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatalf("secure.NewCipher() error = %v", err)
+	}
+	countedCipher := &countingSecretCipher{delegate: baseCipher}
+	first := &fakeKubeGateway{probe: domain.ClusterProbe{Version: "v1.36.2"}}
+	second := &fakeKubeGateway{probe: domain.ClusterProbe{Version: "v1.36.2"}}
+	third := &fakeKubeGateway{probe: domain.ClusterProbe{Version: "v1.36.2"}}
+	factory := &sequenceKubeFactory{gateways: []KubeGateway{first, second, third}}
+	service, _, _ := newTestService(t, serviceFakes{
+		cipher: countedCipher, factory: factory, cacheSize: 2, cacheTTL: 10 * time.Minute,
+	})
+	cluster, err := service.CreateCluster(context.Background(), "admin", "req_create", domain.ClusterInput{
+		Name: "development", Environment: domain.EnvironmentDevelopment, Server: "https://api.example.com", BearerToken: "token",
+	})
+	if err != nil {
+		t.Fatalf("CreateCluster() error = %v", err)
+	}
+	if _, err := service.Summary(context.Background(), cluster.ID); err != nil {
+		t.Fatalf("Summary() error = %v", err)
+	}
+	if calls := factory.Calls(); calls != 1 {
+		t.Fatalf("factory calls after cache hit = %d, want 1", calls)
+	}
+	if opens := countedCipher.openCalls.Load(); opens != 1 {
+		t.Fatalf("credential decryptions after cache hit = %d, want 1", opens)
+	}
+	capacity := service.OperationCapacity().KubernetesClients
+	if capacity.Entries != 1 || capacity.Capacity != 2 || capacity.Maximum != 2 || capacity.Building != 0 {
+		t.Fatalf("Kubernetes client capacity = %#v", capacity)
+	}
+
+	if _, err := service.TestClusterConnection(context.Background(), "admin", "req_test", cluster.ID); err != nil {
+		t.Fatalf("TestClusterConnection() error = %v", err)
+	}
+	if factory.Calls() != 2 || first.idleCloseCalls.Load() != 1 {
+		t.Fatalf("factory calls = %d, first closes = %d", factory.Calls(), first.idleCloseCalls.Load())
+	}
+	if opens := countedCipher.openCalls.Load(); opens != 2 {
+		t.Fatalf("credential decryptions after explicit test = %d, want 2", opens)
+	}
+	if _, err := service.SetClusterEnabled(context.Background(), "admin", "req_disable", cluster.ID, false); err != nil {
+		t.Fatalf("SetClusterEnabled(false) error = %v", err)
+	}
+	if second.idleCloseCalls.Load() != 1 || service.OperationCapacity().KubernetesClients.Entries != 0 {
+		t.Fatalf("second closes = %d, capacity = %#v", second.idleCloseCalls.Load(), service.OperationCapacity().KubernetesClients)
+	}
+	if _, err := service.SetClusterEnabled(context.Background(), "admin", "req_enable", cluster.ID, true); err != nil {
+		t.Fatalf("SetClusterEnabled(true) error = %v", err)
+	}
+	if factory.Calls() != 3 {
+		t.Fatalf("factory calls after enable = %d, want 3", factory.Calls())
+	}
+	if err := service.DeleteCluster(context.Background(), "admin", "req_delete", cluster.ID, cluster.Name); err != nil {
+		t.Fatalf("DeleteCluster() error = %v", err)
+	}
+	if third.idleCloseCalls.Load() != 1 || service.OperationCapacity().KubernetesClients.Entries != 0 {
+		t.Fatalf("third closes = %d, capacity = %#v", third.idleCloseCalls.Load(), service.OperationCapacity().KubernetesClients)
+	}
+}
+
 func TestServicePersistsUnreachableProbeWithoutLeakingError(t *testing.T) {
 	t.Parallel()
 
@@ -912,11 +976,15 @@ func TestServiceRejectsOperationsWhenBoundedQueueIsFull(t *testing.T) {
 }
 
 type serviceFakes struct {
+	cipher       SecretCipher
 	kube         KubeGateway
+	factory      KubeFactory
 	helm         HelmGateway
 	governor     OperationGovernor
 	readGovernor ReadGovernor
 	queueSize    int
+	cacheSize    int
+	cacheTTL     time.Duration
 }
 
 func newTestService(t *testing.T, fakes serviceFakes) (*Service, *store.File, string) {
@@ -931,8 +999,14 @@ func newTestService(t *testing.T, fakes serviceFakes) (*Service, *store.File, st
 	if err != nil {
 		t.Fatalf("secure.NewCipher() error = %v", err)
 	}
+	if fakes.cipher == nil {
+		fakes.cipher = cipher
+	}
 	if fakes.kube == nil {
 		fakes.kube = &fakeKubeGateway{}
+	}
+	if fakes.factory == nil {
+		fakes.factory = fakeKubeFactory{gateway: fakes.kube}
 	}
 	if fakes.helm == nil {
 		fakes.helm = &blockingHelmGateway{}
@@ -948,16 +1022,18 @@ func newTestService(t *testing.T, fakes serviceFakes) (*Service, *store.File, st
 	}
 	var idCounter atomic.Int64
 	service, err := New(Dependencies{
-		Store:              fileStore,
-		Cipher:             cipher,
-		TargetValidator:    allowAllValidator{},
-		KubeFactory:        fakeKubeFactory{gateway: fakes.kube},
-		RepositoryChecker:  successfulRepositoryChecker{},
-		Helm:               fakes.helm,
-		OperationGovernor:  fakes.governor,
-		ReadGovernor:       fakes.readGovernor,
-		OperationQueueSize: fakes.queueSize,
-		Clock:              func() time.Time { return now },
+		Store:                     fileStore,
+		Cipher:                    fakes.cipher,
+		TargetValidator:           allowAllValidator{},
+		KubeFactory:               fakes.factory,
+		RepositoryChecker:         successfulRepositoryChecker{},
+		Helm:                      fakes.helm,
+		OperationGovernor:         fakes.governor,
+		ReadGovernor:              fakes.readGovernor,
+		OperationQueueSize:        fakes.queueSize,
+		KubernetesClientCacheSize: fakes.cacheSize,
+		KubernetesClientCacheTTL:  fakes.cacheTTL,
+		Clock:                     func() time.Time { return now },
 		NewID: func(prefix string) (string, error) {
 			return fmt.Sprintf("%s_%d", prefix, idCounter.Add(1)), nil
 		},
@@ -972,9 +1048,48 @@ type allowAllValidator struct{}
 
 func (allowAllValidator) Validate(context.Context, string) error { return nil }
 
+type countingSecretCipher struct {
+	delegate  SecretCipher
+	openCalls atomic.Int64
+}
+
+func (c *countingSecretCipher) SealString(plaintext, associatedData string) (string, error) {
+	return c.delegate.SealString(plaintext, associatedData)
+}
+
+func (c *countingSecretCipher) OpenString(encoded, associatedData string) (string, error) {
+	c.openCalls.Add(1)
+	return c.delegate.OpenString(encoded, associatedData)
+}
+
 type fakeKubeFactory struct{ gateway KubeGateway }
 
-func (f fakeKubeFactory) New(kubernetes.Connection) (KubeGateway, error) { return f.gateway, nil }
+func (f fakeKubeFactory) New(context.Context, kubernetes.Connection) (KubeGateway, error) {
+	return f.gateway, nil
+}
+
+type sequenceKubeFactory struct {
+	mu       sync.Mutex
+	gateways []KubeGateway
+	calls    int
+}
+
+func (f *sequenceKubeFactory) New(context.Context, kubernetes.Connection) (KubeGateway, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.calls >= len(f.gateways) {
+		return nil, errors.New("unexpected Kubernetes gateway build")
+	}
+	gateway := f.gateways[f.calls]
+	f.calls++
+	return gateway, nil
+}
+
+func (f *sequenceKubeFactory) Calls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
+}
 
 type fakeKubeGateway struct {
 	probe            domain.ClusterProbe
@@ -1001,7 +1116,10 @@ type fakeKubeGateway struct {
 	restartedAt      time.Time
 	previewedImage   domain.WorkloadImageChange
 	updatedImage     domain.WorkloadImageChange
+	idleCloseCalls   atomic.Int64
 }
+
+func (g *fakeKubeGateway) CloseIdleConnections() { g.idleCloseCalls.Add(1) }
 
 func (g *fakeKubeGateway) Probe(context.Context) (domain.ClusterProbe, error) {
 	return g.probe, g.probeErr
