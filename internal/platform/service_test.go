@@ -198,6 +198,143 @@ func TestServiceReadsNodeDiagnostics(t *testing.T) {
 	}
 }
 
+func TestServiceRejectsKubernetesReadsDuringCriticalResourcePressure(t *testing.T) {
+	t.Parallel()
+
+	critical := 0.97
+	readGovernor, err := resourceguard.New(resourceguard.Config{
+		Enabled: true, MaxConcurrent: 4, HighWatermark: 0.80, CriticalWatermark: 0.95,
+		Sampler: staticResourceSampler{sample: resourceguard.Sample{MemoryRatio: &critical}},
+	})
+	if err != nil {
+		t.Fatalf("resourceguard.New() error = %v", err)
+	}
+	gateway := &fakeKubeGateway{probe: domain.ClusterProbe{Version: "v1.36.2"}}
+	service, _, _ := newTestService(t, serviceFakes{kube: gateway, readGovernor: readGovernor})
+	cluster, err := service.CreateCluster(context.Background(), "admin", "req_cluster", domain.ClusterInput{
+		Name: "cluster", Environment: domain.EnvironmentDevelopment, Server: "https://api.example.com", BearerToken: "token",
+	})
+	if err != nil {
+		t.Fatalf("CreateCluster() error = %v", err)
+	}
+
+	reference := domain.WorkloadReference{Kind: "deployment", Namespace: "payments", Name: "gateway"}
+	checks := []struct {
+		name string
+		call func() error
+	}{
+		{name: "summary", call: func() error { _, err := service.Summary(context.Background(), cluster.ID); return err }},
+		{name: "namespaces", call: func() error { _, err := service.Namespaces(context.Background(), cluster.ID); return err }},
+		{name: "nodes", call: func() error { _, err := service.Nodes(context.Background(), cluster.ID); return err }},
+		{name: "node detail", call: func() error { _, err := service.NodeDetail(context.Background(), cluster.ID, "worker-01"); return err }},
+		{name: "node events", call: func() error {
+			_, err := service.NodeEvents(context.Background(), cluster.ID, "worker-01", 20)
+			return err
+		}},
+		{name: "workloads", call: func() error {
+			_, err := service.Workloads(context.Background(), cluster.ID, "payments", "deployment")
+			return err
+		}},
+		{name: "workload detail", call: func() error {
+			_, err := service.WorkloadDetail(context.Background(), cluster.ID, reference)
+			return err
+		}},
+		{name: "workload events", call: func() error {
+			_, err := service.WorkloadEvents(context.Background(), cluster.ID, reference, 20)
+			return err
+		}},
+		{name: "pod logs", call: func() error {
+			_, err := service.PodLogs(context.Background(), "admin", "req_logs", cluster.ID, domain.PodLogRequest{
+				Namespace: "payments", Pod: "gateway-0", Container: "app", TailLines: 100,
+			})
+			return err
+		}},
+		{name: "image preview", call: func() error {
+			_, err := service.PreviewWorkloadImage(context.Background(), "admin", "req_preview", domain.WorkloadImageOperationInput{
+				ClusterID: cluster.ID,
+				Change: domain.WorkloadImageChange{
+					Reference: reference, Container: "app", CurrentImage: "gateway:1.0.0", Image: "gateway:1.1.0", ResourceVersion: "42",
+				},
+			})
+			return err
+		}},
+		{name: "Helm releases", call: func() error {
+			_, err := service.ListHelmReleases(context.Background(), cluster.ID, "payments")
+			return err
+		}},
+	}
+	for _, check := range checks {
+		if err := check.call(); !errors.Is(err, domain.ErrBusy) {
+			t.Errorf("%s error = %v, want busy", check.name, err)
+		}
+	}
+	if calls := gateway.summaryCalls.Load(); calls != 0 {
+		t.Fatalf("Summary() reached Kubernetes %d times under critical pressure", calls)
+	}
+	capacity := service.OperationCapacity().KubernetesReads
+	if !capacity.Adaptive || capacity.Pressure != resourceguard.PressureCritical || capacity.Limit != 0 || capacity.Maximum != 4 {
+		t.Fatalf("Kubernetes read capacity = %#v", capacity)
+	}
+}
+
+func TestServiceRejectsExcessKubernetesReadsWithoutWaiting(t *testing.T) {
+	t.Parallel()
+
+	readGovernor, err := resourceguard.New(resourceguard.Config{
+		Enabled: false, MaxConcurrent: 1, HighWatermark: 0.80, CriticalWatermark: 0.95,
+		Sampler: staticResourceSampler{},
+	})
+	if err != nil {
+		t.Fatalf("resourceguard.New() error = %v", err)
+	}
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	gateway := &fakeKubeGateway{
+		probe: domain.ClusterProbe{Version: "v1.36.2"}, summaryStarted: started, summaryRelease: release,
+	}
+	service, _, _ := newTestService(t, serviceFakes{kube: gateway, readGovernor: readGovernor})
+	cluster, err := service.CreateCluster(context.Background(), "admin", "req_cluster", domain.ClusterInput{
+		Name: "cluster", Environment: domain.EnvironmentDevelopment, Server: "https://api.example.com", BearerToken: "token",
+	})
+	if err != nil {
+		t.Fatalf("CreateCluster() error = %v", err)
+	}
+
+	firstContext, cancelFirst := context.WithCancel(context.Background())
+	t.Cleanup(cancelFirst)
+	firstResult := make(chan error, 1)
+	go func() {
+		_, summaryErr := service.Summary(firstContext, cluster.ID)
+		firstResult <- summaryErr
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("first Summary() did not reach Kubernetes")
+	}
+
+	secondContext, cancelSecond := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancelSecond()
+	if _, err := service.Summary(secondContext, cluster.ID); !errors.Is(err, domain.ErrBusy) {
+		t.Fatalf("second Summary() error = %v, want busy", err)
+	}
+	close(release)
+	select {
+	case err := <-firstResult:
+		if err != nil {
+			t.Fatalf("first Summary() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("first Summary() did not finish after release")
+	}
+	if calls := gateway.summaryCalls.Load(); calls != 1 {
+		t.Fatalf("Kubernetes Summary() calls = %d, want 1", calls)
+	}
+	if active := service.OperationCapacity().KubernetesReads.Active; active != 0 {
+		t.Fatalf("active Kubernetes reads after completion = %d", active)
+	}
+}
+
 func TestServiceSerializesHelmOperationsForSameRelease(t *testing.T) {
 	t.Parallel()
 
@@ -421,7 +558,7 @@ func TestServiceDefersImageUpdateDuringCriticalResourcePressure(t *testing.T) {
 		t.Fatalf("resourceguard.New() error = %v", err)
 	}
 	gateway := &fakeKubeGateway{probe: domain.ClusterProbe{Version: "v1.36.2"}}
-	service, _, _ := newTestService(t, serviceFakes{kube: gateway, governor: governor})
+	service, _, _ := newTestService(t, serviceFakes{kube: gateway, governor: governor, readGovernor: governor})
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	go service.Run(ctx, 1)
@@ -775,10 +912,11 @@ func TestServiceRejectsOperationsWhenBoundedQueueIsFull(t *testing.T) {
 }
 
 type serviceFakes struct {
-	kube      KubeGateway
-	helm      HelmGateway
-	governor  OperationGovernor
-	queueSize int
+	kube         KubeGateway
+	helm         HelmGateway
+	governor     OperationGovernor
+	readGovernor ReadGovernor
+	queueSize    int
 }
 
 func newTestService(t *testing.T, fakes serviceFakes) (*Service, *store.File, string) {
@@ -802,6 +940,9 @@ func newTestService(t *testing.T, fakes serviceFakes) (*Service, *store.File, st
 	if fakes.governor == nil {
 		fakes.governor = testOperationGovernor(t)
 	}
+	if fakes.readGovernor == nil {
+		fakes.readGovernor = testReadGovernor(t)
+	}
 	if fakes.queueSize == 0 {
 		fakes.queueSize = 16
 	}
@@ -814,6 +955,7 @@ func newTestService(t *testing.T, fakes serviceFakes) (*Service, *store.File, st
 		RepositoryChecker:  successfulRepositoryChecker{},
 		Helm:               fakes.helm,
 		OperationGovernor:  fakes.governor,
+		ReadGovernor:       fakes.readGovernor,
 		OperationQueueSize: fakes.queueSize,
 		Clock:              func() time.Time { return now },
 		NewID: func(prefix string) (string, error) {
@@ -837,6 +979,9 @@ func (f fakeKubeFactory) New(kubernetes.Connection) (KubeGateway, error) { retur
 type fakeKubeGateway struct {
 	probe            domain.ClusterProbe
 	probeErr         error
+	summaryCalls     atomic.Int64
+	summaryStarted   chan struct{}
+	summaryRelease   <-chan struct{}
 	namespaces       []domain.Namespace
 	detail           domain.WorkloadDetail
 	events           []domain.KubernetesEvent
@@ -861,7 +1006,21 @@ type fakeKubeGateway struct {
 func (g *fakeKubeGateway) Probe(context.Context) (domain.ClusterProbe, error) {
 	return g.probe, g.probeErr
 }
-func (g *fakeKubeGateway) Summary(context.Context) (domain.ClusterSummary, error) {
+func (g *fakeKubeGateway) Summary(ctx context.Context) (domain.ClusterSummary, error) {
+	g.summaryCalls.Add(1)
+	if g.summaryStarted != nil {
+		select {
+		case g.summaryStarted <- struct{}{}:
+		default:
+		}
+	}
+	if g.summaryRelease != nil {
+		select {
+		case <-g.summaryRelease:
+		case <-ctx.Done():
+			return domain.ClusterSummary{}, ctx.Err()
+		}
+	}
 	return domain.ClusterSummary{Version: g.probe.Version}, g.probeErr
 }
 func (g *fakeKubeGateway) Namespaces(context.Context) ([]domain.Namespace, error) {
@@ -940,6 +1099,19 @@ func testOperationGovernor(t *testing.T) OperationGovernor {
 	governor, err := resourceguard.New(resourceguard.Config{
 		Enabled: false, MaxConcurrent: 8, HighWatermark: 0.80, CriticalWatermark: 0.95,
 		RetryInterval: time.Millisecond, Sampler: staticResourceSampler{sample: resourceguard.Sample{MemoryRatio: &value}},
+	})
+	if err != nil {
+		t.Fatalf("resourceguard.New() error = %v", err)
+	}
+	return governor
+}
+
+func testReadGovernor(t *testing.T) ReadGovernor {
+	t.Helper()
+	value := 0.10
+	governor, err := resourceguard.New(resourceguard.Config{
+		Enabled: false, MaxConcurrent: 8, HighWatermark: 0.80, CriticalWatermark: 0.95,
+		Sampler: staticResourceSampler{sample: resourceguard.Sample{MemoryRatio: &value}},
 	})
 	if err != nil {
 		t.Fatalf("resourceguard.New() error = %v", err)

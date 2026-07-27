@@ -14,21 +14,22 @@ import (
 )
 
 type Config struct {
-	ListenAddr            string
-	DataFile              string
-	WebDir                string
-	EncryptionKey         []byte
-	AdminUsername         string
-	AdminPasswordHash     string
-	SessionTTL            time.Duration
-	HelmTimeout           time.Duration
-	HelmWorkers           int
-	OperationQueueSize    int
-	AdaptiveOperations    bool
-	MaxConcurrentRequests int
-	AllowedPrivateCIDRs   []netip.Prefix
-	SecureCookies         bool
-	LogLevel              string
+	ListenAddr                string
+	DataFile                  string
+	WebDir                    string
+	EncryptionKey             []byte
+	AdminUsername             string
+	AdminPasswordHash         string
+	SessionTTL                time.Duration
+	HelmTimeout               time.Duration
+	HelmWorkers               int
+	OperationQueueSize        int
+	AdaptiveOperations        bool
+	KubernetesReadConcurrency int
+	MaxConcurrentRequests     int
+	AllowedPrivateCIDRs       []netip.Prefix
+	SecureCookies             bool
+	LogLevel                  string
 }
 
 func Load(getenv func(string) string) (Config, error) {
@@ -85,6 +86,10 @@ func Load(getenv func(string) string) (Config, error) {
 	loaded.AdaptiveOperations, err = boolOrDefault(getenv("PANEL_ADAPTIVE_OPERATIONS"), true)
 	if err != nil {
 		return Config{}, errors.New("PANEL_ADAPTIVE_OPERATIONS must be true or false")
+	}
+	loaded.KubernetesReadConcurrency, err = intOrDefault(getenv("PANEL_KUBERNETES_READ_CONCURRENCY"), 4)
+	if err != nil || loaded.KubernetesReadConcurrency < 1 || loaded.KubernetesReadConcurrency > 32 {
+		return Config{}, errors.New("PANEL_KUBERNETES_READ_CONCURRENCY must be between 1 and 32")
 	}
 	loaded.MaxConcurrentRequests, err = intOrDefault(getenv("PANEL_MAX_CONCURRENT_REQUESTS"), 16)
 	if err != nil || loaded.MaxConcurrentRequests < 1 || loaded.MaxConcurrentRequests > 128 {

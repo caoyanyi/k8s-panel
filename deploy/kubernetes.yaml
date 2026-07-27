@@ -9,6 +9,7 @@ data:
   operation-workers: "2"
   operation-queue-size: "64"
   adaptive-operations: "true"
+  kubernetes-read-concurrency: "4"
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -83,6 +84,11 @@ spec:
                 configMapKeyRef:
                   name: k8s-panel-config
                   key: adaptive-operations
+            - name: PANEL_KUBERNETES_READ_CONCURRENCY
+              valueFrom:
+                configMapKeyRef:
+                  name: k8s-panel-config
+                  key: kubernetes-read-concurrency
             - name: PANEL_ENCRYPTION_KEY
               valueFrom:
                 secretKeyRef:

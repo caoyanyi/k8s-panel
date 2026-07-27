@@ -117,6 +117,7 @@ test('queued deployment scale can be canceled while resources are constrained', 
   await expect(page.getByRole('heading', { name: '操作中心' })).toBeVisible()
   await expect(page.getByText('工作负载扩缩容')).toBeVisible()
   await expect(page.getByText('资源承压')).toBeVisible()
+  await expect(page.getByText('读取槽 2 / 2')).toBeVisible()
   await expect(page.getByText('队列 1 / 64')).toBeVisible()
 
   const cancelRequestPromise = page.waitForRequest((request) => request.method() === 'POST' && request.url().endsWith('/operations/op_scale/cancellations'))
@@ -179,6 +180,7 @@ test('production deployment image update requires a fresh dry-run preview', asyn
   await expect(page.getByRole('heading', { name: '操作中心' })).toBeVisible()
   await expect(page.getByText('工作负载镜像更新')).toBeVisible()
   await expect(page.getByText('资源承压')).toBeVisible()
+  await expect(page.getByText('读取槽 2 / 2')).toBeVisible()
 
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
   expect(overflow).toBeLessThanOrEqual(1)
@@ -330,6 +332,7 @@ async function mockWorkloadDiagnostics(page: Page) {
         adaptive: true, pressure: 'constrained', memory_ratio: 0.84, load_ratio: 0.62,
         active_operations: 1, operation_limit: 1, maximum_operations: 2,
         queue_depth: operationState === 'queued' ? 1 : 0, queue_capacity: 64, sampled_at: '2026-07-25T08:05:00Z',
+        kubernetes_reads: { adaptive: true, pressure: 'constrained', active: 2, limit: 2, maximum: 4 },
       }
     } else if (path.endsWith('/workloads/pod/payments/gateway-0/events')) {
       data = [{

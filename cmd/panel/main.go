@@ -61,16 +61,28 @@ func main() {
 	}
 	policy := outbound.NewPolicy(net.DefaultResolver, settings.AllowedPrivateCIDRs)
 	rootCAs, _ := x509.SystemCertPool()
+	systemSampler := resourceguard.NewSystemSampler()
 	operationGovernor, err := resourceguard.New(resourceguard.Config{
 		Enabled:           settings.AdaptiveOperations,
 		MaxConcurrent:     settings.HelmWorkers,
 		HighWatermark:     resourceguard.DefaultHighWatermark,
 		CriticalWatermark: resourceguard.DefaultCriticalWatermark,
-		Sampler:           resourceguard.NewSystemSampler(),
+		Sampler:           systemSampler,
 		Clock:             time.Now,
 	})
 	if err != nil {
 		fatal("initialize operation resource governor", err)
+	}
+	readGovernor, err := resourceguard.New(resourceguard.Config{
+		Enabled:           settings.AdaptiveOperations,
+		MaxConcurrent:     settings.KubernetesReadConcurrency,
+		HighWatermark:     resourceguard.DefaultHighWatermark,
+		CriticalWatermark: resourceguard.DefaultCriticalWatermark,
+		Sampler:           systemSampler,
+		Clock:             time.Now,
+	})
+	if err != nil {
+		fatal("initialize Kubernetes read resource governor", err)
 	}
 	service, err := platform.New(platform.Dependencies{
 		Store:              fileStore,
@@ -80,6 +92,7 @@ func main() {
 		RepositoryChecker:  chartrepo.NewChecker(policy, rootCAs),
 		Helm:               helmadapter.New(settings.HelmTimeout, policy, rootCAs),
 		OperationGovernor:  operationGovernor,
+		ReadGovernor:       readGovernor,
 		OperationQueueSize: settings.OperationQueueSize,
 		Clock:              time.Now,
 		NewID:              secure.RandomID,

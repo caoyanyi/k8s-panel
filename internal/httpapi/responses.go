@@ -66,6 +66,9 @@ func writeInvalidJSON(w http.ResponseWriter, r *http.Request) {
 }
 
 func writeErrorStatus(w http.ResponseWriter, r *http.Request, status int, code, message string, details []fieldError) {
+	if status == http.StatusServiceUnavailable && code == "server_busy" {
+		w.Header().Set("Retry-After", "2")
+	}
 	requestID, _ := r.Context().Value(requestIDKey).(string)
 	writeJSON(w, status, map[string]any{"error": errorBody{
 		Code: code, Message: message, Details: details, RequestID: requestID,

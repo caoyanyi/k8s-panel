@@ -138,9 +138,11 @@ func (s *Service) PreviewWorkloadImage(
 	if cluster.Status != domain.ClusterConnected && cluster.Status != domain.ClusterDegraded {
 		return domain.WorkloadImagePreview{}, domain.ErrInvalidState
 	}
-	if snapshot := s.operationGovernor.Snapshot(); snapshot.Adaptive && snapshot.OperationLimit == 0 {
-		return domain.WorkloadImagePreview{}, domain.ErrBusy
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return domain.WorkloadImagePreview{}, err
 	}
+	defer release()
 	connection, err := s.clusterConnection(cluster)
 	if err != nil {
 		return domain.WorkloadImagePreview{}, err
@@ -504,6 +506,11 @@ func (s *Service) ListHelmReleases(ctx context.Context, clusterID, namespace str
 	if cluster.Status == domain.ClusterDisabled {
 		return nil, domain.ErrInvalidState
 	}
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	connection, err := s.clusterConnection(cluster)
 	if err != nil {
 		return nil, err
@@ -524,10 +531,18 @@ func (s *Service) ListAuditEvents(ctx context.Context, limit int) ([]domain.Audi
 }
 
 func (s *Service) OperationCapacity() OperationCapacity {
+	readSnapshot := s.readGovernor.Snapshot()
 	return OperationCapacity{
 		Snapshot:      s.operationGovernor.Snapshot(),
 		QueueDepth:    len(s.queue),
 		QueueCapacity: cap(s.queue),
+		KubernetesReads: KubernetesReadCapacity{
+			Adaptive: readSnapshot.Adaptive,
+			Pressure: readSnapshot.Pressure,
+			Active:   readSnapshot.ActiveOperations,
+			Limit:    readSnapshot.OperationLimit,
+			Maximum:  readSnapshot.MaximumOperations,
+		},
 	}
 }
 

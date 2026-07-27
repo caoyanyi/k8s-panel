@@ -228,7 +228,16 @@ export interface OperationCapacity {
   maximum_operations: number
   queue_depth: number
   queue_capacity: number
+  kubernetes_reads: KubernetesReadCapacity
   sampled_at: string
+}
+
+export interface KubernetesReadCapacity {
+  adaptive: boolean
+  pressure: ResourcePressure
+  active: number
+  limit: number
+  maximum: number
 }
 
 export interface AuditEvent {

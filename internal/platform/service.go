@@ -26,6 +26,7 @@ type Service struct {
 	repositoryChecker   RepositoryChecker
 	helm                HelmGateway
 	operationGovernor   OperationGovernor
+	readGovernor        ReadGovernor
 	clock               func() time.Time
 	newID               func(string) (string, error)
 	queue               chan operationJob
@@ -51,7 +52,7 @@ type operationControl struct {
 func New(dependencies Dependencies) (*Service, error) {
 	if dependencies.Store == nil || dependencies.Cipher == nil || dependencies.TargetValidator == nil ||
 		dependencies.KubeFactory == nil || dependencies.RepositoryChecker == nil || dependencies.Helm == nil ||
-		dependencies.OperationGovernor == nil {
+		dependencies.OperationGovernor == nil || dependencies.ReadGovernor == nil {
 		return nil, errors.New("all platform dependencies are required")
 	}
 	if dependencies.Clock == nil {
@@ -74,6 +75,7 @@ func New(dependencies Dependencies) (*Service, error) {
 		repositoryChecker: dependencies.RepositoryChecker,
 		helm:              dependencies.Helm,
 		operationGovernor: dependencies.OperationGovernor,
+		readGovernor:      dependencies.ReadGovernor,
 		clock:             dependencies.Clock,
 		newID:             dependencies.NewID,
 		queue:             make(chan operationJob, dependencies.OperationQueueSize),
@@ -235,6 +237,11 @@ func (s *Service) DeleteCluster(ctx context.Context, actor, requestID, id, expec
 }
 
 func (s *Service) Summary(ctx context.Context, clusterID string) (domain.ClusterSummary, error) {
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return domain.ClusterSummary{}, err
+	}
+	defer release()
 	gateway, err := s.kubeGateway(ctx, clusterID)
 	if err != nil {
 		return domain.ClusterSummary{}, err
@@ -243,6 +250,11 @@ func (s *Service) Summary(ctx context.Context, clusterID string) (domain.Cluster
 }
 
 func (s *Service) Namespaces(ctx context.Context, clusterID string) ([]domain.Namespace, error) {
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	gateway, err := s.kubeGateway(ctx, clusterID)
 	if err != nil {
 		return nil, err
@@ -251,6 +263,11 @@ func (s *Service) Namespaces(ctx context.Context, clusterID string) ([]domain.Na
 }
 
 func (s *Service) Nodes(ctx context.Context, clusterID string) ([]domain.Node, error) {
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	gateway, err := s.kubeGateway(ctx, clusterID)
 	if err != nil {
 		return nil, err
@@ -262,6 +279,11 @@ func (s *Service) NodeDetail(ctx context.Context, clusterID, name string) (domai
 	if err := domain.ValidateNodeName(name); err != nil {
 		return domain.NodeDetail{}, err
 	}
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return domain.NodeDetail{}, err
+	}
+	defer release()
 	gateway, err := s.kubeGateway(ctx, clusterID)
 	if err != nil {
 		return domain.NodeDetail{}, err
@@ -276,6 +298,11 @@ func (s *Service) NodeEvents(ctx context.Context, clusterID, name string, limit 
 	if limit < 1 || limit > domain.MaxNodeEventLimit {
 		return nil, domain.Invalid("limit", "must be between 1 and 100")
 	}
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	gateway, err := s.kubeGateway(ctx, clusterID)
 	if err != nil {
 		return nil, err
@@ -284,6 +311,11 @@ func (s *Service) NodeEvents(ctx context.Context, clusterID, name string, limit 
 }
 
 func (s *Service) Workloads(ctx context.Context, clusterID, namespace, kind string) ([]domain.Workload, error) {
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	gateway, err := s.kubeGateway(ctx, clusterID)
 	if err != nil {
 		return nil, err
@@ -295,6 +327,11 @@ func (s *Service) WorkloadDetail(ctx context.Context, clusterID string, referenc
 	if err := domain.ValidateWorkloadReference(reference); err != nil {
 		return domain.WorkloadDetail{}, err
 	}
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return domain.WorkloadDetail{}, err
+	}
+	defer release()
 	gateway, err := s.kubeGateway(ctx, clusterID)
 	if err != nil {
 		return domain.WorkloadDetail{}, err
@@ -309,6 +346,11 @@ func (s *Service) WorkloadEvents(ctx context.Context, clusterID string, referenc
 	if limit < 1 || limit > domain.MaxWorkloadEventLimit {
 		return nil, domain.Invalid("limit", "must be between 1 and 100")
 	}
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	gateway, err := s.kubeGateway(ctx, clusterID)
 	if err != nil {
 		return nil, err
@@ -324,6 +366,11 @@ func (s *Service) PodLogs(
 	if err := domain.ValidatePodLogRequest(input); err != nil {
 		return domain.PodLogs{}, err
 	}
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return domain.PodLogs{}, err
+	}
+	defer release()
 	gateway, err := s.kubeGateway(ctx, clusterID)
 	if err != nil {
 		return domain.PodLogs{}, err
@@ -339,6 +386,17 @@ func (s *Service) PodLogs(
 		return domain.PodLogs{}, fmt.Errorf("write pod log audit: %w", err)
 	}
 	return logs, logsErr
+}
+
+func (s *Service) acquireKubernetesRead(ctx context.Context) (func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	_, release, ok := s.readGovernor.TryAcquire()
+	if !ok {
+		return nil, domain.ErrBusy
+	}
+	return release, nil
 }
 
 func (s *Service) kubeGateway(ctx context.Context, clusterID string) (KubeGateway, error) {

@@ -96,6 +96,52 @@ func TestGovernorHandlesUnavailableMetricsAndDisabledAdaptation(t *testing.T) {
 	}
 }
 
+func TestGovernorTryAcquireIsNonBlockingAndReleasesCapacity(t *testing.T) {
+	t.Parallel()
+
+	governor, err := New(Config{
+		Enabled: false, MaxConcurrent: 1, HighWatermark: 0.80, CriticalWatermark: 0.95,
+		Sampler: staticSampler{sample: Sample{MemoryRatio: ratio(0.20)}},
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	status, release, ok := governor.TryAcquire()
+	if !ok || release == nil || status.ActiveOperations != 1 {
+		t.Fatalf("first TryAcquire() = %#v, release nil = %t, ok = %t", status, release == nil, ok)
+	}
+	full, blockedRelease, ok := governor.TryAcquire()
+	if ok || blockedRelease != nil || full.ActiveOperations != 1 || full.OperationLimit != 1 {
+		t.Fatalf("full TryAcquire() = %#v, release nil = %t, ok = %t", full, blockedRelease == nil, ok)
+	}
+
+	release()
+	release()
+	status, release, ok = governor.TryAcquire()
+	if !ok || status.ActiveOperations != 1 {
+		t.Fatalf("TryAcquire() after release = %#v, ok = %t", status, ok)
+	}
+	release()
+}
+
+func TestGovernorTryAcquireRejectsCriticalPressure(t *testing.T) {
+	t.Parallel()
+
+	governor, err := New(Config{
+		Enabled: true, MaxConcurrent: 4, HighWatermark: 0.80, CriticalWatermark: 0.95,
+		Sampler: staticSampler{sample: Sample{LoadRatio: ratio(0.97)}},
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	status, release, ok := governor.TryAcquire()
+	if ok || release != nil || status.Pressure != PressureCritical || status.OperationLimit != 0 {
+		t.Fatalf("TryAcquire() = %#v, release nil = %t, ok = %t", status, release == nil, ok)
+	}
+}
+
 func TestGovernorRejectsInvalidConfiguration(t *testing.T) {
 	t.Parallel()
 
@@ -139,6 +185,10 @@ type mutableSampler struct {
 	mu     sync.RWMutex
 	sample Sample
 }
+
+type staticSampler struct{ sample Sample }
+
+func (s staticSampler) Sample() Sample { return s.sample }
 
 func (s *mutableSampler) Sample() Sample {
 	s.mu.RLock()

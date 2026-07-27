@@ -88,10 +88,24 @@ type OperationGovernor interface {
 	Snapshot() resourceguard.Snapshot
 }
 
+type ReadGovernor interface {
+	TryAcquire() (resourceguard.Snapshot, func(), bool)
+	Snapshot() resourceguard.Snapshot
+}
+
+type KubernetesReadCapacity struct {
+	Adaptive bool                   `json:"adaptive"`
+	Pressure resourceguard.Pressure `json:"pressure"`
+	Active   int                    `json:"active"`
+	Limit    int                    `json:"limit"`
+	Maximum  int                    `json:"maximum"`
+}
+
 type OperationCapacity struct {
 	resourceguard.Snapshot
-	QueueDepth    int `json:"queue_depth"`
-	QueueCapacity int `json:"queue_capacity"`
+	QueueDepth      int                    `json:"queue_depth"`
+	QueueCapacity   int                    `json:"queue_capacity"`
+	KubernetesReads KubernetesReadCapacity `json:"kubernetes_reads"`
 }
 
 type Dependencies struct {
@@ -102,6 +116,7 @@ type Dependencies struct {
 	RepositoryChecker  RepositoryChecker
 	Helm               HelmGateway
 	OperationGovernor  OperationGovernor
+	ReadGovernor       ReadGovernor
 	OperationQueueSize int
 	Clock              func() time.Time
 	NewID              func(prefix string) (string, error)

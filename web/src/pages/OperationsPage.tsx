@@ -131,6 +131,7 @@ function OperationCapacityBand({ capacity, loading, error, onRetry }: {
       <span>{`内存 ${formatRatio(capacity.memory_ratio)}`}</span>
       <span>{`负载 ${formatRatio(capacity.load_ratio)}`}</span>
       <span>{`执行槽 ${capacity.active_operations} / ${capacity.operation_limit}`}</span>
+      <span>{`读取槽 ${capacity.kubernetes_reads.active} / ${capacity.kubernetes_reads.limit}`}</span>
       <span>{`队列 ${capacity.queue_depth} / ${capacity.queue_capacity}`}</span>
       {!capacity.adaptive && <span>自适应已关闭</span>}
     </section>

@@ -46,7 +46,8 @@ go run ./cmd/panel
 | `PANEL_HELM_TIMEOUT` | `5m` | 单次 Helm 操作超时 |
 | `PANEL_HELM_WORKERS` | `2` | 后台操作最大并发数（兼容原 Helm 配置名），低配置主机建议设为 `1` |
 | `PANEL_OPERATION_QUEUE_SIZE` | `64` | 后台操作等待队列容量，范围 1 到 128 |
-| `PANEL_ADAPTIVE_OPERATIONS` | `true` | 按当前内存与系统负载自动降并发，高压时暂停启动新任务 |
+| `PANEL_ADAPTIVE_OPERATIONS` | `true` | 按当前内存与系统负载收缩后台操作和集群读取并发 |
+| `PANEL_KUBERNETES_READ_CONCURRENCY` | `4` | Kubernetes 与 Helm 读取最大并发数，容量不足时快速返回 `503` |
 | `PANEL_MAX_CONCURRENT_REQUESTS` | `16` | API 同时处理的请求上限，超限快速返回 `503` |
 | `PANEL_ALLOWED_PRIVATE_CIDRS` | 空 | 允许访问的私网 CIDR，逗号分隔 |
 | `PANEL_SECURE_COOKIES` | `false` | HTTPS 部署必须设为 `true` |
@@ -56,7 +57,7 @@ go run ./cmd/panel
 
 Kubernetes 单类资源清单最多读取 5,000 项、20 页和 32 MiB 原始对象，Web 表格每页只渲染 100 行；事件仅在打开对应标签后读取，操作中心在页面不可见时暂停轮询。超过后端上限会停止读取并返回错误，避免大集群拖垮控制面。
 
-自适应操作控制默认在内存或归一化系统负载达到 80% 时将并发减半，达到 95% 时暂停启动新任务；指标暂不可用时按配置的最大并发运行。低配置主机建议同时设置 `PANEL_HELM_WORKERS=1`、较小的 `PANEL_OPERATION_QUEUE_SIZE`，并按实际流量下调 `PANEL_MAX_CONCURRENT_REQUESTS`。
+自适应资源控制默认在内存或归一化系统负载达到 80% 时，将后台操作和 Kubernetes 读取并发分别减半；达到 95% 时暂停启动新任务，并快速拒绝新的集群读取。指标暂不可用时按配置的最大并发运行。低配置主机建议设置 `PANEL_HELM_WORKERS=1`、`PANEL_KUBERNETES_READ_CONCURRENCY=2`、较小的 `PANEL_OPERATION_QUEUE_SIZE`，并按实际流量下调 `PANEL_MAX_CONCURRENT_REQUESTS`。
 
 单节点文件存储最多保留最近 2,000 条操作记录和 5,000 条审计记录；排队中或执行中的操作不会因历史清理而移除。
 

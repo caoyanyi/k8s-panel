@@ -100,25 +100,9 @@ func (g *Governor) Acquire(ctx context.Context) (Snapshot, func(), error) {
 		ctx = context.Background()
 	}
 	for {
-		sample := g.sampler.Sample()
-		g.mu.Lock()
-		snapshot := g.snapshotLocked(sample)
-		if g.active < snapshot.OperationLimit {
-			g.active++
-			snapshot.ActiveOperations = g.active
-			g.mu.Unlock()
-			var once sync.Once
-			return snapshot, func() {
-				once.Do(func() {
-					g.mu.Lock()
-					if g.active > 0 {
-						g.active--
-					}
-					g.mu.Unlock()
-				})
-			}, nil
+		if snapshot, release, ok := g.TryAcquire(); ok {
+			return snapshot, release, nil
 		}
-		g.mu.Unlock()
 
 		timer := time.NewTimer(g.retryInterval)
 		select {
@@ -130,6 +114,30 @@ func (g *Governor) Acquire(ctx context.Context) (Snapshot, func(), error) {
 		case <-timer.C:
 		}
 	}
+}
+
+func (g *Governor) TryAcquire() (Snapshot, func(), bool) {
+	sample := g.sampler.Sample()
+	g.mu.Lock()
+	snapshot := g.snapshotLocked(sample)
+	if g.active >= snapshot.OperationLimit {
+		g.mu.Unlock()
+		return snapshot, nil, false
+	}
+	g.active++
+	snapshot.ActiveOperations = g.active
+	g.mu.Unlock()
+
+	var once sync.Once
+	return snapshot, func() {
+		once.Do(func() {
+			g.mu.Lock()
+			if g.active > 0 {
+				g.active--
+			}
+			g.mu.Unlock()
+		})
+	}, true
 }
 
 func (g *Governor) Snapshot() Snapshot {

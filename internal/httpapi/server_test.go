@@ -179,6 +179,20 @@ func TestServerRejectsExcessConcurrentAPIRequests(t *testing.T) {
 	}
 }
 
+func TestBusyErrorIsRetryable(t *testing.T) {
+	t.Parallel()
+
+	response := httptest.NewRecorder()
+	writeError(response, httptest.NewRequest(http.MethodGet, "/api/v1/clusters/clu_1/summary", nil), domain.ErrBusy)
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if retryAfter := response.Header().Get("Retry-After"); retryAfter != "2" {
+		t.Fatalf("Retry-After = %q, want 2", retryAfter)
+	}
+	assertErrorCode(t, response.Body.Bytes(), "server_busy")
+}
+
 func TestLoginRateLimitBlocksRepeatedFailures(t *testing.T) {
 	t.Parallel()
 
@@ -319,7 +333,8 @@ func TestServerSubmitsControlledWorkloadOperationsAndExposesCapacity(t *testing.
 	cookie := login(t, handler)
 	capacity := authenticatedRequest(t, handler, cookie, http.MethodGet, "/api/v1/system/resources", "")
 	if capacity.Code != http.StatusOK || !strings.Contains(capacity.Body.String(), `"operation_limit":2`) ||
-		!strings.Contains(capacity.Body.String(), `"queue_capacity":16`) {
+		!strings.Contains(capacity.Body.String(), `"queue_capacity":16`) ||
+		!strings.Contains(capacity.Body.String(), `"kubernetes_reads":{"adaptive":false,"pressure":"normal","active":0,"limit":4,"maximum":4}`) {
 		t.Fatalf("capacity status = %d, body = %s", capacity.Code, capacity.Body.String())
 	}
 	unauthorizedCapacity := httptest.NewRecorder()
@@ -453,6 +468,7 @@ func newTestHandler(t *testing.T) http.Handler {
 		RepositoryChecker:  testRepositoryChecker{},
 		Helm:               testHelm{},
 		OperationGovernor:  testGovernor(t),
+		ReadGovernor:       testReadGovernor(t),
 		OperationQueueSize: 16,
 		Clock:              func() time.Time { return now },
 		NewID: func(prefix string) (string, error) {
@@ -640,6 +656,19 @@ func testGovernor(t *testing.T) platform.OperationGovernor {
 	governor, err := resourceguard.New(resourceguard.Config{
 		Enabled: false, MaxConcurrent: 2, HighWatermark: 0.80, CriticalWatermark: 0.95,
 		RetryInterval: time.Millisecond, Sampler: testResourceSampler{sample: resourceguard.Sample{MemoryRatio: &value}},
+	})
+	if err != nil {
+		t.Fatalf("resourceguard.New() error = %v", err)
+	}
+	return governor
+}
+
+func testReadGovernor(t *testing.T) platform.ReadGovernor {
+	t.Helper()
+	value := 0.10
+	governor, err := resourceguard.New(resourceguard.Config{
+		Enabled: false, MaxConcurrent: 4, HighWatermark: 0.80, CriticalWatermark: 0.95,
+		Sampler: testResourceSampler{sample: resourceguard.Sample{MemoryRatio: &value}},
 	})
 	if err != nil {
 		t.Fatalf("resourceguard.New() error = %v", err)
