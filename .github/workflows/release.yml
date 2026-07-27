@@ -215,4 +215,26 @@ jobs:
           if [[ "$IS_PRERELEASE" == "true" ]]; then
             args+=(--prerelease)
           fi
-          gh release create --repo "$GITHUB_REPOSITORY" "${args[@]}" dist/*
+          if gh release view --repo "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME already exists; keeping it for asset recovery."
+          else
+            gh release create --repo "$GITHUB_REPOSITORY" "${args[@]}"
+          fi
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          assets=(dist/*)
+          if (( ${#assets[@]} == 0 )); then
+            echo "No release assets were downloaded." >&2
+            exit 1
+          fi
+          if gh release upload --repo "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" "${assets[@]}"; then
+            exit 0
+          fi
+          echo "Initial asset upload failed; retrying once after 10 seconds." >&2
+          sleep 10
+          gh release upload --repo "$GITHUB_REPOSITORY" --clobber "$GITHUB_REF_NAME" "${assets[@]}"
