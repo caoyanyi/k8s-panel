@@ -16,6 +16,7 @@ const (
 	defaultOperationQueueSize = 64
 	maxOperationQueueSize     = 128
 	targetLockStripes         = 64
+	credentialRotationLock    = "cluster-credentials"
 )
 
 type Service struct {
@@ -171,8 +172,112 @@ func (s *Service) GetCluster(ctx context.Context, id string) (ClusterView, error
 }
 
 func (s *Service) TestClusterConnection(ctx context.Context, actor, requestID, id string) (ClusterView, error) {
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return ClusterView{}, err
+	}
+	defer release()
 	s.gatewayCache.Invalidate(id)
 	return s.testClusterConnection(ctx, actor, requestID, id)
+}
+
+func (s *Service) RotateClusterCredentials(
+	ctx context.Context,
+	actor, requestID, id string,
+	input domain.ClusterCredentialRotationInput,
+) (ClusterView, error) {
+	if err := domain.ValidateClusterCredentialRotationInput(input); err != nil {
+		return ClusterView{}, err
+	}
+	unlock, err := s.tryAcquireTargetLock(ctx, id, "", credentialRotationLock)
+	if err != nil {
+		return ClusterView{}, err
+	}
+	defer unlock()
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return ClusterView{}, err
+	}
+	defer release()
+
+	current, err := s.store.GetCluster(ctx, id)
+	if err != nil {
+		return ClusterView{}, err
+	}
+	if current.Status == domain.ClusterDisabled {
+		return ClusterView{}, domain.ErrInvalidState
+	}
+	if input.Confirmation != current.Name {
+		return ClusterView{}, domain.Invalid("confirmation", "must match the cluster name")
+	}
+
+	candidate, buildErr := s.kubeFactory.New(ctx, kubernetes.Connection{
+		Server: current.Server, CACert: input.CACert, BearerToken: input.BearerToken,
+	})
+	if buildErr != nil {
+		if candidate != nil {
+			closeIdleGateways([]KubeGateway{candidate})
+		}
+		return ClusterView{}, s.recordCredentialRotationFailure(ctx, actor, requestID, current, buildErr)
+	}
+	if candidate == nil {
+		return ClusterView{}, s.recordCredentialRotationFailure(
+			ctx, actor, requestID, current, errors.New("Kubernetes gateway builder returned no gateway"),
+		)
+	}
+	defer closeIdleGateways([]KubeGateway{candidate})
+	probe, probeErr := candidate.Probe(ctx)
+	if probeErr != nil {
+		return ClusterView{}, s.recordCredentialRotationFailure(ctx, actor, requestID, current, probeErr)
+	}
+
+	tokenCiphertext, err := s.cipher.SealString(input.BearerToken, clusterAAD(id, "bearer_token"))
+	if err != nil {
+		return ClusterView{}, s.recordCredentialRotationFailure(ctx, actor, requestID, current, fmt.Errorf("encrypt cluster token: %w", err))
+	}
+	var caCiphertext string
+	if input.CACert != "" {
+		caCiphertext, err = s.cipher.SealString(input.CACert, clusterAAD(id, "ca_cert"))
+		if err != nil {
+			return ClusterView{}, s.recordCredentialRotationFailure(ctx, actor, requestID, current, fmt.Errorf("encrypt cluster CA: %w", err))
+		}
+	}
+
+	updated := current
+	updated.CACertCiphertext = caCiphertext
+	updated.BearerTokenCiphertext = tokenCiphertext
+	updated.Status = domain.ClusterConnected
+	updated.Version = probe.Version
+	updated.LastErrorCode = ""
+	updated.LastCheckedAt = s.now()
+	updated.UpdatedAt = updated.LastCheckedAt
+	audit, err := s.newAuditEvent(
+		actor, requestID, "cluster.credentials.rotate", "succeeded", id, "", current.Name,
+		"connection credentials rotated", "",
+	)
+	if err != nil {
+		return ClusterView{}, err
+	}
+	if err := s.store.RotateClusterCredentials(ctx, current, updated, audit); err != nil {
+		return ClusterView{}, err
+	}
+	s.gatewayCache.Invalidate(id)
+	return clusterView(updated), nil
+}
+
+func (s *Service) recordCredentialRotationFailure(
+	ctx context.Context,
+	actor, requestID string,
+	cluster domain.Cluster,
+	cause error,
+) error {
+	if err := s.audit(
+		ctx, actor, requestID, "cluster.credentials.rotate", "failed", cluster.ID, "", cluster.Name,
+		"candidate credential validation failed", "",
+	); err != nil {
+		return fmt.Errorf("write credential rotation audit: %w", err)
+	}
+	return cause
 }
 
 func (s *Service) testClusterConnection(ctx context.Context, actor, requestID, id string) (ClusterView, error) {

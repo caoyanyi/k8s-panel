@@ -1,5 +1,5 @@
-import { LoaderCircle, Plus, Power, RefreshCw, Trash2 } from 'lucide-react'
-import { type FormEvent, useState } from 'react'
+import { KeyRound, LoaderCircle, Plus, Power, RefreshCw, Trash2 } from 'lucide-react'
+import { type FormEvent, useCallback, useState } from 'react'
 import { api, errorMessage } from '../api'
 import { EmptyState, ErrorState, LoadingState } from '../components/DataState'
 import { Modal } from '../components/Modal'
@@ -22,6 +22,15 @@ const initialForm = {
   bearer_token: '',
 }
 
+const initialRotationForm = {
+  bearer_token: '',
+  ca_cert: '',
+  confirmation: '',
+}
+
+const maxBearerTokenLength = 64 * 1024
+const maxCACertLength = 256 * 1024
+
 export function ClustersPage({ notify }: ClustersPageProps) {
   const { clusters, clustersLoading, clustersError, refreshClusters, setSelectedClusterId } = usePanel()
   const [createOpen, setCreateOpen] = useState(false)
@@ -30,6 +39,8 @@ export function ClustersPage({ notify }: ClustersPageProps) {
   const [formError, setFormError] = useState('')
   const [deleteTarget, setDeleteTarget] = useState<Cluster | null>(null)
   const [confirmation, setConfirmation] = useState('')
+  const [rotationTarget, setRotationTarget] = useState<Cluster | null>(null)
+  const [rotationForm, setRotationForm] = useState(initialRotationForm)
   const [busyID, setBusyID] = useState('')
 
   const closeCreate = () => {
@@ -61,6 +72,34 @@ export function ClustersPage({ notify }: ClustersPageProps) {
     } finally {
       setSubmitting(false)
       setForm((current) => ({ ...current, bearer_token: '', ca_cert: '' }))
+    }
+  }
+
+  const closeRotation = useCallback(() => {
+    setRotationTarget(null)
+    setRotationForm(initialRotationForm)
+    setFormError('')
+  }, [])
+
+  const rotateCredentials = async (event: FormEvent) => {
+    event.preventDefault()
+    if (!rotationTarget) return
+    setSubmitting(true)
+    setFormError('')
+    try {
+      await api.post<Cluster>(`/api/v1/clusters/${rotationTarget.id}/credential-rotations`, {
+        bearer_token: rotationForm.bearer_token,
+        ca_cert: rotationForm.ca_cert,
+        confirmation: rotationForm.confirmation,
+      })
+      await refreshClusters()
+      notify('success', `${rotationTarget.name} 凭据已轮换`)
+      closeRotation()
+    } catch (error) {
+      setFormError(errorMessage(error))
+    } finally {
+      setSubmitting(false)
+      setRotationForm((current) => ({ ...current, bearer_token: '', ca_cert: '' }))
     }
   }
 
@@ -128,6 +167,16 @@ export function ClustersPage({ notify }: ClustersPageProps) {
                       <button type="button" className="icon-button" title="检测连接" aria-label={`检测 ${cluster.name} 连接`} disabled={busyID === cluster.id || cluster.status === 'disabled'} onClick={() => void runAction(cluster, 'test')}>
                         <RefreshCw size={16} className={busyID === cluster.id ? 'spin' : ''} />
                       </button>
+                      <button
+                        type="button"
+                        className="icon-button"
+                        title="轮换凭据"
+                        aria-label={`轮换 ${cluster.name} 凭据`}
+                        disabled={busyID === cluster.id || cluster.status === 'disabled'}
+                        onClick={() => { setRotationTarget(cluster); setRotationForm(initialRotationForm); setFormError('') }}
+                      >
+                        <KeyRound size={16} />
+                      </button>
                       <button type="button" className="icon-button" title={cluster.status === 'disabled' ? '启用' : '停用'} aria-label={`${cluster.status === 'disabled' ? '启用' : '停用'} ${cluster.name}`} disabled={busyID === cluster.id} onClick={() => void runAction(cluster, 'toggle')}>
                         <Power size={16} />
                       </button>
@@ -148,11 +197,71 @@ export function ClustersPage({ notify }: ClustersPageProps) {
           <div className="field"><label htmlFor="cluster-name">名称</label><input id="cluster-name" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} autoFocus /></div>
           <div className="field"><label htmlFor="cluster-environment">环境</label><select id="cluster-environment" value={form.environment} onChange={(event) => setForm({ ...form, environment: event.target.value as Environment })}><option value="development">开发</option><option value="staging">预发</option><option value="production">生产</option></select></div>
           <div className="field field-full"><label htmlFor="cluster-server">API Server</label><input id="cluster-server" type="url" placeholder="https://api.example.com:6443" value={form.server} onChange={(event) => setForm({ ...form, server: event.target.value })} /></div>
-          <div className="field field-full"><label htmlFor="cluster-token">Bearer Token</label><textarea id="cluster-token" className="secret-input" rows={3} value={form.bearer_token} onChange={(event) => setForm({ ...form, bearer_token: event.target.value })} autoComplete="off" spellCheck={false} /></div>
-          <div className="field field-full"><label htmlFor="cluster-ca">CA 证书（PEM，可选）</label><textarea id="cluster-ca" className="mono" rows={5} value={form.ca_cert} onChange={(event) => setForm({ ...form, ca_cert: event.target.value })} spellCheck={false} /></div>
+          <div className="field field-full"><label htmlFor="cluster-token">Bearer Token</label><textarea id="cluster-token" className="secret-input" rows={3} maxLength={maxBearerTokenLength} value={form.bearer_token} onChange={(event) => setForm({ ...form, bearer_token: event.target.value })} autoComplete="off" spellCheck={false} /></div>
+          <div className="field field-full"><label htmlFor="cluster-ca">CA 证书（PEM，可选）</label><textarea id="cluster-ca" className="mono" rows={5} maxLength={maxCACertLength} value={form.ca_cert} onChange={(event) => setForm({ ...form, ca_cert: event.target.value })} spellCheck={false} /></div>
           {formError && <div className="form-error field-full" role="alert">{formError}</div>}
           <div className="form-actions field-full"><button type="button" className="button button-secondary" onClick={closeCreate}>取消</button><button type="submit" className="button button-primary" disabled={submitting}>{submitting && <LoaderCircle className="spin" size={16} />} 保存并检测</button></div>
         </form>
+      </Modal>
+
+      <Modal title="轮换集群凭据" open={Boolean(rotationTarget)} onClose={closeRotation}>
+        {rotationTarget && (
+          <form className="credential-dialog" onSubmit={rotateCredentials} noValidate>
+            <div className="credential-target">
+              <span>集群</span>
+              <strong>{rotationTarget.name}</strong>
+              <small>{rotationTarget.server}</small>
+            </div>
+            <div className="field">
+              <label htmlFor="rotation-token">Bearer Token</label>
+              <textarea
+                id="rotation-token"
+                className="secret-input"
+                rows={3}
+                maxLength={maxBearerTokenLength}
+                value={rotationForm.bearer_token}
+                onChange={(event) => setRotationForm((current) => ({ ...current, bearer_token: event.target.value }))}
+                autoComplete="off"
+                spellCheck={false}
+                autoFocus
+              />
+            </div>
+            <div className="field">
+              <label htmlFor="rotation-ca">CA 证书（PEM，可选）</label>
+              <textarea
+                id="rotation-ca"
+                className="mono"
+                rows={5}
+                maxLength={maxCACertLength}
+                value={rotationForm.ca_cert}
+                onChange={(event) => setRotationForm((current) => ({ ...current, ca_cert: event.target.value }))}
+                spellCheck={false}
+              />
+            </div>
+            <div className="field">
+              <label htmlFor="rotation-confirmation">输入集群名称确认</label>
+              <input
+                id="rotation-confirmation"
+                maxLength={64}
+                value={rotationForm.confirmation}
+                onChange={(event) => setRotationForm((current) => ({ ...current, confirmation: event.target.value }))}
+                autoComplete="off"
+              />
+            </div>
+            {formError && <div className="form-error" role="alert">{formError}</div>}
+            <div className="form-actions">
+              <button type="button" className="button button-secondary" onClick={closeRotation}>取消</button>
+              <button
+                type="submit"
+                className="button button-primary"
+                disabled={!rotationForm.bearer_token || rotationForm.confirmation !== rotationTarget.name || submitting}
+              >
+                {submitting ? <LoaderCircle className="spin" size={16} /> : <KeyRound size={16} />}
+                验证并轮换
+              </button>
+            </div>
+          </form>
+        )}
       </Modal>
 
       <Modal title="删除集群连接" open={Boolean(deleteTarget)} onClose={() => { setDeleteTarget(null); setConfirmation(''); setFormError('') }}>

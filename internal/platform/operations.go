@@ -567,6 +567,22 @@ func (s *Service) acquireTargetLock(
 	}
 }
 
+func (s *Service) tryAcquireTargetLock(
+	ctx context.Context,
+	clusterID, namespace, name string,
+) (func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	lock := s.targetLock(clusterID, namespace, name)
+	select {
+	case lock <- struct{}{}:
+		return func() { <-lock }, nil
+	default:
+		return nil, domain.ErrBusy
+	}
+}
+
 func (s *Service) targetLock(clusterID, namespace, name string) chan struct{} {
 	value := clusterID + "\x00" + namespace + "\x00" + name
 	var hash uint64 = 14695981039346656037
@@ -581,11 +597,23 @@ func (s *Service) audit(
 	ctx context.Context,
 	actor, requestID, action, result, clusterID, namespace, target, summary, operationID string,
 ) error {
+	event, err := s.newAuditEvent(
+		actor, requestID, action, result, clusterID, namespace, target, summary, operationID,
+	)
+	if err != nil {
+		return err
+	}
+	return s.store.CreateAuditEvent(ctx, event)
+}
+
+func (s *Service) newAuditEvent(
+	actor, requestID, action, result, clusterID, namespace, target, summary, operationID string,
+) (domain.AuditEvent, error) {
 	id, err := s.newID("audit")
 	if err != nil {
-		return fmt.Errorf("create audit ID: %w", err)
+		return domain.AuditEvent{}, fmt.Errorf("create audit ID: %w", err)
 	}
-	return s.store.CreateAuditEvent(ctx, domain.AuditEvent{
+	return domain.AuditEvent{
 		ID:          id,
 		RequestID:   requestID,
 		OperationID: operationID,
@@ -597,7 +625,7 @@ func (s *Service) audit(
 		Target:      target,
 		Summary:     summary,
 		CreatedAt:   s.now(),
-	})
+	}, nil
 }
 
 func validateHelmTarget(input domain.HelmOperationInput) error {

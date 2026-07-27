@@ -43,6 +43,17 @@ type ClusterInput struct {
 	BearerToken string
 }
 
+const (
+	MaxClusterBearerTokenBytes = 64 * 1024
+	MaxClusterCACertBytes      = 256 * 1024
+)
+
+type ClusterCredentialRotationInput struct {
+	CACert       string
+	BearerToken  string
+	Confirmation string
+}
+
 type Repository struct {
 	ID                 string    `json:"id"`
 	Name               string    `json:"name"`

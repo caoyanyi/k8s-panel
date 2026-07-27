@@ -5,7 +5,7 @@ K8s Panel 是一个独立实现的 Kubernetes 与 Helm 管理面板。后端使�
 ## MVP 功能
 
 - 单管理员登录、HttpOnly 会话 Cookie、登录失败限流
-- 多集群配置、连接测试、启停和删除确认
+- 多集群配置、连接测试、启停和删除确认，支持验证后原子轮换访问凭据
 - 集群概览、节点/命名空间资源清单与节点诊断详情
 - Deployment/StatefulSet/DaemonSet/Pod 工作负载查询
 - 工作负载详情、脱敏 YAML、关联事件与有界 Pod 日志快照
@@ -59,7 +59,7 @@ go run ./cmd/panel
 
 Kubernetes 单类资源清单最多读取 5,000 项、20 页和 32 MiB 原始对象，Web 表格每页只渲染 100 行；事件仅在打开对应标签后读取，操作中心在页面不可见时暂停轮询。超过后端上限会停止读取并返回错误，避免大集群拖垮控制面。
 
-自适应资源控制默认在内存或归一化系统负载达到 80% 时，将后台操作、Kubernetes 读取并发和客户端缓存容量分别减半；达到 95% 时暂停启动新任务、快速拒绝新的集群读取，并将客户端缓存收缩到 1。客户端按集群与凭据版本复用，闲置超时、LRU 淘汰、禁用/删除集群或服务关闭时释放空闲连接，不缓存 Kubernetes 对象和日志。指标暂不可用时按配置上限运行。低配置主机建议设置 `PANEL_HELM_WORKERS=1`、`PANEL_KUBERNETES_READ_CONCURRENCY=2`、`PANEL_KUBERNETES_CLIENT_CACHE_SIZE=4`、较小的 `PANEL_OPERATION_QUEUE_SIZE`，并按实际流量下调 `PANEL_MAX_CONCURRENT_REQUESTS`。
+自适应资源控制默认在内存或归一化系统负载达到 80% 时，将后台操作、Kubernetes 读取并发和客户端缓存容量分别减半；达到 95% 时暂停启动新任务、快速拒绝新的集群读取、显式连接测试和凭据轮换，并将客户端缓存收缩到 1。凭据轮换先使用独立客户端验证候选凭据，成功后再原子替换，失败时保留原凭据和缓存连接。客户端按集群与凭据版本复用，闲置超时、LRU 淘汰、禁用/删除集群或服务关闭时释放空闲连接，不缓存 Kubernetes 对象和日志。指标暂不可用时按配置上限运行。低配置主机建议设置 `PANEL_HELM_WORKERS=1`、`PANEL_KUBERNETES_READ_CONCURRENCY=2`、`PANEL_KUBERNETES_CLIENT_CACHE_SIZE=4`、较小的 `PANEL_OPERATION_QUEUE_SIZE`，并按实际流量下调 `PANEL_MAX_CONCURRENT_REQUESTS`。
 
 单节点文件存储最多保留最近 2,000 条操作记录和 5,000 条审计记录；排队中或执行中的操作不会因历史清理而移除。
 

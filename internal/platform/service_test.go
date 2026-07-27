@@ -141,6 +141,279 @@ func TestServiceReusesAndInvalidatesKubernetesGatewayCache(t *testing.T) {
 	}
 }
 
+func TestServiceRotatesClusterCredentialsAfterCandidateValidation(t *testing.T) {
+	t.Parallel()
+
+	cipher, err := secure.NewCipher([]byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatalf("secure.NewCipher() error = %v", err)
+	}
+	current := &fakeKubeGateway{probe: domain.ClusterProbe{Version: "v1.36.2"}}
+	candidate := &fakeKubeGateway{probe: domain.ClusterProbe{Version: "v1.36.3"}}
+	rebuilt := &fakeKubeGateway{probe: domain.ClusterProbe{Version: "v1.36.3"}}
+	factory := &sequenceKubeFactory{gateways: []KubeGateway{current, candidate, rebuilt}}
+	service, fileStore, _ := newTestService(t, serviceFakes{cipher: cipher, factory: factory})
+	created, err := service.CreateCluster(context.Background(), "admin", "req_create", domain.ClusterInput{
+		Name: "production-east", Environment: domain.EnvironmentProduction, Server: "https://api.example.com",
+		CACert: "old-ca", BearerToken: "old-token",
+	})
+	if err != nil {
+		t.Fatalf("CreateCluster() error = %v", err)
+	}
+	before, err := fileStore.GetCluster(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("GetCluster(before) error = %v", err)
+	}
+
+	rotated, err := service.RotateClusterCredentials(context.Background(), "admin", "req_rotate", created.ID, domain.ClusterCredentialRotationInput{
+		CACert: "new-ca", BearerToken: "new-token", Confirmation: created.Name,
+	})
+	if err != nil {
+		t.Fatalf("RotateClusterCredentials() error = %v", err)
+	}
+	if rotated.Status != domain.ClusterConnected || rotated.Version != "v1.36.3" {
+		t.Fatalf("rotated cluster = %#v", rotated)
+	}
+	after, err := fileStore.GetCluster(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("GetCluster(after) error = %v", err)
+	}
+	if after.BearerTokenCiphertext == before.BearerTokenCiphertext || after.CACertCiphertext == before.CACertCiphertext {
+		t.Fatal("credential ciphertext was not replaced")
+	}
+	token, err := cipher.OpenString(after.BearerTokenCiphertext, clusterAAD(created.ID, "bearer_token"))
+	if err != nil || token != "new-token" {
+		t.Fatalf("rotated token = %q, error = %v", token, err)
+	}
+	ca, err := cipher.OpenString(after.CACertCiphertext, clusterAAD(created.ID, "ca_cert"))
+	if err != nil || ca != "new-ca" {
+		t.Fatalf("rotated CA = %q, error = %v", ca, err)
+	}
+	connections := factory.Connections()
+	if len(connections) != 2 || connections[1].BearerToken != "new-token" || connections[1].CACert != "new-ca" {
+		t.Fatalf("candidate connections = %#v", connections)
+	}
+	if current.idleCloseCalls.Load() != 1 || candidate.idleCloseCalls.Load() != 1 {
+		t.Fatalf("current closes = %d, candidate closes = %d", current.idleCloseCalls.Load(), candidate.idleCloseCalls.Load())
+	}
+	if _, err := service.Summary(context.Background(), created.ID); err != nil {
+		t.Fatalf("Summary() after rotation error = %v", err)
+	}
+	if factory.Calls() != 3 {
+		t.Fatalf("factory calls after lazy rebuild = %d, want 3", factory.Calls())
+	}
+	audits, err := service.ListAuditEvents(context.Background(), 100)
+	if err != nil {
+		t.Fatalf("ListAuditEvents() error = %v", err)
+	}
+	found := false
+	for _, event := range audits {
+		if event.Action != "cluster.credentials.rotate" || event.Result != "succeeded" {
+			continue
+		}
+		found = true
+		if strings.Contains(event.Summary, "new-token") || strings.Contains(event.Summary, "new-ca") {
+			t.Fatalf("rotation audit leaked credentials: %#v", event)
+		}
+	}
+	if !found {
+		t.Fatalf("rotation audit not found: %#v", audits)
+	}
+}
+
+func TestServiceKeepsCurrentCredentialsWhenCandidateValidationFails(t *testing.T) {
+	t.Parallel()
+
+	current := &fakeKubeGateway{probe: domain.ClusterProbe{Version: "v1.36.2"}}
+	candidate := &fakeKubeGateway{probeErr: domain.ErrUnauthorized}
+	factory := &sequenceKubeFactory{gateways: []KubeGateway{current, candidate}}
+	service, fileStore, _ := newTestService(t, serviceFakes{factory: factory})
+	created, err := service.CreateCluster(context.Background(), "admin", "req_create", domain.ClusterInput{
+		Name: "production-east", Environment: domain.EnvironmentProduction, Server: "https://api.example.com", BearerToken: "old-token",
+	})
+	if err != nil {
+		t.Fatalf("CreateCluster() error = %v", err)
+	}
+	before, err := fileStore.GetCluster(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("GetCluster(before) error = %v", err)
+	}
+
+	_, err = service.RotateClusterCredentials(context.Background(), "admin", "req_rotate", created.ID, domain.ClusterCredentialRotationInput{
+		BearerToken: "rejected-token", Confirmation: created.Name,
+	})
+	if !errors.Is(err, domain.ErrUnauthorized) {
+		t.Fatalf("RotateClusterCredentials() error = %v, want unauthorized", err)
+	}
+	after, err := fileStore.GetCluster(context.Background(), created.ID)
+	if err != nil || after != before {
+		t.Fatalf("cluster changed after rejected rotation: before = %#v, after = %#v, error = %v", before, after, err)
+	}
+	if current.idleCloseCalls.Load() != 0 || candidate.idleCloseCalls.Load() != 1 {
+		t.Fatalf("current closes = %d, candidate closes = %d", current.idleCloseCalls.Load(), candidate.idleCloseCalls.Load())
+	}
+	if _, err := service.Summary(context.Background(), created.ID); err != nil {
+		t.Fatalf("Summary() with current client error = %v", err)
+	}
+	if factory.Calls() != 2 {
+		t.Fatalf("factory calls = %d, want cached current client", factory.Calls())
+	}
+	audits, err := service.ListAuditEvents(context.Background(), 100)
+	if err != nil {
+		t.Fatalf("ListAuditEvents() error = %v", err)
+	}
+	foundFailure := false
+	for _, event := range audits {
+		if event.Action == "cluster.credentials.rotate" && event.Result == "failed" {
+			foundFailure = true
+			if strings.Contains(event.Summary, "rejected-token") {
+				t.Fatalf("failed rotation audit leaked token: %#v", event)
+			}
+		}
+	}
+	if !foundFailure {
+		t.Fatalf("failed rotation audit not found: %#v", audits)
+	}
+}
+
+func TestServiceRejectsCredentialRotationAndConnectionTestUnderCriticalPressure(t *testing.T) {
+	t.Parallel()
+
+	pressure := 0.97
+	readGovernor, err := resourceguard.New(resourceguard.Config{
+		Enabled: true, MaxConcurrent: 4, HighWatermark: 0.80, CriticalWatermark: 0.95,
+		Sampler: staticResourceSampler{sample: resourceguard.Sample{MemoryRatio: &pressure}},
+	})
+	if err != nil {
+		t.Fatalf("resourceguard.New() error = %v", err)
+	}
+	current := &fakeKubeGateway{probe: domain.ClusterProbe{Version: "v1.36.2"}}
+	factory := &sequenceKubeFactory{gateways: []KubeGateway{current}}
+	service, fileStore, _ := newTestService(t, serviceFakes{factory: factory, readGovernor: readGovernor})
+	created, err := service.CreateCluster(context.Background(), "admin", "req_create", domain.ClusterInput{
+		Name: "production-east", Environment: domain.EnvironmentProduction, Server: "https://api.example.com", BearerToken: "old-token",
+	})
+	if err != nil {
+		t.Fatalf("CreateCluster() error = %v", err)
+	}
+	before, err := fileStore.GetCluster(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("GetCluster(before) error = %v", err)
+	}
+
+	if _, err := service.RotateClusterCredentials(context.Background(), "admin", "req_rotate", created.ID, domain.ClusterCredentialRotationInput{
+		BearerToken: "new-token", Confirmation: created.Name,
+	}); !errors.Is(err, domain.ErrBusy) {
+		t.Fatalf("RotateClusterCredentials() error = %v, want busy", err)
+	}
+	if _, err := service.TestClusterConnection(context.Background(), "admin", "req_test", created.ID); !errors.Is(err, domain.ErrBusy) {
+		t.Fatalf("TestClusterConnection() error = %v, want busy", err)
+	}
+	after, err := fileStore.GetCluster(context.Background(), created.ID)
+	if err != nil || after != before {
+		t.Fatalf("cluster changed under critical pressure: before = %#v, after = %#v, error = %v", before, after, err)
+	}
+	if factory.Calls() != 1 || current.idleCloseCalls.Load() != 0 {
+		t.Fatalf("factory calls = %d, current closes = %d", factory.Calls(), current.idleCloseCalls.Load())
+	}
+}
+
+func TestServiceRejectsConcurrentCredentialRotationForSameCluster(t *testing.T) {
+	t.Parallel()
+
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	current := &fakeKubeGateway{probe: domain.ClusterProbe{Version: "v1.36.2"}}
+	candidate := &fakeKubeGateway{
+		probe: domain.ClusterProbe{Version: "v1.36.3"}, probeStarted: started, probeRelease: release,
+	}
+	factory := &sequenceKubeFactory{gateways: []KubeGateway{current, candidate}}
+	service, _, _ := newTestService(t, serviceFakes{factory: factory})
+	created, err := service.CreateCluster(context.Background(), "admin", "req_create", domain.ClusterInput{
+		Name: "production-east", Environment: domain.EnvironmentProduction, Server: "https://api.example.com", BearerToken: "old-token",
+	})
+	if err != nil {
+		t.Fatalf("CreateCluster() error = %v", err)
+	}
+	result := make(chan error, 1)
+	go func() {
+		_, rotateErr := service.RotateClusterCredentials(context.Background(), "admin", "req_rotate_1", created.ID, domain.ClusterCredentialRotationInput{
+			BearerToken: "new-token-1", Confirmation: created.Name,
+		})
+		result <- rotateErr
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("candidate validation did not start")
+	}
+	if _, err := service.RotateClusterCredentials(context.Background(), "admin", "req_rotate_2", created.ID, domain.ClusterCredentialRotationInput{
+		BearerToken: "new-token-2", Confirmation: created.Name,
+	}); !errors.Is(err, domain.ErrBusy) {
+		t.Fatalf("concurrent RotateClusterCredentials() error = %v, want busy", err)
+	}
+	close(release)
+	if err := <-result; err != nil {
+		t.Fatalf("first RotateClusterCredentials() error = %v", err)
+	}
+	if factory.Calls() != 2 {
+		t.Fatalf("factory calls = %d, want one candidate validation", factory.Calls())
+	}
+}
+
+func TestServiceRejectsCredentialRotationBeforeCandidateValidation(t *testing.T) {
+	t.Parallel()
+
+	current := &fakeKubeGateway{probe: domain.ClusterProbe{Version: "v1.36.2"}}
+	factory := &sequenceKubeFactory{gateways: []KubeGateway{current}}
+	service, fileStore, _ := newTestService(t, serviceFakes{factory: factory})
+	created, err := service.CreateCluster(context.Background(), "admin", "req_create", domain.ClusterInput{
+		Name: "production-east", Environment: domain.EnvironmentProduction, Server: "https://api.example.com", BearerToken: "old-token",
+	})
+	if err != nil {
+		t.Fatalf("CreateCluster() error = %v", err)
+	}
+
+	valid := domain.ClusterCredentialRotationInput{BearerToken: "new-token", Confirmation: created.Name}
+	invalid := valid
+	invalid.BearerToken = "invalid token"
+	if _, err := service.RotateClusterCredentials(context.Background(), "admin", "req_invalid", created.ID, invalid); err == nil {
+		t.Fatal("RotateClusterCredentials() accepted whitespace in the token")
+	}
+	canceledContext, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := service.RotateClusterCredentials(canceledContext, "admin", "req_canceled", created.ID, valid); !errors.Is(err, context.Canceled) {
+		t.Fatalf("RotateClusterCredentials(canceled) error = %v, want context canceled", err)
+	}
+	if _, err := service.RotateClusterCredentials(context.Background(), "admin", "req_missing", "clu_missing", valid); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("RotateClusterCredentials(missing) error = %v, want not found", err)
+	}
+
+	stored, err := fileStore.GetCluster(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("GetCluster() error = %v", err)
+	}
+	stored.Status = domain.ClusterDisabled
+	if err := fileStore.UpdateCluster(context.Background(), stored); err != nil {
+		t.Fatalf("UpdateCluster(disabled) error = %v", err)
+	}
+	if _, err := service.RotateClusterCredentials(context.Background(), "admin", "req_disabled", created.ID, valid); !errors.Is(err, domain.ErrInvalidState) {
+		t.Fatalf("RotateClusterCredentials(disabled) error = %v, want invalid state", err)
+	}
+	stored.Status = domain.ClusterConnected
+	if err := fileStore.UpdateCluster(context.Background(), stored); err != nil {
+		t.Fatalf("UpdateCluster(connected) error = %v", err)
+	}
+	wrongConfirmation := valid
+	wrongConfirmation.Confirmation = "production-west"
+	if _, err := service.RotateClusterCredentials(context.Background(), "admin", "req_confirmation", created.ID, wrongConfirmation); err == nil {
+		t.Fatal("RotateClusterCredentials() accepted a mismatched confirmation")
+	}
+	if factory.Calls() != 1 {
+		t.Fatalf("factory calls = %d, want no candidate builds", factory.Calls())
+	}
+}
+
 func TestServicePersistsUnreachableProbeWithoutLeakingError(t *testing.T) {
 	t.Parallel()
 
@@ -1069,18 +1342,20 @@ func (f fakeKubeFactory) New(context.Context, kubernetes.Connection) (KubeGatewa
 }
 
 type sequenceKubeFactory struct {
-	mu       sync.Mutex
-	gateways []KubeGateway
-	calls    int
+	mu          sync.Mutex
+	gateways    []KubeGateway
+	connections []kubernetes.Connection
+	calls       int
 }
 
-func (f *sequenceKubeFactory) New(context.Context, kubernetes.Connection) (KubeGateway, error) {
+func (f *sequenceKubeFactory) New(_ context.Context, connection kubernetes.Connection) (KubeGateway, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.calls >= len(f.gateways) {
 		return nil, errors.New("unexpected Kubernetes gateway build")
 	}
 	gateway := f.gateways[f.calls]
+	f.connections = append(f.connections, connection)
 	f.calls++
 	return gateway, nil
 }
@@ -1091,9 +1366,17 @@ func (f *sequenceKubeFactory) Calls() int {
 	return f.calls
 }
 
+func (f *sequenceKubeFactory) Connections() []kubernetes.Connection {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]kubernetes.Connection(nil), f.connections...)
+}
+
 type fakeKubeGateway struct {
 	probe            domain.ClusterProbe
 	probeErr         error
+	probeStarted     chan<- struct{}
+	probeRelease     <-chan struct{}
 	summaryCalls     atomic.Int64
 	summaryStarted   chan struct{}
 	summaryRelease   <-chan struct{}
@@ -1121,7 +1404,20 @@ type fakeKubeGateway struct {
 
 func (g *fakeKubeGateway) CloseIdleConnections() { g.idleCloseCalls.Add(1) }
 
-func (g *fakeKubeGateway) Probe(context.Context) (domain.ClusterProbe, error) {
+func (g *fakeKubeGateway) Probe(ctx context.Context) (domain.ClusterProbe, error) {
+	if g.probeStarted != nil {
+		select {
+		case g.probeStarted <- struct{}{}:
+		default:
+		}
+	}
+	if g.probeRelease != nil {
+		select {
+		case <-g.probeRelease:
+		case <-ctx.Done():
+			return domain.ClusterProbe{}, ctx.Err()
+		}
+	}
 	return g.probe, g.probeErr
 }
 func (g *fakeKubeGateway) Summary(ctx context.Context) (domain.ClusterSummary, error) {

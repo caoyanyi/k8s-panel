@@ -301,6 +301,11 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); }
 .danger-target span { color: #8f4d4d; font-size: 11px; }
 .danger-target strong { font-size: 14px; }
 .danger-target small { color: var(--muted); overflow-wrap: anywhere; }
+.credential-dialog { display: grid; gap: 16px; }
+.credential-target { padding: 12px; display: flex; flex-direction: column; gap: 4px; background: #f4f7f5; border-left: 4px solid var(--primary); }
+.credential-target span { color: var(--muted); font-size: 11px; }
+.credential-target strong { font-size: 14px; }
+.credential-target small { color: var(--muted); overflow-wrap: anywhere; }
 .operation-capacity { min-height: 48px; margin-bottom: 12px; padding: 8px 14px; display: flex; align-items: center; flex-wrap: wrap; gap: 10px 22px; border: 1px solid var(--line); background: #fff; color: #46534c; font-size: 11px; }
 .operation-capacity > span { white-space: nowrap; }
 .operation-capacity-state { display: flex; align-items: center; gap: 8px; }

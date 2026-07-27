@@ -14,6 +14,7 @@ type Store interface {
 	ListClusters(context.Context) ([]domain.Cluster, error)
 	GetCluster(context.Context, string) (domain.Cluster, error)
 	UpdateCluster(context.Context, domain.Cluster) error
+	RotateClusterCredentials(context.Context, domain.Cluster, domain.Cluster, domain.AuditEvent) error
 	DeleteCluster(context.Context, string) error
 
 	CreateRepository(context.Context, domain.Repository) error

@@ -188,6 +188,51 @@ func (s *File) UpdateCluster(ctx context.Context, cluster domain.Cluster) error 
 	return s.commit(next)
 }
 
+func (s *File) RotateClusterCredentials(
+	ctx context.Context,
+	expected domain.Cluster,
+	updated domain.Cluster,
+	audit domain.AuditEvent,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if expected.ID == "" || updated.ID != expected.ID {
+		return errors.New("credential rotation cluster is invalid")
+	}
+	if audit.ID == "" || audit.ClusterID != updated.ID {
+		return errors.New("credential rotation audit is invalid")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	clusterIndex := -1
+	for index := range s.data.Clusters {
+		if s.data.Clusters[index].ID != expected.ID {
+			continue
+		}
+		clusterIndex = index
+		if s.data.Clusters[index] != expected {
+			return domain.ErrConflict
+		}
+		break
+	}
+	if clusterIndex < 0 {
+		return domain.ErrNotFound
+	}
+	for _, existing := range s.data.AuditEvents {
+		if existing.ID == audit.ID {
+			return domain.ErrConflict
+		}
+	}
+
+	next := cloneState(s.data)
+	next.Clusters[clusterIndex] = updated
+	next.AuditEvents = append(next.AuditEvents, audit)
+	next.AuditEvents = trimAuditHistory(next.AuditEvents)
+	return s.commit(next)
+}
+
 func (s *File) DeleteCluster(ctx context.Context, id string) error {
 	if err := ctx.Err(); err != nil {
 		return err

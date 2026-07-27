@@ -75,6 +75,79 @@ func TestFileStoreRejectsDuplicateClusterName(t *testing.T) {
 	}
 }
 
+func TestFileStoreRotatesClusterCredentialsAndAuditAtomically(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "panel.json")
+	now := time.Date(2026, 7, 27, 14, 0, 0, 0, time.UTC)
+	fileStore, err := Open(path, func() time.Time { return now })
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	expected := domain.Cluster{
+		ID: "clu_one", Name: "production-east", Environment: domain.EnvironmentProduction,
+		Server: "https://api.example.com", Status: domain.ClusterConnected,
+		CACertCiphertext: "old-ca", BearerTokenCiphertext: "old-token", CreatedAt: now, UpdatedAt: now,
+	}
+	if err := fileStore.CreateCluster(context.Background(), expected); err != nil {
+		t.Fatalf("CreateCluster() error = %v", err)
+	}
+	updated := expected
+	updated.CACertCiphertext = "new-ca"
+	updated.BearerTokenCiphertext = "new-token"
+	updated.Version = "v1.36.3"
+	updated.UpdatedAt = now.Add(time.Minute)
+	audit := domain.AuditEvent{
+		ID: "audit_rotate", RequestID: "req_rotate", Actor: "admin", Action: "cluster.credentials.rotate",
+		Result: "succeeded", ClusterID: expected.ID, Target: expected.Name, Summary: "connection credentials rotated", CreatedAt: updated.UpdatedAt,
+	}
+
+	canceledContext, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := fileStore.RotateClusterCredentials(canceledContext, expected, updated, audit); !errors.Is(err, context.Canceled) {
+		t.Fatalf("RotateClusterCredentials(canceled) error = %v", err)
+	}
+	if err := fileStore.RotateClusterCredentials(context.Background(), expected, domain.Cluster{}, audit); err == nil {
+		t.Fatal("RotateClusterCredentials() accepted a mismatched cluster ID")
+	}
+	if err := fileStore.RotateClusterCredentials(context.Background(), expected, updated, domain.AuditEvent{}); err == nil {
+		t.Fatal("RotateClusterCredentials() accepted an invalid audit event")
+	}
+	missing := expected
+	missing.ID = "clu_missing"
+	missingUpdated := updated
+	missingUpdated.ID = missing.ID
+	if err := fileStore.RotateClusterCredentials(
+		context.Background(), missing, missingUpdated, domain.AuditEvent{ID: "audit_missing", ClusterID: missing.ID},
+	); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("RotateClusterCredentials(missing) error = %v, want not found", err)
+	}
+	if err := fileStore.RotateClusterCredentials(context.Background(), expected, updated, audit); err != nil {
+		t.Fatalf("RotateClusterCredentials() error = %v", err)
+	}
+	if err := fileStore.RotateClusterCredentials(context.Background(), expected, updated, domain.AuditEvent{ID: "audit_stale", ClusterID: expected.ID}); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("RotateClusterCredentials(stale) error = %v, want conflict", err)
+	}
+	duplicateUpdated := updated
+	duplicateUpdated.Version = "v1.36.4"
+	if err := fileStore.RotateClusterCredentials(context.Background(), updated, duplicateUpdated, audit); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("RotateClusterCredentials(duplicate audit) error = %v, want conflict", err)
+	}
+
+	reopened, err := Open(path, func() time.Time { return now })
+	if err != nil {
+		t.Fatalf("Open() second error = %v", err)
+	}
+	stored, err := reopened.GetCluster(context.Background(), expected.ID)
+	if err != nil || stored != updated {
+		t.Fatalf("stored cluster = %#v, error = %v", stored, err)
+	}
+	audits, err := reopened.ListAuditEvents(context.Background(), 100)
+	if err != nil || len(audits) != 1 || audits[0] != audit {
+		t.Fatalf("rotation audits = %#v, error = %v", audits, err)
+	}
+}
+
 func TestFileStoreMarksUnrecoverableOperationsUnknown(t *testing.T) {
 	t.Parallel()
 

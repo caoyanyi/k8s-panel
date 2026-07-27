@@ -60,6 +60,41 @@ test('critical views have no serious accessibility violations', async ({ page },
   expect(result.violations.filter((violation) => ['serious', 'critical'].includes(violation.impact ?? ''))).toEqual([])
 })
 
+test('cluster credentials rotate through a confirmed bounded form', async ({ page }, testInfo) => {
+  const consoleErrors: string[] = []
+  page.on('console', (message) => {
+    if (message.type() === 'error') consoleErrors.push(message.text())
+  })
+  page.on('pageerror', (error) => consoleErrors.push(error.message))
+  await mockCredentialRotation(page)
+
+  await page.goto('/#clusters')
+  await expect(page.getByRole('heading', { name: '集群管理' })).toBeVisible()
+  await page.getByRole('button', { name: '轮换 production-east 凭据' }).click()
+  const dialog = page.getByRole('dialog', { name: '轮换集群凭据' })
+  await dialog.getByLabel('Bearer Token').fill('new-service-account-token')
+  await dialog.getByLabel('CA 证书（PEM，可选）').fill('new-test-ca')
+  await expect(dialog.getByRole('button', { name: '验证并轮换' })).toBeDisabled()
+  await dialog.getByLabel('输入集群名称确认').fill('production-east')
+  const requestPromise = page.waitForRequest((request) => (
+    request.method() === 'POST' && request.url().endsWith('/clusters/clu_1/credential-rotations')
+  ))
+  await dialog.getByRole('button', { name: '验证并轮换' }).click()
+
+  const request = await requestPromise
+  expect(request.postDataJSON()).toEqual({
+    bearer_token: 'new-service-account-token', ca_cert: 'new-test-ca', confirmation: 'production-east',
+  })
+  await expect(page.getByText('production-east 凭据已轮换')).toBeVisible()
+  await expect(dialog).not.toBeVisible()
+  await expect(page.getByText('v1.36.3')).toBeVisible()
+  expect(await page.locator('body').textContent()).not.toContain('new-service-account-token')
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
+  expect(overflow).toBeLessThanOrEqual(1)
+  await page.screenshot({ path: `test-results/${testInfo.project.name}-credential-rotation.png`, fullPage: true })
+  expect(consoleErrors).toEqual([])
+})
+
 test('workload diagnostics show details, events, YAML and bounded logs', async ({ page }, testInfo) => {
   const consoleErrors: string[] = []
   page.on('console', (message) => {
@@ -242,6 +277,33 @@ function requiredEnvironment(name: string) {
   const value = process.env[name]
   if (!value) throw new Error(`${name} is not set by global setup`)
   return value
+}
+
+async function mockCredentialRotation(page: Page) {
+  let rotated = false
+  await page.route('**/api/v1/**', async (route) => {
+    const path = new URL(route.request().url()).pathname
+    let data: unknown
+    if (path === '/api/v1/session') {
+      data = { username: 'cluster-admin', role: 'admin', expires_at: '2026-07-27T16:00:00Z' }
+    } else if (path === '/api/v1/clusters' && route.request().method() === 'GET') {
+      data = [{
+        id: 'clu_1', name: 'production-east', environment: 'production', server: 'https://api.example.com',
+        status: 'connected', version: rotated ? 'v1.36.3' : 'v1.36.2', credentials_configured: true,
+        last_checked_at: '2026-07-27T08:00:00Z', created_at: '2026-07-24T08:00:00Z', updated_at: '2026-07-27T08:00:00Z',
+      }]
+    } else if (path === '/api/v1/clusters/clu_1/credential-rotations' && route.request().method() === 'POST') {
+      rotated = true
+      data = {
+        id: 'clu_1', name: 'production-east', environment: 'production', server: 'https://api.example.com',
+        status: 'connected', version: 'v1.36.3', credentials_configured: true,
+        last_checked_at: '2026-07-27T08:05:00Z', created_at: '2026-07-24T08:00:00Z', updated_at: '2026-07-27T08:05:00Z',
+      }
+    } else {
+      data = []
+    }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data }) })
+  })
 }
 
 async function mockWorkloadDiagnostics(page: Page) {

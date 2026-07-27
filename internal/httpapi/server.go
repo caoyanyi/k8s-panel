@@ -120,6 +120,7 @@ func (s *Server) routes() {
 	s.mux.Handle("PATCH /api/v1/clusters/{id}", s.protected(http.HandlerFunc(s.patchCluster)))
 	s.mux.Handle("DELETE /api/v1/clusters/{id}", s.protected(http.HandlerFunc(s.deleteCluster)))
 	s.mux.Handle("POST /api/v1/clusters/{id}/connection-tests", s.protected(http.HandlerFunc(s.testCluster)))
+	s.mux.Handle("POST /api/v1/clusters/{id}/credential-rotations", s.protected(http.HandlerFunc(s.rotateClusterCredentials)))
 	s.mux.Handle("GET /api/v1/clusters/{id}/summary", s.protected(http.HandlerFunc(s.clusterSummary)))
 	s.mux.Handle("GET /api/v1/clusters/{id}/namespaces", s.protected(http.HandlerFunc(s.listNamespaces)))
 	s.mux.Handle("GET /api/v1/clusters/{id}/nodes", s.protected(http.HandlerFunc(s.listNodes)))

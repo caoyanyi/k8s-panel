@@ -106,6 +106,64 @@ func TestValidateClusterInput(t *testing.T) {
 	}
 }
 
+func TestValidateClusterCredentialRotationInput(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		input     ClusterCredentialRotationInput
+		wantField string
+	}{
+		{
+			name: "valid",
+			input: ClusterCredentialRotationInput{
+				CACert:       "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----",
+				BearerToken:  "new-service-account-token",
+				Confirmation: "production-east",
+			},
+		},
+		{name: "empty token", input: ClusterCredentialRotationInput{Confirmation: "production-east"}, wantField: "bearer_token"},
+		{
+			name:      "token with surrounding whitespace",
+			input:     ClusterCredentialRotationInput{BearerToken: " token ", Confirmation: "production-east"},
+			wantField: "bearer_token",
+		},
+		{
+			name:      "token with control character",
+			input:     ClusterCredentialRotationInput{BearerToken: "token\nvalue", Confirmation: "production-east"},
+			wantField: "bearer_token",
+		},
+		{
+			name:      "oversized token",
+			input:     ClusterCredentialRotationInput{BearerToken: strings.Repeat("a", 64*1024+1), Confirmation: "production-east"},
+			wantField: "bearer_token",
+		},
+		{
+			name:      "oversized CA",
+			input:     ClusterCredentialRotationInput{CACert: strings.Repeat("a", 256*1024+1), BearerToken: "token", Confirmation: "production-east"},
+			wantField: "ca_cert",
+		},
+		{name: "empty confirmation", input: ClusterCredentialRotationInput{BearerToken: "token"}, wantField: "confirmation"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := ValidateClusterCredentialRotationInput(tt.input)
+			if tt.wantField == "" {
+				if err != nil {
+					t.Fatalf("ValidateClusterCredentialRotationInput() error = %v", err)
+				}
+				return
+			}
+			var validationErr *ValidationError
+			if !errors.As(err, &validationErr) || validationErr.Field != tt.wantField {
+				t.Fatalf("expected validation field %q, got %v", tt.wantField, err)
+			}
+		})
+	}
+}
+
 func TestValidateRepositoryInput(t *testing.T) {
 	t.Parallel()
 

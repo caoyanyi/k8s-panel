@@ -158,6 +158,28 @@ func (s *Server) testCluster(w http.ResponseWriter, r *http.Request) {
 	writeData(w, http.StatusOK, item)
 }
 
+func (s *Server) rotateClusterCredentials(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		CACert       string `json:"ca_cert"`
+		BearerToken  string `json:"bearer_token"`
+		Confirmation string `json:"confirmation"`
+	}
+	if err := decodeJSON(w, r, &input); err != nil {
+		writeInvalidJSON(w, r)
+		return
+	}
+	item, err := s.service.RotateClusterCredentials(
+		r.Context(), principal(r).Username, requestID(r), r.PathValue("id"), domain.ClusterCredentialRotationInput{
+			CACert: input.CACert, BearerToken: input.BearerToken, Confirmation: input.Confirmation,
+		},
+	)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeData(w, http.StatusOK, item)
+}
+
 func (s *Server) clusterSummary(w http.ResponseWriter, r *http.Request) {
 	item, err := s.service.Summary(r.Context(), r.PathValue("id"))
 	if err != nil {

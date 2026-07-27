@@ -29,8 +29,26 @@ func ValidateClusterInput(input ClusterInput) error {
 	if err != nil || (parsed.Path != "" && parsed.Path != "/") {
 		return Invalid("server", "must be an HTTPS origin without credentials, path, query or fragment")
 	}
-	if strings.TrimSpace(input.BearerToken) == "" {
-		return Invalid("bearer_token", "is required")
+	return validateClusterCredentials(input.CACert, input.BearerToken)
+}
+
+func ValidateClusterCredentialRotationInput(input ClusterCredentialRotationInput) error {
+	if err := validateClusterCredentials(input.CACert, input.BearerToken); err != nil {
+		return err
+	}
+	if !resourceNamePattern.MatchString(input.Confirmation) {
+		return Invalid("confirmation", "must be a valid cluster name")
+	}
+	return nil
+}
+
+func validateClusterCredentials(caCert, bearerToken string) error {
+	if bearerToken == "" || len(bearerToken) > MaxClusterBearerTokenBytes || bearerToken != strings.TrimSpace(bearerToken) ||
+		strings.IndexFunc(bearerToken, func(value rune) bool { return unicode.IsSpace(value) || unicode.IsControl(value) }) >= 0 {
+		return Invalid("bearer_token", "must be non-empty, no longer than 64 KiB and contain no whitespace or control characters")
+	}
+	if len(caCert) > MaxClusterCACertBytes {
+		return Invalid("ca_cert", "must not exceed 256 KiB")
 	}
 	return nil
 }

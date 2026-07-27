@@ -62,6 +62,28 @@ func TestServerAuthenticationAndClusterLifecycle(t *testing.T) {
 	if created.Data.Status != domain.ClusterConnected || !created.Data.CredentialsConfigured {
 		t.Errorf("created cluster = %#v", created.Data)
 	}
+	rotationPath := "/api/v1/clusters/" + created.Data.ID + "/credential-rotations"
+	unconfirmedRotation := authenticatedRequest(t, handler, cookie, http.MethodPost, rotationPath, `{
+		"ca_cert":"new-test-ca","bearer_token":"new-service-account-token","confirmation":"wrong-cluster"
+	}`)
+	if unconfirmedRotation.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("unconfirmed rotation status = %d, body = %s", unconfirmedRotation.Code, unconfirmedRotation.Body.String())
+	}
+	assertErrorField(t, unconfirmedRotation.Body.Bytes(), "confirmation")
+	malformedRotation := authenticatedRequest(t, handler, cookie, http.MethodPost, rotationPath, `{"bearer_token":`)
+	if malformedRotation.Code != http.StatusBadRequest {
+		t.Fatalf("malformed rotation status = %d, body = %s", malformedRotation.Code, malformedRotation.Body.String())
+	}
+	assertErrorCode(t, malformedRotation.Body.Bytes(), "invalid_json")
+	rotation := authenticatedRequest(t, handler, cookie, http.MethodPost, rotationPath, `{
+		"ca_cert":"new-test-ca","bearer_token":"new-service-account-token","confirmation":"production-east"
+	}`)
+	if rotation.Code != http.StatusOK {
+		t.Fatalf("rotation status = %d, body = %s", rotation.Code, rotation.Body.String())
+	}
+	if strings.Contains(rotation.Body.String(), "new-service-account-token") || strings.Contains(rotation.Body.String(), "new-test-ca") {
+		t.Fatal("rotation response leaked candidate credentials")
+	}
 
 	list := authenticatedRequest(t, handler, cookie, http.MethodGet, "/api/v1/clusters", "")
 	if list.Code != http.StatusOK {
