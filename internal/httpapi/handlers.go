@@ -189,6 +189,15 @@ func (s *Server) clusterSummary(w http.ResponseWriter, r *http.Request) {
 	writeData(w, http.StatusOK, item)
 }
 
+func (s *Server) clusterCapabilities(w http.ResponseWriter, r *http.Request) {
+	item, err := s.service.ClusterCapabilities(r.Context(), r.PathValue("id"), r.URL.Query().Get("namespace"))
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeData(w, http.StatusOK, item)
+}
+
 func (s *Server) listNamespaces(w http.ResponseWriter, r *http.Request) {
 	items, err := s.service.Namespaces(r.Context(), r.PathValue("id"))
 	if err != nil {

@@ -164,6 +164,38 @@ func TestValidateClusterCredentialRotationInput(t *testing.T) {
 	}
 }
 
+func TestValidateNamespace(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		namespace string
+		valid     bool
+	}{
+		{name: "valid", namespace: "payments", valid: true},
+		{name: "valid with digits", namespace: "team-2", valid: true},
+		{name: "empty", namespace: ""},
+		{name: "uppercase", namespace: "Payments"},
+		{name: "dot", namespace: "team.prod"},
+		{name: "too long", namespace: strings.Repeat("a", 64)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := ValidateNamespace(tt.namespace)
+			if tt.valid && err != nil {
+				t.Fatalf("ValidateNamespace() error = %v", err)
+			}
+			if !tt.valid {
+				var validationErr *ValidationError
+				if !errors.As(err, &validationErr) || validationErr.Field != "namespace" {
+					t.Fatalf("ValidateNamespace() error = %v, want namespace validation error", err)
+				}
+			}
+		})
+	}
+}
+
 func TestValidateRepositoryInput(t *testing.T) {
 	t.Parallel()
 

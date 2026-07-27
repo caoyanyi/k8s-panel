@@ -84,6 +84,17 @@ func TestServerAuthenticationAndClusterLifecycle(t *testing.T) {
 	if strings.Contains(rotation.Body.String(), "new-service-account-token") || strings.Contains(rotation.Body.String(), "new-test-ca") {
 		t.Fatal("rotation response leaked candidate credentials")
 	}
+	capabilitiesPath := "/api/v1/clusters/" + created.Data.ID + "/capabilities"
+	missingCapabilityNamespace := authenticatedRequest(t, handler, cookie, http.MethodGet, capabilitiesPath, "")
+	if missingCapabilityNamespace.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("missing capability namespace status = %d, body = %s", missingCapabilityNamespace.Code, missingCapabilityNamespace.Body.String())
+	}
+	assertErrorField(t, missingCapabilityNamespace.Body.Bytes(), "namespace")
+	capabilities := authenticatedRequest(t, handler, cookie, http.MethodGet, capabilitiesPath+"?namespace=payments", "")
+	if capabilities.Code != http.StatusOK || !strings.Contains(capabilities.Body.String(), `"namespace":"payments"`) ||
+		!strings.Contains(capabilities.Body.String(), `"key":"namespaces.list"`) || strings.Contains(capabilities.Body.String(), "internal role") {
+		t.Fatalf("capabilities status = %d, body = %s", capabilities.Code, capabilities.Body.String())
+	}
 
 	list := authenticatedRequest(t, handler, cookie, http.MethodGet, "/api/v1/clusters", "")
 	if list.Code != http.StatusOK {
@@ -617,6 +628,12 @@ type testKube struct{}
 
 func (testKube) Probe(context.Context) (domain.ClusterProbe, error) {
 	return domain.ClusterProbe{Version: "v1.36.2", NamespaceCount: 1, NodeCount: 1}, nil
+}
+func (testKube) Capabilities(context.Context, string) ([]domain.KubernetesCapability, error) {
+	return []domain.KubernetesCapability{
+		{Key: "namespaces.list", State: domain.KubernetesCapabilityAllowed},
+		{Key: "pods.logs.get", State: domain.KubernetesCapabilityDenied},
+	}, nil
 }
 func (testKube) Summary(context.Context) (domain.ClusterSummary, error) {
 	return domain.ClusterSummary{Version: "v1.36.2"}, nil

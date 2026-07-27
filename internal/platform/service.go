@@ -17,6 +17,8 @@ const (
 	maxOperationQueueSize     = 128
 	targetLockStripes         = 64
 	credentialRotationLock    = "cluster-credentials"
+	capabilityScanLock        = "cluster-capabilities"
+	capabilityScanTimeout     = 20 * time.Second
 )
 
 type Service struct {
@@ -373,6 +375,37 @@ func (s *Service) Summary(ctx context.Context, clusterID string) (domain.Cluster
 		return domain.ClusterSummary{}, err
 	}
 	return gateway.Summary(ctx)
+}
+
+func (s *Service) ClusterCapabilities(ctx context.Context, clusterID, namespace string) (domain.ClusterCapabilities, error) {
+	if err := domain.ValidateNamespace(namespace); err != nil {
+		return domain.ClusterCapabilities{}, err
+	}
+	unlock, err := s.tryAcquireTargetLock(ctx, clusterID, namespace, capabilityScanLock)
+	if err != nil {
+		return domain.ClusterCapabilities{}, err
+	}
+	defer unlock()
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return domain.ClusterCapabilities{}, err
+	}
+	defer release()
+	scanContext, cancel := context.WithTimeout(ctx, capabilityScanTimeout)
+	defer cancel()
+	gateway, err := s.kubeGateway(scanContext, clusterID)
+	if err != nil {
+		return domain.ClusterCapabilities{}, err
+	}
+	checks, err := gateway.Capabilities(scanContext, namespace)
+	if err != nil {
+		return domain.ClusterCapabilities{}, err
+	}
+	return domain.ClusterCapabilities{
+		Namespace: namespace,
+		CheckedAt: s.now(),
+		Checks:    append([]domain.KubernetesCapability(nil), checks...),
+	}, nil
 }
 
 func (s *Service) Namespaces(ctx context.Context, clusterID string) ([]domain.Namespace, error) {

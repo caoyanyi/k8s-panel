@@ -194,6 +194,25 @@ type ClusterSummary struct {
 	UnhealthyPods  int    `json:"unhealthy_pods"`
 }
 
+type KubernetesCapabilityState string
+
+const (
+	KubernetesCapabilityAllowed       KubernetesCapabilityState = "allowed"
+	KubernetesCapabilityDenied        KubernetesCapabilityState = "denied"
+	KubernetesCapabilityIndeterminate KubernetesCapabilityState = "indeterminate"
+)
+
+type KubernetesCapability struct {
+	Key   string                    `json:"key"`
+	State KubernetesCapabilityState `json:"state"`
+}
+
+type ClusterCapabilities struct {
+	Namespace string                 `json:"namespace"`
+	CheckedAt time.Time              `json:"checked_at"`
+	Checks    []KubernetesCapability `json:"checks"`
+}
+
 type Namespace struct {
 	Name       string            `json:"name"`
 	Status     string            `json:"status"`

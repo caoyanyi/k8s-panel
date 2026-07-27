@@ -22,15 +22,38 @@ import (
 )
 
 const (
-	maxResponseBytes  = 8 * 1024 * 1024
-	maxMutationBytes  = 2 * 1024 * 1024
-	maxLogBytes       = 2 * 1024 * 1024
-	maxListBytes      = 32 * 1024 * 1024
-	maxListItems      = 5000
-	maxListPages      = 20
-	listPageSize      = "500"
-	restartAnnotation = "k8s-panel.io/restartedAt"
+	maxResponseBytes         = 8 * 1024 * 1024
+	maxMutationBytes         = 2 * 1024 * 1024
+	maxLogBytes              = 2 * 1024 * 1024
+	maxListBytes             = 32 * 1024 * 1024
+	maxCapabilityReviewBytes = 64 * 1024
+	maxListItems             = 5000
+	maxListPages             = 20
+	listPageSize             = "500"
+	restartAnnotation        = "k8s-panel.io/restartedAt"
 )
+
+type capabilityReviewSpec struct {
+	key         string
+	group       string
+	resource    string
+	subresource string
+	verb        string
+	namespaced  bool
+}
+
+var capabilityReviewSpecs = [...]capabilityReviewSpec{
+	{key: "namespaces.list", resource: "namespaces", verb: "list"},
+	{key: "nodes.list", resource: "nodes", verb: "list"},
+	{key: "pods.list", resource: "pods", verb: "list", namespaced: true},
+	{key: "pods.logs.get", resource: "pods", subresource: "log", verb: "get", namespaced: true},
+	{key: "events.list", resource: "events", verb: "list", namespaced: true},
+	{key: "deployments.list", group: "apps", resource: "deployments", verb: "list", namespaced: true},
+	{key: "statefulsets.list", group: "apps", resource: "statefulsets", verb: "list", namespaced: true},
+	{key: "daemonsets.list", group: "apps", resource: "daemonsets", verb: "list", namespaced: true},
+	{key: "deployments.patch", group: "apps", resource: "deployments", verb: "patch", namespaced: true},
+	{key: "deployments.scale.patch", group: "apps", resource: "deployments", subresource: "scale", verb: "patch", namespaced: true},
+}
 
 type Connection struct {
 	Server      string
@@ -107,6 +130,74 @@ func (c *Client) CloseIdleConnections() {
 func (c *Client) Probe(ctx context.Context) (domain.ClusterProbe, error) {
 	probe, _, err := c.probeResources(ctx)
 	return probe, err
+}
+
+func (c *Client) Capabilities(ctx context.Context, namespace string) ([]domain.KubernetesCapability, error) {
+	if err := domain.ValidateNamespace(namespace); err != nil {
+		return nil, err
+	}
+	checks := make([]domain.KubernetesCapability, 0, len(capabilityReviewSpecs))
+	for _, review := range capabilityReviewSpecs {
+		resourceNamespace := ""
+		if review.namespaced {
+			resourceNamespace = namespace
+		}
+		requestBody := struct {
+			APIVersion string `json:"apiVersion"`
+			Kind       string `json:"kind"`
+			Spec       struct {
+				ResourceAttributes struct {
+					Group       string `json:"group,omitempty"`
+					Resource    string `json:"resource"`
+					Subresource string `json:"subresource,omitempty"`
+					Verb        string `json:"verb"`
+					Namespace   string `json:"namespace,omitempty"`
+				} `json:"resourceAttributes"`
+			} `json:"spec"`
+		}{APIVersion: "authorization.k8s.io/v1", Kind: "SelfSubjectAccessReview"}
+		attributes := &requestBody.Spec.ResourceAttributes
+		attributes.Group = review.group
+		attributes.Resource = review.resource
+		attributes.Subresource = review.subresource
+		attributes.Verb = review.verb
+		attributes.Namespace = resourceNamespace
+		body, err := json.Marshal(requestBody)
+		if err != nil {
+			return nil, fmt.Errorf("encode Kubernetes capability review: %w", err)
+		}
+		payload, _, err := c.requestPayload(
+			ctx,
+			http.MethodPost,
+			"/apis/authorization.k8s.io/v1/selfsubjectaccessreviews",
+			nil,
+			"application/json",
+			"application/json",
+			body,
+			maxCapabilityReviewBytes,
+			false,
+		)
+		if err != nil {
+			return nil, err
+		}
+		var response struct {
+			Status struct {
+				Allowed         *bool  `json:"allowed"`
+				Denied          bool   `json:"denied"`
+				EvaluationError string `json:"evaluationError"`
+			} `json:"status"`
+		}
+		if err := json.Unmarshal(payload, &response); err != nil || response.Status.Allowed == nil {
+			return nil, fmt.Errorf("decode Kubernetes capability review: %w", domain.ErrUpstream)
+		}
+		state := domain.KubernetesCapabilityDenied
+		if *response.Status.Allowed {
+			state = domain.KubernetesCapabilityAllowed
+		} else if !response.Status.Denied && response.Status.EvaluationError != "" {
+			state = domain.KubernetesCapabilityIndeterminate
+		}
+		checks = append(checks, domain.KubernetesCapability{Key: review.key, State: state})
+	}
+	return checks, nil
 }
 
 func (c *Client) probeResources(ctx context.Context) (domain.ClusterProbe, []domain.Node, error) {

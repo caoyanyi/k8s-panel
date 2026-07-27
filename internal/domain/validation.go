@@ -109,6 +109,13 @@ func ValidateWorkloadReference(reference WorkloadReference) error {
 	return nil
 }
 
+func ValidateNamespace(namespace string) error {
+	if !validDNSLabel(namespace) {
+		return Invalid("namespace", "must be a valid Kubernetes namespace")
+	}
+	return nil
+}
+
 func ValidateWorkloadOperationInput(kind OperationKind, input WorkloadOperationInput) error {
 	if kind != OperationWorkloadScale && kind != OperationWorkloadRestart {
 		return Invalid("kind", "must be workload.scale or workload.restart")

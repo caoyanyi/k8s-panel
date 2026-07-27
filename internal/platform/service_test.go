@@ -414,6 +414,103 @@ func TestServiceRejectsCredentialRotationBeforeCandidateValidation(t *testing.T)
 	}
 }
 
+func TestServiceChecksClusterCapabilitiesWithinResourceGuard(t *testing.T) {
+	t.Parallel()
+
+	gateway := &fakeKubeGateway{
+		probe: domain.ClusterProbe{Version: "v1.36.2"},
+		capabilities: []domain.KubernetesCapability{
+			{Key: "namespaces.list", State: domain.KubernetesCapabilityAllowed},
+			{Key: "pods.logs.get", State: domain.KubernetesCapabilityDenied},
+		},
+	}
+	service, _, _ := newTestService(t, serviceFakes{kube: gateway})
+	cluster, err := service.CreateCluster(context.Background(), "admin", "req_create", domain.ClusterInput{
+		Name: "production-east", Environment: domain.EnvironmentProduction, Server: "https://api.example.com", BearerToken: "token",
+	})
+	if err != nil {
+		t.Fatalf("CreateCluster() error = %v", err)
+	}
+	result, err := service.ClusterCapabilities(context.Background(), cluster.ID, "payments")
+	if err != nil {
+		t.Fatalf("ClusterCapabilities() error = %v", err)
+	}
+	if result.Namespace != "payments" || !result.CheckedAt.Equal(time.Date(2026, 7, 24, 8, 0, 0, 0, time.UTC)) ||
+		len(result.Checks) != 2 || result.Checks[1].State != domain.KubernetesCapabilityDenied {
+		t.Fatalf("capability result = %#v", result)
+	}
+	if gateway.capabilityCalls.Load() != 1 || gateway.capabilityNamespace != "payments" {
+		t.Fatalf("capability calls = %d, namespace = %q", gateway.capabilityCalls.Load(), gateway.capabilityNamespace)
+	}
+}
+
+func TestServiceRejectsCapabilityChecksBeforeCallingGateway(t *testing.T) {
+	t.Parallel()
+
+	critical := 0.97
+	readGovernor, err := resourceguard.New(resourceguard.Config{
+		Enabled: true, MaxConcurrent: 4, HighWatermark: 0.80, CriticalWatermark: 0.95,
+		Sampler: staticResourceSampler{sample: resourceguard.Sample{MemoryRatio: &critical}},
+	})
+	if err != nil {
+		t.Fatalf("resourceguard.New() error = %v", err)
+	}
+	gateway := &fakeKubeGateway{probe: domain.ClusterProbe{Version: "v1.36.2"}}
+	service, _, _ := newTestService(t, serviceFakes{kube: gateway, readGovernor: readGovernor})
+	cluster, err := service.CreateCluster(context.Background(), "admin", "req_create", domain.ClusterInput{
+		Name: "production-east", Environment: domain.EnvironmentProduction, Server: "https://api.example.com", BearerToken: "token",
+	})
+	if err != nil {
+		t.Fatalf("CreateCluster() error = %v", err)
+	}
+	if _, err := service.ClusterCapabilities(context.Background(), cluster.ID, "Invalid_Namespace"); err == nil {
+		t.Fatal("ClusterCapabilities() accepted an invalid namespace")
+	}
+	if _, err := service.ClusterCapabilities(context.Background(), cluster.ID, "payments"); !errors.Is(err, domain.ErrBusy) {
+		t.Fatalf("ClusterCapabilities() error = %v, want busy", err)
+	}
+	if gateway.capabilityCalls.Load() != 0 {
+		t.Fatalf("capability calls = %d, want 0", gateway.capabilityCalls.Load())
+	}
+}
+
+func TestServiceRejectsConcurrentCapabilityChecksForSameTarget(t *testing.T) {
+	t.Parallel()
+
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	gateway := &fakeKubeGateway{
+		probe: domain.ClusterProbe{Version: "v1.36.2"}, capabilityStarted: started, capabilityRelease: release,
+	}
+	service, _, _ := newTestService(t, serviceFakes{kube: gateway})
+	cluster, err := service.CreateCluster(context.Background(), "admin", "req_create", domain.ClusterInput{
+		Name: "production-east", Environment: domain.EnvironmentProduction, Server: "https://api.example.com", BearerToken: "token",
+	})
+	if err != nil {
+		t.Fatalf("CreateCluster() error = %v", err)
+	}
+	result := make(chan error, 1)
+	go func() {
+		_, capabilityErr := service.ClusterCapabilities(context.Background(), cluster.ID, "payments")
+		result <- capabilityErr
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("capability check did not start")
+	}
+	if _, err := service.ClusterCapabilities(context.Background(), cluster.ID, "payments"); !errors.Is(err, domain.ErrBusy) {
+		t.Fatalf("concurrent ClusterCapabilities() error = %v, want busy", err)
+	}
+	close(release)
+	if err := <-result; err != nil {
+		t.Fatalf("first ClusterCapabilities() error = %v", err)
+	}
+	if gateway.capabilityCalls.Load() != 1 {
+		t.Fatalf("capability calls = %d, want 1", gateway.capabilityCalls.Load())
+	}
+}
+
 func TestServicePersistsUnreachableProbeWithoutLeakingError(t *testing.T) {
 	t.Parallel()
 
@@ -1373,33 +1470,39 @@ func (f *sequenceKubeFactory) Connections() []kubernetes.Connection {
 }
 
 type fakeKubeGateway struct {
-	probe            domain.ClusterProbe
-	probeErr         error
-	probeStarted     chan<- struct{}
-	probeRelease     <-chan struct{}
-	summaryCalls     atomic.Int64
-	summaryStarted   chan struct{}
-	summaryRelease   <-chan struct{}
-	namespaces       []domain.Namespace
-	detail           domain.WorkloadDetail
-	events           []domain.KubernetesEvent
-	logs             domain.PodLogs
-	detailReference  domain.WorkloadReference
-	eventLimit       int
-	logRequest       domain.PodLogRequest
-	nodes            []domain.Node
-	nodeDetail       domain.NodeDetail
-	nodeEvents       []domain.KubernetesEvent
-	nodeName         string
-	nodeEventLimit   int
-	mutationMu       sync.Mutex
-	scaledVersion    string
-	scaledReplicas   int32
-	restartedVersion string
-	restartedAt      time.Time
-	previewedImage   domain.WorkloadImageChange
-	updatedImage     domain.WorkloadImageChange
-	idleCloseCalls   atomic.Int64
+	probe               domain.ClusterProbe
+	probeErr            error
+	probeStarted        chan<- struct{}
+	probeRelease        <-chan struct{}
+	capabilities        []domain.KubernetesCapability
+	capabilityErr       error
+	capabilityCalls     atomic.Int64
+	capabilityStarted   chan<- struct{}
+	capabilityRelease   <-chan struct{}
+	capabilityNamespace string
+	summaryCalls        atomic.Int64
+	summaryStarted      chan struct{}
+	summaryRelease      <-chan struct{}
+	namespaces          []domain.Namespace
+	detail              domain.WorkloadDetail
+	events              []domain.KubernetesEvent
+	logs                domain.PodLogs
+	detailReference     domain.WorkloadReference
+	eventLimit          int
+	logRequest          domain.PodLogRequest
+	nodes               []domain.Node
+	nodeDetail          domain.NodeDetail
+	nodeEvents          []domain.KubernetesEvent
+	nodeName            string
+	nodeEventLimit      int
+	mutationMu          sync.Mutex
+	scaledVersion       string
+	scaledReplicas      int32
+	restartedVersion    string
+	restartedAt         time.Time
+	previewedImage      domain.WorkloadImageChange
+	updatedImage        domain.WorkloadImageChange
+	idleCloseCalls      atomic.Int64
 }
 
 func (g *fakeKubeGateway) CloseIdleConnections() { g.idleCloseCalls.Add(1) }
@@ -1419,6 +1522,26 @@ func (g *fakeKubeGateway) Probe(ctx context.Context) (domain.ClusterProbe, error
 		}
 	}
 	return g.probe, g.probeErr
+}
+func (g *fakeKubeGateway) Capabilities(ctx context.Context, namespace string) ([]domain.KubernetesCapability, error) {
+	g.capabilityCalls.Add(1)
+	g.mutationMu.Lock()
+	g.capabilityNamespace = namespace
+	g.mutationMu.Unlock()
+	if g.capabilityStarted != nil {
+		select {
+		case g.capabilityStarted <- struct{}{}:
+		default:
+		}
+	}
+	if g.capabilityRelease != nil {
+		select {
+		case <-g.capabilityRelease:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return append([]domain.KubernetesCapability(nil), g.capabilities...), g.capabilityErr
 }
 func (g *fakeKubeGateway) Summary(ctx context.Context) (domain.ClusterSummary, error) {
 	g.summaryCalls.Add(1)

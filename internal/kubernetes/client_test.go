@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -680,6 +681,180 @@ func TestClientMapsOversizedMutationResponseToUpstream(t *testing.T) {
 	})
 	if !errors.Is(err, domain.ErrUpstream) {
 		t.Fatalf("PreviewWorkloadImage() error = %v, want ErrUpstream", err)
+	}
+}
+
+func TestClientChecksCapabilitiesSeriallyWithBoundedResults(t *testing.T) {
+	t.Parallel()
+
+	type attributes struct {
+		Group       string `json:"group"`
+		Resource    string `json:"resource"`
+		Subresource string `json:"subresource"`
+		Verb        string `json:"verb"`
+		Namespace   string `json:"namespace"`
+	}
+	var mu sync.Mutex
+	requests := make([]attributes, 0, 10)
+	var active atomic.Int64
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/apis/authorization.k8s.io/v1/selfsubjectaccessreviews" {
+			http.NotFound(w, r)
+			return
+		}
+		if current := active.Add(1); current != 1 {
+			t.Errorf("concurrent capability requests = %d, want 1", current)
+		}
+		defer active.Add(-1)
+		var body struct {
+			APIVersion string `json:"apiVersion"`
+			Kind       string `json:"kind"`
+			Spec       struct {
+				ResourceAttributes attributes `json:"resourceAttributes"`
+			} `json:"spec"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode capability review: %v", err)
+		}
+		if body.APIVersion != "authorization.k8s.io/v1" || body.Kind != "SelfSubjectAccessReview" {
+			t.Errorf("capability review type = %s/%s", body.APIVersion, body.Kind)
+		}
+		mu.Lock()
+		index := len(requests)
+		requests = append(requests, body.Spec.ResourceAttributes)
+		mu.Unlock()
+		status := map[string]any{"allowed": true, "denied": false, "reason": "internal role details"}
+		if index == 1 {
+			status = map[string]any{"allowed": false, "denied": true, "reason": "internal deny details"}
+		}
+		if index == 2 {
+			status = map[string]any{"allowed": false, "denied": false, "evaluationError": "internal authorizer failure"}
+		}
+		writeTestJSON(t, w, map[string]any{"status": status})
+	}))
+	t.Cleanup(server.Close)
+
+	certificate := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+	client, err := NewClient(Connection{Server: server.URL, CACert: string(certificate), BearerToken: "test-token"}, loopbackPolicy(t))
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	capabilities, err := client.Capabilities(context.Background(), "payments")
+	if err != nil {
+		t.Fatalf("Capabilities() error = %v", err)
+	}
+	expected := []attributes{
+		{Resource: "namespaces", Verb: "list"},
+		{Resource: "nodes", Verb: "list"},
+		{Resource: "pods", Verb: "list", Namespace: "payments"},
+		{Resource: "pods", Subresource: "log", Verb: "get", Namespace: "payments"},
+		{Resource: "events", Verb: "list", Namespace: "payments"},
+		{Group: "apps", Resource: "deployments", Verb: "list", Namespace: "payments"},
+		{Group: "apps", Resource: "statefulsets", Verb: "list", Namespace: "payments"},
+		{Group: "apps", Resource: "daemonsets", Verb: "list", Namespace: "payments"},
+		{Group: "apps", Resource: "deployments", Verb: "patch", Namespace: "payments"},
+		{Group: "apps", Resource: "deployments", Subresource: "scale", Verb: "patch", Namespace: "payments"},
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(requests) != len(expected) || len(capabilities) != len(expected) {
+		t.Fatalf("requests = %d, capabilities = %d, want %d", len(requests), len(capabilities), len(expected))
+	}
+	for index := range expected {
+		if requests[index] != expected[index] {
+			t.Errorf("request %d = %#v, want %#v", index, requests[index], expected[index])
+		}
+	}
+	if capabilities[0].Key != "namespaces.list" || capabilities[0].State != domain.KubernetesCapabilityAllowed ||
+		capabilities[1].State != domain.KubernetesCapabilityDenied || capabilities[2].State != domain.KubernetesCapabilityIndeterminate {
+		t.Fatalf("capabilities = %#v", capabilities[:3])
+	}
+}
+
+func TestClientRejectsInvalidCapabilityNamespaceWithoutRequest(t *testing.T) {
+	t.Parallel()
+
+	var calls atomic.Int64
+	server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		calls.Add(1)
+	}))
+	t.Cleanup(server.Close)
+	certificate := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+	client, err := NewClient(Connection{Server: server.URL, CACert: string(certificate), BearerToken: "test-token"}, loopbackPolicy(t))
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	if _, err := client.Capabilities(context.Background(), "Invalid_Namespace"); err == nil {
+		t.Fatal("Capabilities() accepted an invalid namespace")
+	}
+	if got := calls.Load(); got != 0 {
+		t.Fatalf("capability calls = %d, want 0", got)
+	}
+}
+
+func TestClientStopsCapabilityChecksOnCancellation(t *testing.T) {
+	t.Parallel()
+
+	var calls atomic.Int64
+	started := make(chan struct{})
+	releaseBlockedRequest := make(chan struct{})
+	defer close(releaseBlockedRequest)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		call := calls.Add(1)
+		if call == 1 {
+			writeTestJSON(t, w, map[string]any{"status": map[string]any{"allowed": true}})
+			return
+		}
+		if call == 2 {
+			close(started)
+			select {
+			case <-r.Context().Done():
+			case <-releaseBlockedRequest:
+			}
+			return
+		}
+		t.Errorf("unexpected capability request %d", call)
+	}))
+	t.Cleanup(server.Close)
+	certificate := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+	client, err := NewClient(Connection{Server: server.URL, CACert: string(certificate), BearerToken: "test-token"}, loopbackPolicy(t))
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, capabilityErr := client.Capabilities(ctx, "payments")
+		result <- capabilityErr
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("second capability check did not start")
+	}
+	cancel()
+	if err := <-result; !errors.Is(err, context.Canceled) {
+		t.Fatalf("Capabilities() error = %v, want context canceled", err)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("capability calls = %d, want 2", got)
+	}
+}
+
+func TestClientBoundsCapabilityReviewResponse(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(strings.Repeat("x", int(maxCapabilityReviewBytes+1))))
+	}))
+	t.Cleanup(server.Close)
+	certificate := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+	client, err := NewClient(Connection{Server: server.URL, CACert: string(certificate), BearerToken: "test-token"}, loopbackPolicy(t))
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	if _, err := client.Capabilities(context.Background(), "payments"); !errors.Is(err, domain.ErrUpstream) {
+		t.Fatalf("Capabilities() error = %v, want ErrUpstream", err)
 	}
 }
 

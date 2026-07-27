@@ -66,7 +66,7 @@ test('cluster credentials rotate through a confirmed bounded form', async ({ pag
     if (message.type() === 'error') consoleErrors.push(message.text())
   })
   page.on('pageerror', (error) => consoleErrors.push(error.message))
-  await mockCredentialRotation(page)
+  await mockClusterManagement(page)
 
   await page.goto('/#clusters')
   await expect(page.getByRole('heading', { name: '集群管理' })).toBeVisible()
@@ -92,6 +92,37 @@ test('cluster credentials rotate through a confirmed bounded form', async ({ pag
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
   expect(overflow).toBeLessThanOrEqual(1)
   await page.screenshot({ path: `test-results/${testInfo.project.name}-credential-rotation.png`, fullPage: true })
+  expect(consoleErrors).toEqual([])
+})
+
+test('cluster capability scan is explicit, bounded and namespace scoped', async ({ page }, testInfo) => {
+  const consoleErrors: string[] = []
+  page.on('console', (message) => {
+    if (message.type() === 'error') consoleErrors.push(message.text())
+  })
+  page.on('pageerror', (error) => consoleErrors.push(error.message))
+  await mockClusterManagement(page)
+
+  await page.goto('/#clusters')
+  await page.getByRole('button', { name: '检测 production-east 权限' }).click()
+  const dialog = page.getByRole('dialog', { name: '权限能力检测' })
+  await expect(dialog.getByLabel('命名空间')).toHaveValue('default')
+  await dialog.getByLabel('命名空间').fill('payments')
+  const requestPromise = page.waitForRequest((request) => (
+    request.method() === 'GET' && new URL(request.url()).pathname.endsWith('/clusters/clu_1/capabilities')
+  ))
+  await dialog.getByRole('button', { name: '检测权限' }).click()
+
+  const request = await requestPromise
+  expect(new URL(request.url()).searchParams.get('namespace')).toBe('payments')
+  await expect(dialog.getByRole('row', { name: /命名空间列表.*允许/ })).toBeVisible()
+  await expect(dialog.getByRole('row', { name: /Pod 日志.*拒绝/ })).toBeVisible()
+  await expect(dialog.getByRole('row', { name: /Deployment 变更.*无法判定/ })).toBeVisible()
+  const result = await new AxeBuilder({ page }).analyze()
+  expect(result.violations.filter((violation) => ['serious', 'critical'].includes(violation.impact ?? ''))).toEqual([])
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
+  expect(overflow).toBeLessThanOrEqual(1)
+  await page.screenshot({ path: `test-results/${testInfo.project.name}-cluster-capabilities.png`, fullPage: true })
   expect(consoleErrors).toEqual([])
 })
 
@@ -279,7 +310,7 @@ function requiredEnvironment(name: string) {
   return value
 }
 
-async function mockCredentialRotation(page: Page) {
+async function mockClusterManagement(page: Page) {
   let rotated = false
   await page.route('**/api/v1/**', async (route) => {
     const path = new URL(route.request().url()).pathname
@@ -298,6 +329,15 @@ async function mockCredentialRotation(page: Page) {
         id: 'clu_1', name: 'production-east', environment: 'production', server: 'https://api.example.com',
         status: 'connected', version: 'v1.36.3', credentials_configured: true,
         last_checked_at: '2026-07-27T08:05:00Z', created_at: '2026-07-24T08:00:00Z', updated_at: '2026-07-27T08:05:00Z',
+      }
+    } else if (path === '/api/v1/clusters/clu_1/capabilities' && route.request().method() === 'GET') {
+      data = {
+        namespace: new URL(route.request().url()).searchParams.get('namespace'), checked_at: '2026-07-27T08:10:00Z',
+        checks: [
+          { key: 'namespaces.list', state: 'allowed' },
+          { key: 'pods.logs.get', state: 'denied' },
+          { key: 'deployments.patch', state: 'indeterminate' },
+        ],
       }
     } else {
       data = []

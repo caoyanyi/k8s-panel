@@ -33,6 +33,19 @@ export interface ClusterSummary {
   unhealthy_pods: number
 }
 
+export type KubernetesCapabilityState = 'allowed' | 'denied' | 'indeterminate'
+
+export interface KubernetesCapability {
+  key: string
+  state: KubernetesCapabilityState
+}
+
+export interface ClusterCapabilities {
+  namespace: string
+  checked_at: string
+  checks: KubernetesCapability[]
+}
+
 export interface Namespace {
   name: string
   status: string

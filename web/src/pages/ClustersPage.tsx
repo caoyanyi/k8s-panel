@@ -1,12 +1,12 @@
-import { KeyRound, LoaderCircle, Plus, Power, RefreshCw, Trash2 } from 'lucide-react'
-import { type FormEvent, useCallback, useState } from 'react'
+import { CheckCircle2, CircleHelp, KeyRound, LoaderCircle, Plus, Power, RefreshCw, ShieldCheck, Trash2, XCircle } from 'lucide-react'
+import { type FormEvent, useCallback, useRef, useState } from 'react'
 import { api, errorMessage } from '../api'
 import { EmptyState, ErrorState, LoadingState } from '../components/DataState'
 import { Modal } from '../components/Modal'
 import { PageHeader } from '../components/PageHeader'
 import { StatusBadge } from '../components/StatusBadge'
 import { usePanel } from '../context'
-import type { Cluster, Environment } from '../types'
+import type { Cluster, ClusterCapabilities, Environment, KubernetesCapabilityState } from '../types'
 import { formatDateTime } from '../utils'
 
 interface ClustersPageProps {
@@ -32,7 +32,7 @@ const maxBearerTokenLength = 64 * 1024
 const maxCACertLength = 256 * 1024
 
 export function ClustersPage({ notify }: ClustersPageProps) {
-  const { clusters, clustersLoading, clustersError, refreshClusters, setSelectedClusterId } = usePanel()
+  const { clusters, clustersLoading, clustersError, refreshClusters, selectedNamespace, setSelectedClusterId } = usePanel()
   const [createOpen, setCreateOpen] = useState(false)
   const [form, setForm] = useState(initialForm)
   const [submitting, setSubmitting] = useState(false)
@@ -41,6 +41,12 @@ export function ClustersPage({ notify }: ClustersPageProps) {
   const [confirmation, setConfirmation] = useState('')
   const [rotationTarget, setRotationTarget] = useState<Cluster | null>(null)
   const [rotationForm, setRotationForm] = useState(initialRotationForm)
+  const [capabilityTarget, setCapabilityTarget] = useState<Cluster | null>(null)
+  const [capabilityNamespace, setCapabilityNamespace] = useState('default')
+  const [capabilityResult, setCapabilityResult] = useState<ClusterCapabilities | null>(null)
+  const [capabilityLoading, setCapabilityLoading] = useState(false)
+  const [capabilityError, setCapabilityError] = useState('')
+  const capabilityAbortRef = useRef<AbortController | null>(null)
   const [busyID, setBusyID] = useState('')
 
   const closeCreate = () => {
@@ -103,6 +109,56 @@ export function ClustersPage({ notify }: ClustersPageProps) {
     }
   }
 
+  const closeCapabilities = useCallback(() => {
+    const controller = capabilityAbortRef.current
+    capabilityAbortRef.current = null
+    controller?.abort()
+    setCapabilityTarget(null)
+    setCapabilityResult(null)
+    setCapabilityLoading(false)
+    setCapabilityError('')
+  }, [])
+
+  const openCapabilities = (cluster: Cluster) => {
+    setCapabilityTarget(cluster)
+    setCapabilityNamespace(selectedNamespace || 'default')
+    setCapabilityResult(null)
+    setCapabilityError('')
+  }
+
+  const checkCapabilities = async (event: FormEvent) => {
+    event.preventDefault()
+    if (!capabilityTarget) return
+    const namespace = capabilityNamespace.trim()
+    if (!namespace) {
+      setCapabilityError('命名空间为必填项')
+      return
+    }
+    capabilityAbortRef.current?.abort()
+    const controller = new AbortController()
+    capabilityAbortRef.current = controller
+    setCapabilityNamespace(namespace)
+    setCapabilityLoading(true)
+    setCapabilityResult(null)
+    setCapabilityError('')
+    try {
+      const result = await api.get<ClusterCapabilities>(
+        `/api/v1/clusters/${capabilityTarget.id}/capabilities?namespace=${encodeURIComponent(namespace)}`,
+        controller.signal,
+      )
+      if (capabilityAbortRef.current === controller) setCapabilityResult(result)
+    } catch (error) {
+      if (!(error instanceof DOMException && error.name === 'AbortError') && capabilityAbortRef.current === controller) {
+        setCapabilityError(errorMessage(error))
+      }
+    } finally {
+      if (capabilityAbortRef.current === controller) {
+        capabilityAbortRef.current = null
+        setCapabilityLoading(false)
+      }
+    }
+  }
+
   const runAction = async (cluster: Cluster, action: 'test' | 'toggle') => {
     setBusyID(cluster.id)
     try {
@@ -152,8 +208,8 @@ export function ClustersPage({ notify }: ClustersPageProps) {
           <EmptyState title="尚未接入集群" action={<button className="button button-primary" onClick={() => setCreateOpen(true)}>接入集群</button>} />
         ) : (
           <div className="table-wrap">
-            <table>
-              <thead><tr><th>名称</th><th>环境</th><th>连接状态</th><th>版本</th><th>API Server</th><th>最近检测</th><th className="actions-column">操作</th></tr></thead>
+            <table className="cluster-table">
+              <thead><tr><th>名称</th><th>环境</th><th>连接状态</th><th>版本</th><th>API Server</th><th>最近检测</th><th className="actions-column cluster-actions-column">操作</th></tr></thead>
               <tbody>{clusters.map((cluster) => (
                 <tr key={cluster.id}>
                   <td><div className="primary-cell"><strong>{cluster.name}</strong><span className="mono subtle-id">{cluster.id}</span></div></td>
@@ -176,6 +232,16 @@ export function ClustersPage({ notify }: ClustersPageProps) {
                         onClick={() => { setRotationTarget(cluster); setRotationForm(initialRotationForm); setFormError('') }}
                       >
                         <KeyRound size={16} />
+                      </button>
+                      <button
+                        type="button"
+                        className="icon-button"
+                        title="权限检测"
+                        aria-label={`检测 ${cluster.name} 权限`}
+                        disabled={busyID === cluster.id || cluster.status === 'disabled'}
+                        onClick={() => openCapabilities(cluster)}
+                      >
+                        <ShieldCheck size={16} />
                       </button>
                       <button type="button" className="icon-button" title={cluster.status === 'disabled' ? '启用' : '停用'} aria-label={`${cluster.status === 'disabled' ? '启用' : '停用'} ${cluster.name}`} disabled={busyID === cluster.id} onClick={() => void runAction(cluster, 'toggle')}>
                         <Power size={16} />
@@ -264,6 +330,57 @@ export function ClustersPage({ notify }: ClustersPageProps) {
         )}
       </Modal>
 
+      <Modal title="权限能力检测" open={Boolean(capabilityTarget)} onClose={closeCapabilities} width="wide">
+        {capabilityTarget && (
+          <form className="capability-dialog" onSubmit={checkCapabilities} noValidate>
+            <div className="capability-target">
+              <span>集群</span>
+              <strong>{capabilityTarget.name}</strong>
+              <small>{capabilityTarget.server}</small>
+            </div>
+            <div className="capability-controls">
+              <div className="field">
+                <label htmlFor="capability-namespace">命名空间</label>
+                <input
+                  id="capability-namespace"
+                  maxLength={63}
+                  value={capabilityNamespace}
+                  onChange={(event) => setCapabilityNamespace(event.target.value)}
+                  disabled={capabilityLoading}
+                  autoComplete="off"
+                  autoFocus
+                />
+              </div>
+              <button type="submit" className="button button-primary" disabled={capabilityLoading || !capabilityNamespace.trim()}>
+                {capabilityLoading ? <LoaderCircle className="spin" size={16} /> : <ShieldCheck size={16} />}
+                检测权限
+              </button>
+            </div>
+            {capabilityError && <div className="form-error" role="alert">{capabilityError}</div>}
+            {capabilityResult && (
+              <div className="capability-results" aria-live="polite">
+                <div className="capability-result-meta">
+                  <span>命名空间 <strong>{capabilityResult.namespace}</strong></span>
+                  <span>检测时间 {formatDateTime(capabilityResult.checked_at)}</span>
+                </div>
+                <div className="table-wrap capability-table" role="region" aria-label="权限能力检测结果" tabIndex={0}>
+                  <table>
+                    <thead><tr><th>能力</th><th>范围</th><th>结果</th></tr></thead>
+                    <tbody>{capabilityResult.checks.map((check) => (
+                      <tr key={check.key}>
+                        <td><strong>{capabilityLabel(check.key)}</strong></td>
+                        <td>{capabilityScope(check.key, capabilityResult.namespace)}</td>
+                        <td><CapabilityState state={check.state} /></td>
+                      </tr>
+                    ))}</tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </form>
+        )}
+      </Modal>
+
       <Modal title="删除集群连接" open={Boolean(deleteTarget)} onClose={() => { setDeleteTarget(null); setConfirmation(''); setFormError('') }}>
         {deleteTarget && <div className="danger-dialog">
           <div className="danger-target"><span>集群</span><strong>{deleteTarget.name}</strong><small>{deleteTarget.server}</small></div>
@@ -278,4 +395,35 @@ export function ClustersPage({ notify }: ClustersPageProps) {
 
 function environmentLabel(value: Environment) {
   return { development: '开发', staging: '预发', production: '生产' }[value]
+}
+
+const capabilityLabels: Record<string, string> = {
+  'namespaces.list': '命名空间列表',
+  'nodes.list': '节点列表',
+  'pods.list': 'Pod 列表',
+  'pods.logs.get': 'Pod 日志',
+  'events.list': '事件列表',
+  'deployments.list': 'Deployment 列表',
+  'statefulsets.list': 'StatefulSet 列表',
+  'daemonsets.list': 'DaemonSet 列表',
+  'deployments.patch': 'Deployment 变更',
+  'deployments.scale.patch': 'Deployment 扩缩容',
+}
+
+function capabilityLabel(key: string) {
+  return capabilityLabels[key] ?? key
+}
+
+function capabilityScope(key: string, namespace: string) {
+  return key === 'namespaces.list' || key === 'nodes.list' ? '集群' : namespace
+}
+
+function CapabilityState({ state }: { state: KubernetesCapabilityState }) {
+  if (state === 'allowed') {
+    return <span className="capability-state capability-allowed"><CheckCircle2 size={15} />允许</span>
+  }
+  if (state === 'denied') {
+    return <span className="capability-state capability-denied"><XCircle size={15} />拒绝</span>
+  }
+  return <span className="capability-state capability-indeterminate"><CircleHelp size={15} />无法判定</span>
 }

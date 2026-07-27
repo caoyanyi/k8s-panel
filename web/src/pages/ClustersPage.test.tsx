@@ -67,6 +67,59 @@ describe('ClustersPage', () => {
     expect(within(dialog).getByLabelText('CA 证书（PEM，可选）')).toHaveValue('')
     expect(notify).not.toHaveBeenCalled()
   })
+
+  it('checks namespace capabilities explicitly and renders normalized states', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(dataResponse({
+      namespace: 'payments',
+      checked_at: '2026-07-27T08:10:00Z',
+      checks: [
+        { key: 'namespaces.list', state: 'allowed' },
+        { key: 'pods.logs.get', state: 'denied' },
+        { key: 'deployments.patch', state: 'indeterminate' },
+      ],
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    const user = userEvent.setup()
+    renderPage({ selectedNamespace: 'payments' })
+
+    await user.click(screen.getByRole('button', { name: '检测 production-east 权限' }))
+    const dialog = screen.getByRole('dialog', { name: '权限能力检测' })
+    const namespace = within(dialog).getByLabelText('命名空间')
+    expect(namespace).toHaveValue('payments')
+    expect(namespace).toHaveAttribute('maxlength', '63')
+    expect(fetchMock).not.toHaveBeenCalled()
+    await user.click(within(dialog).getByRole('button', { name: '检测权限' }))
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/clusters/clu_1/capabilities?namespace=payments',
+      expect.objectContaining({ method: 'GET', signal: expect.any(AbortSignal) }),
+    )
+    expect(await within(dialog).findByRole('row', { name: /命名空间列表.*允许/ })).toBeVisible()
+    expect(within(dialog).getByRole('row', { name: /Pod 日志.*拒绝/ })).toBeVisible()
+    expect(within(dialog).getByRole('row', { name: /Deployment 变更.*无法判定/ })).toBeVisible()
+  })
+
+  it('cancels an in-flight capability check when the dialog closes', async () => {
+    let signal: AbortSignal | undefined
+    const fetchMock = vi.fn().mockImplementation((_path: string, init: RequestInit) => {
+      signal = init.signal ?? undefined
+      return new Promise<Response>((_resolve, reject) => {
+        signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true })
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const user = userEvent.setup()
+    renderPage({})
+
+    await user.click(screen.getByRole('button', { name: '检测 production-east 权限' }))
+    const dialog = screen.getByRole('dialog', { name: '权限能力检测' })
+    await user.click(within(dialog).getByRole('button', { name: '检测权限' }))
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    await user.click(within(dialog).getByRole('button', { name: '关闭' }))
+
+    expect(signal?.aborted).toBe(true)
+    expect(screen.queryByRole('dialog', { name: '权限能力检测' })).not.toBeInTheDocument()
+  })
 })
 
 function renderPage(overrides: Partial<PanelContextValue>, notify = vi.fn()) {

@@ -44,6 +44,7 @@ type TargetValidator interface {
 
 type KubeGateway interface {
 	Probe(context.Context) (domain.ClusterProbe, error)
+	Capabilities(context.Context, string) ([]domain.KubernetesCapability, error)
 	Summary(context.Context) (domain.ClusterSummary, error)
 	Namespaces(context.Context) ([]domain.Namespace, error)
 	Nodes(context.Context) ([]domain.Node, error)
