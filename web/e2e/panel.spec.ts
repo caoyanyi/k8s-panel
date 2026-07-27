@@ -29,6 +29,9 @@ test('login, navigation, validation and logout', async ({ page }, testInfo) => {
   await navigate(page, testInfo.project.name, '集群资源')
   await expect(page.getByRole('heading', { name: '集群资源' })).toBeVisible()
   await expect(page.getByText('尚未选择集群')).toBeVisible()
+  await navigate(page, testInfo.project.name, '网络')
+  await expect(page.getByRole('heading', { name: '网络资源' })).toBeVisible()
+  await expect(page.getByText('尚未选择集群')).toBeVisible()
   await navigate(page, testInfo.project.name, 'Helm')
   await expect(page.getByRole('heading', { name: 'Helm' })).toBeVisible()
   await navigate(page, testInfo.project.name, '操作中心')
@@ -294,6 +297,40 @@ test('cluster resources show node diagnostics and namespaces', async ({ page }, 
   expect(consoleErrors).toEqual([])
 })
 
+test('network inventory loads one bounded resource kind at a time', async ({ page }, testInfo) => {
+  const consoleErrors: string[] = []
+  const requestedKinds: string[] = []
+  page.on('console', (message) => {
+    if (message.type() === 'error') consoleErrors.push(message.text())
+  })
+  page.on('pageerror', (error) => consoleErrors.push(error.message))
+  await mockNetworkResources(page, requestedKinds)
+
+  await page.goto('/#network')
+  await expect(page.getByRole('heading', { name: '网络资源' })).toBeVisible()
+  await expect(page.getByText('gateway-service', { exact: true })).toBeVisible()
+  expect(requestedKinds).toContain('services:all')
+  expect(requestedKinds.some((request) => request.startsWith('ingresses:'))).toBe(false)
+  await expect(page.getByText('10.96.0.20')).toBeVisible()
+  await expect(page.getByText('203.0.113.20')).toBeVisible()
+
+  await page.getByLabel('命名空间').selectOption('payments')
+  await expect.poll(() => requestedKinds).toContain('services:payments')
+  expect(requestedKinds.some((request) => request.startsWith('ingresses:'))).toBe(false)
+  await page.getByRole('button', { name: 'Ingress' }).click()
+  await expect(page.getByText('gateway-ingress', { exact: true })).toBeVisible()
+  expect(requestedKinds).toContain('ingresses:payments')
+  await expect(page.getByText('gateway.example.com')).toBeVisible()
+  await expect(page.getByText('已启用')).toBeVisible()
+
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
+  expect(overflow).toBeLessThanOrEqual(1)
+  const result = await new AxeBuilder({ page }).analyze()
+  expect(result.violations.filter((violation) => ['serious', 'critical'].includes(violation.impact ?? ''))).toEqual([])
+  await page.screenshot({ path: `test-results/${testInfo.project.name}-network-inventory.png`, fullPage: true })
+  expect(consoleErrors).toEqual([])
+})
+
 async function navigate(page: Page, projectName: string, label: string) {
   if (projectName.includes('mobile')) {
     await page.getByRole('button', { name: '打开导航' }).click()
@@ -339,6 +376,43 @@ async function mockClusterManagement(page: Page) {
           { key: 'deployments.patch', state: 'indeterminate' },
         ],
       }
+    } else {
+      data = []
+    }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data }) })
+  })
+}
+
+async function mockNetworkResources(page: Page, requestedKinds: string[]) {
+  await page.route('**/api/v1/**', async (route) => {
+    const url = new URL(route.request().url())
+    const path = url.pathname
+    let data: unknown
+    if (path === '/api/v1/session') {
+      data = { username: 'network-admin', role: 'admin', expires_at: '2026-07-28T16:00:00Z' }
+    } else if (path === '/api/v1/clusters') {
+      data = [{
+        id: 'clu_1', name: 'production-cn', environment: 'production', server: 'https://api.example.com',
+        status: 'connected', version: 'v1.36.2', credentials_configured: true,
+        created_at: '2026-07-20T08:00:00Z', updated_at: '2026-07-27T08:00:00Z',
+      }]
+    } else if (path === '/api/v1/clusters/clu_1/namespaces') {
+      data = [{ name: 'payments', status: 'Active', labels: {}, finalizers: [], created_at: '2026-07-20T08:00:00Z' }]
+    } else if (path === '/api/v1/clusters/clu_1/services') {
+      requestedKinds.push(`services:${url.searchParams.get('namespace') ?? 'all'}`)
+      data = [{
+        namespace: 'payments', name: 'gateway-service', type: 'LoadBalancer', cluster_ip: '10.96.0.20',
+        external_addresses: ['203.0.113.20', 'gateway-lb.example.com'], address_count: 2,
+        ports: [{ name: 'http', protocol: 'TCP', port: 80, target_port: '8080', node_port: 30080 }], port_count: 1,
+        created_at: '2026-07-24T08:00:00Z',
+      }]
+    } else if (path === '/api/v1/clusters/clu_1/ingresses') {
+      requestedKinds.push(`ingresses:${url.searchParams.get('namespace') ?? 'all'}`)
+      data = [{
+        namespace: 'payments', name: 'gateway-ingress', class_name: 'nginx',
+        hosts: ['gateway.example.com'], host_count: 1, addresses: ['203.0.113.30'], address_count: 1,
+        tls: true, rule_count: 1, path_count: 2, created_at: '2026-07-24T08:00:00Z',
+      }]
     } else {
       data = []
     }

@@ -284,6 +284,47 @@ type NodeDetail struct {
 	SystemInfo      NodeSystemInfo    `json:"system_info"`
 }
 
+const (
+	MaxNetworkAddresses = 32
+	MaxServicePorts     = 64
+	MaxIngressHosts     = 32
+)
+
+type ServicePort struct {
+	Name       string `json:"name,omitempty"`
+	Protocol   string `json:"protocol"`
+	Port       int32  `json:"port"`
+	TargetPort string `json:"target_port,omitempty"`
+	NodePort   int32  `json:"node_port,omitempty"`
+}
+
+type KubernetesService struct {
+	Namespace         string        `json:"namespace"`
+	Name              string        `json:"name"`
+	Type              string        `json:"type"`
+	ClusterIP         string        `json:"cluster_ip,omitempty"`
+	ExternalName      string        `json:"external_name,omitempty"`
+	ExternalAddresses []string      `json:"external_addresses"`
+	AddressCount      int           `json:"address_count"`
+	Ports             []ServicePort `json:"ports"`
+	PortCount         int           `json:"port_count"`
+	CreatedAt         time.Time     `json:"created_at"`
+}
+
+type KubernetesIngress struct {
+	Namespace    string    `json:"namespace"`
+	Name         string    `json:"name"`
+	ClassName    string    `json:"class_name,omitempty"`
+	Hosts        []string  `json:"hosts"`
+	HostCount    int       `json:"host_count"`
+	Addresses    []string  `json:"addresses"`
+	AddressCount int       `json:"address_count"`
+	TLS          bool      `json:"tls"`
+	RuleCount    int       `json:"rule_count"`
+	PathCount    int       `json:"path_count"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
 type Workload struct {
 	Kind      string    `json:"kind"`
 	Namespace string    `json:"namespace"`

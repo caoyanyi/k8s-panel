@@ -51,6 +51,8 @@ type KubeGateway interface {
 	NodeDetail(context.Context, string) (domain.NodeDetail, error)
 	NodeEvents(context.Context, string, int) ([]domain.KubernetesEvent, error)
 	Workloads(context.Context, string, string) ([]domain.Workload, error)
+	Services(context.Context, string) ([]domain.KubernetesService, error)
+	Ingresses(context.Context, string) ([]domain.KubernetesIngress, error)
 	WorkloadDetail(context.Context, domain.WorkloadReference) (domain.WorkloadDetail, error)
 	WorkloadEvents(context.Context, domain.WorkloadReference, int) ([]domain.KubernetesEvent, error)
 	PodLogs(context.Context, domain.PodLogRequest) (domain.PodLogs, error)

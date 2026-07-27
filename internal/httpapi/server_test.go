@@ -36,6 +36,11 @@ func TestServerAuthenticationAndClusterLifecycle(t *testing.T) {
 	if unauthorized.Header().Get("X-Request-ID") == "" {
 		t.Error("unauthorized response has no request ID")
 	}
+	unauthorizedNetwork := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorizedNetwork, httptest.NewRequest(http.MethodGet, "/api/v1/clusters/clu_1/services", nil))
+	if unauthorizedNetwork.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized network status = %d, want 401", unauthorizedNetwork.Code)
+	}
 
 	cookie := login(t, handler)
 	createBody := `{
@@ -95,6 +100,22 @@ func TestServerAuthenticationAndClusterLifecycle(t *testing.T) {
 		!strings.Contains(capabilities.Body.String(), `"key":"namespaces.list"`) || strings.Contains(capabilities.Body.String(), "internal role") {
 		t.Fatalf("capabilities status = %d, body = %s", capabilities.Code, capabilities.Body.String())
 	}
+	servicesPath := "/api/v1/clusters/" + created.Data.ID + "/services"
+	services := authenticatedRequest(t, handler, cookie, http.MethodGet, servicesPath+"?namespace=payments", "")
+	if services.Code != http.StatusOK || !strings.Contains(services.Body.String(), `"name":"gateway"`) ||
+		!strings.Contains(services.Body.String(), `"type":"ClusterIP"`) {
+		t.Fatalf("services status = %d, body = %s", services.Code, services.Body.String())
+	}
+	ingresses := authenticatedRequest(t, handler, cookie, http.MethodGet, "/api/v1/clusters/"+created.Data.ID+"/ingresses", "")
+	if ingresses.Code != http.StatusOK || !strings.Contains(ingresses.Body.String(), `"class_name":"nginx"`) ||
+		!strings.Contains(ingresses.Body.String(), `"host_count":1`) {
+		t.Fatalf("ingresses status = %d, body = %s", ingresses.Code, ingresses.Body.String())
+	}
+	invalidNetworkNamespace := authenticatedRequest(t, handler, cookie, http.MethodGet, servicesPath+"?namespace=bad%2Fnamespace", "")
+	if invalidNetworkNamespace.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid network namespace status = %d, body = %s", invalidNetworkNamespace.Code, invalidNetworkNamespace.Body.String())
+	}
+	assertErrorField(t, invalidNetworkNamespace.Body.Bytes(), "namespace")
 
 	list := authenticatedRequest(t, handler, cookie, http.MethodGet, "/api/v1/clusters", "")
 	if list.Code != http.StatusOK {
@@ -652,6 +673,17 @@ func (testKube) NodeEvents(context.Context, string, int) ([]domain.KubernetesEve
 }
 func (testKube) Workloads(context.Context, string, string) ([]domain.Workload, error) {
 	return nil, nil
+}
+func (testKube) Services(_ context.Context, namespace string) ([]domain.KubernetesService, error) {
+	return []domain.KubernetesService{{
+		Namespace: namespace, Name: "gateway", Type: "ClusterIP", ClusterIP: "10.96.0.10",
+		Ports: []domain.ServicePort{{Protocol: "TCP", Port: 80}}, PortCount: 1,
+	}}, nil
+}
+func (testKube) Ingresses(context.Context, string) ([]domain.KubernetesIngress, error) {
+	return []domain.KubernetesIngress{{
+		Namespace: "payments", Name: "gateway", ClassName: "nginx", Hosts: []string{"gateway.example.com"}, HostCount: 1,
+	}}, nil
 }
 func (testKube) WorkloadDetail(_ context.Context, reference domain.WorkloadReference) (domain.WorkloadDetail, error) {
 	return domain.WorkloadDetail{

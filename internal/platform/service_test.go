@@ -669,6 +669,14 @@ func TestServiceRejectsKubernetesReadsDuringCriticalResourcePressure(t *testing.
 			_, err := service.Workloads(context.Background(), cluster.ID, "payments", "deployment")
 			return err
 		}},
+		{name: "services", call: func() error {
+			_, err := service.Services(context.Background(), cluster.ID, "payments")
+			return err
+		}},
+		{name: "ingresses", call: func() error {
+			_, err := service.Ingresses(context.Background(), cluster.ID, "payments")
+			return err
+		}},
 		{name: "workload detail", call: func() error {
 			_, err := service.WorkloadDetail(context.Background(), cluster.ID, reference)
 			return err
@@ -705,9 +713,53 @@ func TestServiceRejectsKubernetesReadsDuringCriticalResourcePressure(t *testing.
 	if calls := gateway.summaryCalls.Load(); calls != 0 {
 		t.Fatalf("Summary() reached Kubernetes %d times under critical pressure", calls)
 	}
+	if serviceCalls, ingressCalls := gateway.serviceCalls.Load(), gateway.ingressCalls.Load(); serviceCalls != 0 || ingressCalls != 0 {
+		t.Fatalf("network reads reached Kubernetes under critical pressure: services=%d ingresses=%d", serviceCalls, ingressCalls)
+	}
 	capacity := service.OperationCapacity().KubernetesReads
 	if !capacity.Adaptive || capacity.Pressure != resourceguard.PressureCritical || capacity.Limit != 0 || capacity.Maximum != 4 {
 		t.Fatalf("Kubernetes read capacity = %#v", capacity)
+	}
+}
+
+func TestServiceListsNetworkResourcesAndValidatesNamespaceBeforeGateway(t *testing.T) {
+	t.Parallel()
+
+	gateway := &fakeKubeGateway{
+		probe:     domain.ClusterProbe{Version: "v1.36.2"},
+		services:  []domain.KubernetesService{{Namespace: "payments", Name: "gateway"}},
+		ingresses: []domain.KubernetesIngress{{Namespace: "payments", Name: "gateway"}},
+	}
+	service, _, _ := newTestService(t, serviceFakes{kube: gateway})
+	cluster, err := service.CreateCluster(context.Background(), "admin", "req_cluster", domain.ClusterInput{
+		Name: "cluster", Environment: domain.EnvironmentDevelopment, Server: "https://api.example.com", BearerToken: "token",
+	})
+	if err != nil {
+		t.Fatalf("CreateCluster() error = %v", err)
+	}
+
+	services, err := service.Services(context.Background(), cluster.ID, "payments")
+	if err != nil || len(services) != 1 || services[0].Name != "gateway" {
+		t.Fatalf("Services() = %#v, %v", services, err)
+	}
+	ingresses, err := service.Ingresses(context.Background(), cluster.ID, "")
+	if err != nil || len(ingresses) != 1 || ingresses[0].Name != "gateway" {
+		t.Fatalf("Ingresses() = %#v, %v", ingresses, err)
+	}
+	if gateway.serviceNamespace != "payments" || gateway.ingressNamespace != "" {
+		t.Fatalf("network namespaces = service %q, ingress %q", gateway.serviceNamespace, gateway.ingressNamespace)
+	}
+
+	serviceCalls := gateway.serviceCalls.Load()
+	ingressCalls := gateway.ingressCalls.Load()
+	if _, err := service.Services(context.Background(), cluster.ID, "bad/namespace"); err == nil {
+		t.Fatal("Services() accepted an invalid namespace")
+	}
+	if _, err := service.Ingresses(context.Background(), cluster.ID, "bad/namespace"); err == nil {
+		t.Fatal("Ingresses() accepted an invalid namespace")
+	}
+	if gateway.serviceCalls.Load() != serviceCalls || gateway.ingressCalls.Load() != ingressCalls {
+		t.Fatal("invalid namespace reached Kubernetes gateway")
 	}
 }
 
@@ -1495,6 +1547,12 @@ type fakeKubeGateway struct {
 	nodeEvents          []domain.KubernetesEvent
 	nodeName            string
 	nodeEventLimit      int
+	services            []domain.KubernetesService
+	ingresses           []domain.KubernetesIngress
+	serviceCalls        atomic.Int64
+	ingressCalls        atomic.Int64
+	serviceNamespace    string
+	ingressNamespace    string
 	mutationMu          sync.Mutex
 	scaledVersion       string
 	scaledReplicas      int32
@@ -1577,6 +1635,20 @@ func (g *fakeKubeGateway) NodeEvents(_ context.Context, name string, limit int) 
 }
 func (g *fakeKubeGateway) Workloads(context.Context, string, string) ([]domain.Workload, error) {
 	return nil, nil
+}
+func (g *fakeKubeGateway) Services(_ context.Context, namespace string) ([]domain.KubernetesService, error) {
+	g.serviceCalls.Add(1)
+	g.mutationMu.Lock()
+	g.serviceNamespace = namespace
+	g.mutationMu.Unlock()
+	return append([]domain.KubernetesService(nil), g.services...), nil
+}
+func (g *fakeKubeGateway) Ingresses(_ context.Context, namespace string) ([]domain.KubernetesIngress, error) {
+	g.ingressCalls.Add(1)
+	g.mutationMu.Lock()
+	g.ingressNamespace = namespace
+	g.mutationMu.Unlock()
+	return append([]domain.KubernetesIngress(nil), g.ingresses...), nil
 }
 func (g *fakeKubeGateway) WorkloadDetail(_ context.Context, reference domain.WorkloadReference) (domain.WorkloadDetail, error) {
 	g.detailReference = reference

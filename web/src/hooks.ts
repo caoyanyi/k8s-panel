@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ApiError } from './api'
 
 export interface ResourceState<T> {
@@ -12,36 +12,39 @@ export function useResource<T>(loader: (signal: AbortSignal) => Promise<T>, depe
   const [data, setData] = useState<T | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<unknown>(null)
+  const activeController = useRef<AbortController | null>(null)
+  const requestSequence = useRef(0)
 
   const refresh = useCallback(async () => {
+    activeController.current?.abort()
     const controller = new AbortController()
+    const sequence = ++requestSequence.current
+    activeController.current = controller
     setLoading(true)
     setError(null)
     try {
-      setData(await loader(controller.signal))
+      const nextData = await loader(controller.signal)
+      if (requestSequence.current === sequence) setData(nextData)
     } catch (caught) {
-      if (!(caught instanceof DOMException && caught.name === 'AbortError')) {
+      if (requestSequence.current === sequence && !(caught instanceof DOMException && caught.name === 'AbortError')) {
         setError(caught)
       }
     } finally {
-      setLoading(false)
+      if (requestSequence.current === sequence) {
+        activeController.current = null
+        setLoading(false)
+      }
     }
   }, dependencies)
 
   useEffect(() => {
-    const controller = new AbortController()
-    setLoading(true)
-    setError(null)
-    loader(controller.signal)
-      .then(setData)
-      .catch((caught: unknown) => {
-        if (!(caught instanceof DOMException && caught.name === 'AbortError')) {
-          setError(caught)
-        }
-      })
-      .finally(() => setLoading(false))
-    return () => controller.abort()
-  }, dependencies)
+    void refresh()
+    return () => {
+      requestSequence.current++
+      activeController.current?.abort()
+      activeController.current = null
+    }
+  }, [refresh])
 
   return { data, loading, error, refresh }
 }

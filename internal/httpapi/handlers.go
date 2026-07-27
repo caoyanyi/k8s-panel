@@ -248,6 +248,24 @@ func (s *Server) listWorkloads(w http.ResponseWriter, r *http.Request) {
 	writeData(w, http.StatusOK, items)
 }
 
+func (s *Server) listServices(w http.ResponseWriter, r *http.Request) {
+	items, err := s.service.Services(r.Context(), r.PathValue("id"), r.URL.Query().Get("namespace"))
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeData(w, http.StatusOK, items)
+}
+
+func (s *Server) listIngresses(w http.ResponseWriter, r *http.Request) {
+	items, err := s.service.Ingresses(r.Context(), r.PathValue("id"), r.URL.Query().Get("namespace"))
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeData(w, http.StatusOK, items)
+}
+
 func (s *Server) getWorkloadDetail(w http.ResponseWriter, r *http.Request) {
 	item, err := s.service.WorkloadDetail(r.Context(), r.PathValue("id"), workloadReference(r))
 	if err != nil {

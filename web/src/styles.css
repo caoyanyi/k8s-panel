@@ -238,6 +238,10 @@ td strong { color: var(--text); font-size: 12px; }
 .namespace-labels { min-width: 240px; }
 .scheduling-disabled { color: var(--danger); font-size: 11px; font-weight: 650; white-space: nowrap; }
 .node-table { min-width: 1120px; }
+.network-table { min-width: 1180px; }
+.network-value-list { max-width: 280px; display: flex; flex-direction: column; gap: 3px; }
+.network-value-list > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.network-count { white-space: nowrap; }
 .replica-ready { color: var(--success); font-weight: 690; }
 .replica-warning { color: var(--warning); font-weight: 690; }
 .image-list { display: flex; flex-direction: column; gap: 3px; max-width: 360px; }

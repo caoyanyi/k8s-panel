@@ -127,6 +127,41 @@ export interface Workload {
   created_at: string
 }
 
+export interface ServicePort {
+  name?: string
+  protocol: string
+  port: number
+  target_port?: string
+  node_port?: number
+}
+
+export interface KubernetesService {
+  namespace: string
+  name: string
+  type: string
+  cluster_ip?: string
+  external_name?: string
+  external_addresses: string[]
+  address_count: number
+  ports: ServicePort[]
+  port_count: number
+  created_at: string
+}
+
+export interface KubernetesIngress {
+  namespace: string
+  name: string
+  class_name?: string
+  hosts: string[]
+  host_count: number
+  addresses: string[]
+  address_count: number
+  tls: boolean
+  rule_count: number
+  path_count: number
+  created_at: string
+}
+
 export interface WorkloadContainer {
   name: string
   image: string

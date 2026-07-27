@@ -482,6 +482,42 @@ func (s *Service) Workloads(ctx context.Context, clusterID, namespace, kind stri
 	return gateway.Workloads(ctx, namespace, kind)
 }
 
+func (s *Service) Services(ctx context.Context, clusterID, namespace string) ([]domain.KubernetesService, error) {
+	if namespace != "" {
+		if err := domain.ValidateNamespace(namespace); err != nil {
+			return nil, err
+		}
+	}
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	gateway, err := s.kubeGateway(ctx, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	return gateway.Services(ctx, namespace)
+}
+
+func (s *Service) Ingresses(ctx context.Context, clusterID, namespace string) ([]domain.KubernetesIngress, error) {
+	if namespace != "" {
+		if err := domain.ValidateNamespace(namespace); err != nil {
+			return nil, err
+		}
+	}
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	gateway, err := s.kubeGateway(ctx, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	return gateway.Ingresses(ctx, namespace)
+}
+
 func (s *Service) WorkloadDetail(ctx context.Context, clusterID string, reference domain.WorkloadReference) (domain.WorkloadDetail, error) {
 	if err := domain.ValidateWorkloadReference(reference); err != nil {
 		return domain.WorkloadDetail{}, err

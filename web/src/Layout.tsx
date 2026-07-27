@@ -8,6 +8,7 @@ import {
   Layers3,
   LogOut,
   Menu,
+  Network,
   PackageOpen,
   Server,
   X,
@@ -16,13 +17,14 @@ import { type ReactNode, useEffect, useRef, useState } from 'react'
 import type { Principal } from './types'
 import { usePanel } from './context'
 
-export type RouteName = 'dashboard' | 'clusters' | 'resources' | 'workloads' | 'helm' | 'operations' | 'audit'
+export type RouteName = 'dashboard' | 'clusters' | 'resources' | 'workloads' | 'network' | 'helm' | 'operations' | 'audit'
 
 const navigation: Array<{ route: RouteName; label: string; icon: typeof Gauge }> = [
   { route: 'dashboard', label: '总览', icon: Gauge },
   { route: 'clusters', label: '集群', icon: Server },
   { route: 'resources', label: '集群资源', icon: Cpu },
   { route: 'workloads', label: '工作负载', icon: Layers3 },
+  { route: 'network', label: '网络', icon: Network },
   { route: 'helm', label: 'Helm', icon: PackageOpen },
   { route: 'operations', label: '操作中心', icon: ClipboardList },
   { route: 'audit', label: '审计', icon: History },
