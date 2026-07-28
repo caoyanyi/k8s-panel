@@ -469,6 +469,26 @@ func (s *Service) NodeEvents(ctx context.Context, clusterID, name string, limit 
 	return gateway.NodeEvents(ctx, name, limit)
 }
 
+func (s *Service) Events(
+	ctx context.Context,
+	clusterID, namespace, eventType string,
+	limit int,
+) ([]domain.KubernetesEvent, error) {
+	if err := domain.ValidateKubernetesEventList(namespace, eventType, limit); err != nil {
+		return nil, err
+	}
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	gateway, err := s.kubeGateway(ctx, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	return gateway.Events(ctx, namespace, eventType, limit)
+}
+
 func (s *Service) Workloads(ctx context.Context, clusterID, namespace, kind string) ([]domain.Workload, error) {
 	release, err := s.acquireKubernetesRead(ctx)
 	if err != nil {

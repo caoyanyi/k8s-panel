@@ -389,6 +389,7 @@ const (
 	MaxPodLogTailLines     = 2000
 	MaxWorkloadEventLimit  = 100
 	MaxNodeEventLimit      = 100
+	MaxClusterEventLimit   = 500
 	MaxWorkloadReplicas    = 1000
 	MaxContainerImageBytes = 1024
 )
@@ -427,14 +428,19 @@ type WorkloadDetail struct {
 }
 
 type KubernetesEvent struct {
-	Name      string    `json:"name"`
-	Type      string    `json:"type"`
-	Reason    string    `json:"reason"`
-	Message   string    `json:"message"`
-	Source    string    `json:"source,omitempty"`
-	Count     int32     `json:"count"`
-	FirstSeen time.Time `json:"first_seen,omitzero"`
-	LastSeen  time.Time `json:"last_seen,omitzero"`
+	Namespace        string    `json:"namespace,omitempty"`
+	Name             string    `json:"name"`
+	Type             string    `json:"type"`
+	Reason           string    `json:"reason"`
+	Message          string    `json:"message"`
+	MessageTruncated bool      `json:"message_truncated"`
+	Source           string    `json:"source,omitempty"`
+	ObjectKind       string    `json:"object_kind,omitempty"`
+	ObjectName       string    `json:"object_name,omitempty"`
+	Count            int32     `json:"count"`
+	FirstSeen        time.Time `json:"first_seen,omitzero"`
+	LastSeen         time.Time `json:"last_seen,omitzero"`
+	CreatedAt        time.Time `json:"created_at,omitzero"`
 }
 
 type PodLogRequest struct {

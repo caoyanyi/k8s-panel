@@ -116,6 +116,21 @@ func ValidateNamespace(namespace string) error {
 	return nil
 }
 
+func ValidateKubernetesEventList(namespace, eventType string, limit int) error {
+	if namespace != "" {
+		if err := ValidateNamespace(namespace); err != nil {
+			return err
+		}
+	}
+	if eventType != "" && eventType != "Normal" && eventType != "Warning" {
+		return Invalid("type", "must be Normal or Warning")
+	}
+	if limit < 1 || limit > MaxClusterEventLimit {
+		return Invalid("limit", "must be between 1 and 500")
+	}
+	return nil
+}
+
 func ValidateWorkloadOperationInput(kind OperationKind, input WorkloadOperationInput) error {
 	if kind != OperationWorkloadScale && kind != OperationWorkloadRestart {
 		return Invalid("kind", "must be workload.scale or workload.restart")

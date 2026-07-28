@@ -242,6 +242,10 @@ td strong { color: var(--text); font-size: 12px; }
 .configuration-table { min-width: 760px; }
 .storage-table { min-width: 1180px; }
 .storage-class-table { min-width: 900px; }
+.event-table { min-width: 1320px; }
+.event-message-cell { min-width: 300px; max-width: 520px; }
+.event-message-cell > span:first-child { display: inline; overflow-wrap: anywhere; }
+.event-message-cell .kind-label { margin-left: 6px; white-space: nowrap; }
 .network-value-list { max-width: 280px; display: flex; flex-direction: column; gap: 3px; }
 .network-value-list > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .network-count { white-space: nowrap; }
@@ -268,6 +272,7 @@ td strong { color: var(--text); font-size: 12px; }
 .toolbar { min-height: 56px; margin-bottom: 12px; padding: 8px 12px; display: flex; align-items: flex-end; gap: 10px; background: #fff; border: 1px solid var(--line); }
 .toolbar-field { display: flex; flex-direction: column; gap: 4px; }
 .toolbar-field label { color: var(--muted); font-size: 10px; font-weight: 650; }
+.toolbar-status-error { align-self: center; color: var(--danger); font-size: 11px; }
 .toolbar-field select { min-width: 180px; height: 34px; }
 .toolbar-refresh { margin-left: auto; }
 .search-field { height: 36px; min-width: 220px; margin-left: auto; padding: 0 9px; display: flex; align-items: center; gap: 7px; background: #fff; border: 1px solid var(--line-strong); border-radius: 5px; color: var(--muted); }

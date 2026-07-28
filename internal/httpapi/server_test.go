@@ -51,6 +51,11 @@ func TestServerAuthenticationAndClusterLifecycle(t *testing.T) {
 	if unauthorizedStorage.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthorized storage status = %d, want 401", unauthorizedStorage.Code)
 	}
+	unauthorizedEvents := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorizedEvents, httptest.NewRequest(http.MethodGet, "/api/v1/clusters/clu_1/events", nil))
+	if unauthorizedEvents.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized events status = %d, want 401", unauthorizedEvents.Code)
+	}
 
 	cookie := login(t, handler)
 	createBody := `{
@@ -170,6 +175,23 @@ func TestServerAuthenticationAndClusterLifecycle(t *testing.T) {
 		!strings.Contains(classes.Body.String(), `"default":true`) || strings.Contains(classes.Body.String(), "storage-account") {
 		t.Fatalf("storage classes status = %d, body = %s", classes.Code, classes.Body.String())
 	}
+	eventsPath := "/api/v1/clusters/" + created.Data.ID + "/events"
+	events := authenticatedRequest(t, handler, cookie, http.MethodGet, eventsPath+"?namespace=payments&type=Warning&limit=100", "")
+	if events.Code != http.StatusOK || !strings.Contains(events.Body.String(), `"name":"gateway-warning"`) ||
+		!strings.Contains(events.Body.String(), `"namespace":"payments"`) ||
+		!strings.Contains(events.Body.String(), `"object_kind":"Pod"`) || strings.Contains(events.Body.String(), "private-event-field") {
+		t.Fatalf("events status = %d, body = %s", events.Code, events.Body.String())
+	}
+	invalidEventType := authenticatedRequest(t, handler, cookie, http.MethodGet, eventsPath+"?type=warning", "")
+	if invalidEventType.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid event type status = %d, body = %s", invalidEventType.Code, invalidEventType.Body.String())
+	}
+	assertErrorField(t, invalidEventType.Body.Bytes(), "type")
+	invalidEventLimit := authenticatedRequest(t, handler, cookie, http.MethodGet, eventsPath+"?limit=501", "")
+	if invalidEventLimit.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid event limit status = %d, body = %s", invalidEventLimit.Code, invalidEventLimit.Body.String())
+	}
+	assertErrorField(t, invalidEventLimit.Body.Bytes(), "limit")
 
 	list := authenticatedRequest(t, handler, cookie, http.MethodGet, "/api/v1/clusters", "")
 	if list.Code != http.StatusOK {
@@ -724,6 +746,13 @@ func (testKube) NodeDetail(_ context.Context, name string) (domain.NodeDetail, e
 }
 func (testKube) NodeEvents(context.Context, string, int) ([]domain.KubernetesEvent, error) {
 	return []domain.KubernetesEvent{{Type: "Warning", Reason: "NodeNotReady"}}, nil
+}
+func (testKube) Events(_ context.Context, namespace, eventType string, _ int) ([]domain.KubernetesEvent, error) {
+	return []domain.KubernetesEvent{{
+		Namespace: namespace, Name: "gateway-warning", Type: eventType, Reason: "BackOff",
+		ObjectKind: "Pod", ObjectName: "gateway-0", Message: "Back-off restarting container",
+		Source: "kubelet", Count: 3,
+	}}, nil
 }
 func (testKube) Workloads(context.Context, string, string) ([]domain.Workload, error) {
 	return nil, nil

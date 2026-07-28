@@ -253,14 +253,19 @@ export interface WorkloadImagePreview {
 }
 
 export interface KubernetesEvent {
+  namespace?: string
   name: string
   type: string
   reason: string
   message: string
+  message_truncated?: boolean
   source?: string
+  object_kind?: string
+  object_name?: string
   count: number
   first_seen?: string
   last_seen?: string
+  created_at?: string
 }
 
 export interface PodLogs {

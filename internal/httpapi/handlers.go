@@ -239,6 +239,22 @@ func (s *Server) listNodeEvents(w http.ResponseWriter, r *http.Request) {
 	writeData(w, http.StatusOK, items)
 }
 
+func (s *Server) listEvents(w http.ResponseWriter, r *http.Request) {
+	limit, err := parseBoundedInt(r.URL.Query().Get("limit"), 200, 1, domain.MaxClusterEventLimit, "limit")
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	items, err := s.service.Events(
+		r.Context(), r.PathValue("id"), r.URL.Query().Get("namespace"), r.URL.Query().Get("type"), limit,
+	)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeData(w, http.StatusOK, items)
+}
+
 func (s *Server) listWorkloads(w http.ResponseWriter, r *http.Request) {
 	items, err := s.service.Workloads(r.Context(), r.PathValue("id"), r.URL.Query().Get("namespace"), r.URL.Query().Get("kind"))
 	if err != nil {

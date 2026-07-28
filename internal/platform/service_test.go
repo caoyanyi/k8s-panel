@@ -665,6 +665,10 @@ func TestServiceRejectsKubernetesReadsDuringCriticalResourcePressure(t *testing.
 			_, err := service.NodeEvents(context.Background(), cluster.ID, "worker-01", 20)
 			return err
 		}},
+		{name: "cluster events", call: func() error {
+			_, err := service.Events(context.Background(), cluster.ID, "payments", "Warning", 200)
+			return err
+		}},
 		{name: "workloads", call: func() error {
 			_, err := service.Workloads(context.Background(), cluster.ID, "payments", "deployment")
 			return err
@@ -741,6 +745,9 @@ func TestServiceRejectsKubernetesReadsDuringCriticalResourcePressure(t *testing.
 	}
 	if claimCalls, volumeCalls, classCalls := gateway.persistentVolumeClaimCalls.Load(), gateway.persistentVolumeCalls.Load(), gateway.storageClassCalls.Load(); claimCalls != 0 || volumeCalls != 0 || classCalls != 0 {
 		t.Fatalf("storage reads reached Kubernetes under critical pressure: claims=%d volumes=%d classes=%d", claimCalls, volumeCalls, classCalls)
+	}
+	if calls := gateway.clusterEventCalls.Load(); calls != 0 {
+		t.Fatalf("event reads reached Kubernetes %d times under critical pressure", calls)
 	}
 	capacity := service.OperationCapacity().KubernetesReads
 	if !capacity.Adaptive || capacity.Pressure != resourceguard.PressureCritical || capacity.Limit != 0 || capacity.Maximum != 4 {
@@ -891,6 +898,52 @@ func TestServiceListsStorageResourcesAndValidatesClaimScopeBeforeGateway(t *test
 	}
 	if gateway.persistentVolumeClaimCalls.Load() != claimCalls {
 		t.Fatal("invalid claim namespace reached Kubernetes gateway")
+	}
+}
+
+func TestServiceListsEventsAndValidatesFiltersBeforeGateway(t *testing.T) {
+	t.Parallel()
+
+	gateway := &fakeKubeGateway{
+		probe: domain.ClusterProbe{Version: "v1.36.2"},
+		clusterEvents: []domain.KubernetesEvent{{
+			Namespace: "payments", Name: "gateway-warning", Type: "Warning", Reason: "BackOff",
+		}},
+	}
+	service, _, _ := newTestService(t, serviceFakes{kube: gateway})
+	cluster, err := service.CreateCluster(context.Background(), "admin", "req_cluster", domain.ClusterInput{
+		Name: "cluster", Environment: domain.EnvironmentDevelopment, Server: "https://api.example.com", BearerToken: "token",
+	})
+	if err != nil {
+		t.Fatalf("CreateCluster() error = %v", err)
+	}
+
+	events, err := service.Events(context.Background(), cluster.ID, "payments", "Warning", 200)
+	if err != nil || len(events) != 1 || events[0].Reason != "BackOff" {
+		t.Fatalf("Events() = %#v, %v", events, err)
+	}
+	if gateway.clusterEventNamespace != "payments" || gateway.clusterEventType != "Warning" || gateway.clusterEventLimit != 200 {
+		t.Fatalf("event filters = namespace %q, type %q, limit %d", gateway.clusterEventNamespace, gateway.clusterEventType, gateway.clusterEventLimit)
+	}
+
+	calls := gateway.clusterEventCalls.Load()
+	checks := []struct {
+		name      string
+		namespace string
+		eventType string
+		limit     int
+	}{
+		{name: "namespace", namespace: "bad/namespace", eventType: "Warning", limit: 200},
+		{name: "type", namespace: "payments", eventType: "warning", limit: 200},
+		{name: "limit", namespace: "payments", eventType: "Warning", limit: domain.MaxClusterEventLimit + 1},
+	}
+	for _, check := range checks {
+		if _, err := service.Events(context.Background(), cluster.ID, check.namespace, check.eventType, check.limit); err == nil {
+			t.Errorf("Events() accepted invalid %s", check.name)
+		}
+	}
+	if gateway.clusterEventCalls.Load() != calls {
+		t.Fatal("invalid event filters reached Kubernetes gateway")
 	}
 }
 
@@ -1685,6 +1738,7 @@ type fakeKubeGateway struct {
 	persistentVolumeClaims         []domain.KubernetesPersistentVolumeClaim
 	persistentVolumes              []domain.KubernetesPersistentVolume
 	storageClasses                 []domain.KubernetesStorageClass
+	clusterEvents                  []domain.KubernetesEvent
 	serviceCalls                   atomic.Int64
 	ingressCalls                   atomic.Int64
 	configMapCalls                 atomic.Int64
@@ -1692,11 +1746,15 @@ type fakeKubeGateway struct {
 	persistentVolumeClaimCalls     atomic.Int64
 	persistentVolumeCalls          atomic.Int64
 	storageClassCalls              atomic.Int64
+	clusterEventCalls              atomic.Int64
 	serviceNamespace               string
 	ingressNamespace               string
 	configMapNamespace             string
 	secretNamespace                string
 	persistentVolumeClaimNamespace string
+	clusterEventNamespace          string
+	clusterEventType               string
+	clusterEventLimit              int
 	mutationMu                     sync.Mutex
 	scaledVersion                  string
 	scaledReplicas                 int32
@@ -1822,6 +1880,15 @@ func (g *fakeKubeGateway) PersistentVolumes(context.Context) ([]domain.Kubernete
 func (g *fakeKubeGateway) StorageClasses(context.Context) ([]domain.KubernetesStorageClass, error) {
 	g.storageClassCalls.Add(1)
 	return append([]domain.KubernetesStorageClass(nil), g.storageClasses...), nil
+}
+func (g *fakeKubeGateway) Events(_ context.Context, namespace, eventType string, limit int) ([]domain.KubernetesEvent, error) {
+	g.clusterEventCalls.Add(1)
+	g.mutationMu.Lock()
+	g.clusterEventNamespace = namespace
+	g.clusterEventType = eventType
+	g.clusterEventLimit = limit
+	g.mutationMu.Unlock()
+	return append([]domain.KubernetesEvent(nil), g.clusterEvents...), nil
 }
 func (g *fakeKubeGateway) WorkloadDetail(_ context.Context, reference domain.WorkloadReference) (domain.WorkloadDetail, error) {
 	g.detailReference = reference

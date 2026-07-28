@@ -598,30 +598,14 @@ func (c *Client) WorkloadEvents(
 	if err != nil {
 		return nil, err
 	}
-	return decodeEvents(items, limit)
-}
-
-func decodeEvents(items []json.RawMessage, limit int) ([]domain.KubernetesEvent, error) {
-	events := make([]domain.KubernetesEvent, 0, min(limit, len(items)))
-	for _, item := range items {
-		var resource eventResource
-		if err := json.Unmarshal(item, &resource); err != nil {
-			return nil, fmt.Errorf("decode Kubernetes event: %w", domain.ErrUpstream)
-		}
-		events = append(events, domain.KubernetesEvent{
-			Name:      resource.Metadata.Name,
-			Type:      resource.Type,
-			Reason:    resource.Reason,
-			Message:   resource.Message,
-			Source:    eventSource(resource),
-			Count:     max(resource.Count, 1),
-			FirstSeen: firstNonZeroTime(resource.FirstTimestamp, resource.EventTime, resource.Metadata.CreationTimestamp),
-			LastSeen:  firstNonZeroTime(resource.Series.LastObservedTime, resource.LastTimestamp, resource.EventTime, resource.Metadata.CreationTimestamp),
-		})
+	events, err := decodeEvents(items, limit)
+	if err != nil {
+		return nil, err
 	}
-	sort.Slice(events, func(i, j int) bool { return events[i].LastSeen.After(events[j].LastSeen) })
-	if len(events) > limit {
-		events = events[:limit]
+	for _, event := range events {
+		if event.Namespace != "" && event.Namespace != reference.Namespace {
+			return nil, fmt.Errorf("Kubernetes event exceeded namespace scope: %w", domain.ErrUpstream)
+		}
 	}
 	return events, nil
 }
@@ -930,10 +914,16 @@ type eventResource struct {
 	Source             struct {
 		Component string `json:"component"`
 	} `json:"source"`
+	InvolvedObject struct {
+		Kind      string `json:"kind"`
+		Namespace string `json:"namespace"`
+		Name      string `json:"name"`
+	} `json:"involvedObject"`
 	EventTime      time.Time `json:"eventTime"`
 	FirstTimestamp time.Time `json:"firstTimestamp"`
 	LastTimestamp  time.Time `json:"lastTimestamp"`
 	Series         struct {
+		Count            int32     `json:"count"`
 		LastObservedTime time.Time `json:"lastObservedTime"`
 	} `json:"series"`
 }

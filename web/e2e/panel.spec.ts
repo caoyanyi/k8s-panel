@@ -38,6 +38,9 @@ test('login, navigation, validation and logout', async ({ page }, testInfo) => {
   await navigate(page, testInfo.project.name, '存储')
   await expect(page.getByRole('heading', { name: '存储资源' })).toBeVisible()
   await expect(page.getByText('尚未选择集群')).toBeVisible()
+  await navigate(page, testInfo.project.name, '事件')
+  await expect(page.getByRole('heading', { name: '集群事件' })).toBeVisible()
+  await expect(page.getByText('尚未选择集群')).toBeVisible()
   await navigate(page, testInfo.project.name, 'Helm')
   await expect(page.getByRole('heading', { name: 'Helm' })).toBeVisible()
   await navigate(page, testInfo.project.name, '操作中心')
@@ -405,6 +408,35 @@ test('storage inventory keeps cluster resources namespace independent', async ({
   expect(consoleErrors).toEqual([])
 })
 
+test('event center defaults to bounded Warning events and supports scoped inspection', async ({ page }, testInfo) => {
+  const consoleErrors: string[] = []
+  const requestedEvents: string[] = []
+  page.on('console', (message) => {
+    if (message.type() === 'error') consoleErrors.push(message.text())
+  })
+  page.on('pageerror', (error) => consoleErrors.push(error.message))
+  await mockEventResources(page, requestedEvents)
+
+  await page.goto('/#events')
+  await expect(page.getByRole('heading', { name: '集群事件' })).toBeVisible()
+  await expect(page.getByText('BackOff', { exact: true })).toBeVisible()
+  expect(requestedEvents).toContain('all:Warning:200')
+  await expect(page.getByText('Scheduled', { exact: true })).toHaveCount(0)
+
+  await page.getByRole('button', { name: '全部事件' }).click()
+  await expect(page.getByText('Scheduled', { exact: true })).toBeVisible()
+  expect(requestedEvents).toContain('all:all:200')
+  await page.getByLabel('命名空间').selectOption('payments')
+  await expect.poll(() => requestedEvents).toContain('payments:all:200')
+
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
+  expect(overflow).toBeLessThanOrEqual(1)
+  const result = await new AxeBuilder({ page }).analyze()
+  expect(result.violations.filter((violation) => ['serious', 'critical'].includes(violation.impact ?? ''))).toEqual([])
+  await page.screenshot({ path: `test-results/${testInfo.project.name}-event-center.png`, fullPage: true })
+  expect(consoleErrors).toEqual([])
+})
+
 async function navigate(page: Page, projectName: string, label: string) {
   if (projectName.includes('mobile')) {
     await page.getByRole('button', { name: '打开导航' }).click()
@@ -559,6 +591,48 @@ async function mockStorageResources(page: Page, requestedKinds: string[]) {
         volume_binding_mode: 'WaitForFirstConsumer', allow_volume_expansion: true, default: true,
         created_at: '2026-07-22T08:00:00Z',
       }]
+    } else {
+      data = []
+    }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data }) })
+  })
+}
+
+async function mockEventResources(page: Page, requestedEvents: string[]) {
+  await page.route('**/api/v1/**', async (route) => {
+    const url = new URL(route.request().url())
+    const path = url.pathname
+    let data: unknown
+    if (path === '/api/v1/session') {
+      data = { username: 'event-admin', role: 'admin', expires_at: '2026-07-29T16:00:00Z' }
+    } else if (path === '/api/v1/clusters') {
+      data = [{
+        id: 'clu_1', name: 'production-cn', environment: 'production', server: 'https://api.example.com',
+        status: 'connected', version: 'v1.36.2', credentials_configured: true,
+        created_at: '2026-07-20T08:00:00Z', updated_at: '2026-07-28T08:00:00Z',
+      }]
+    } else if (path === '/api/v1/clusters/clu_1/namespaces') {
+      data = [{ name: 'payments', status: 'Active', labels: {}, finalizers: [], created_at: '2026-07-20T08:00:00Z' }]
+    } else if (path === '/api/v1/clusters/clu_1/events') {
+      const namespace = url.searchParams.get('namespace') ?? 'all'
+      const eventType = url.searchParams.get('type') ?? 'all'
+      const limit = url.searchParams.get('limit') ?? 'missing'
+      requestedEvents.push(`${namespace}:${eventType}:${limit}`)
+      const events = [{
+        namespace: 'payments', name: 'gateway-warning', type: 'Warning', reason: 'BackOff',
+        message: 'Back-off restarting container', message_truncated: false,
+        source: 'kubelet', object_kind: 'Pod', object_name: 'gateway-0', count: 3,
+        first_seen: '2026-07-28T07:50:00Z', last_seen: '2026-07-28T08:03:00Z', created_at: '2026-07-28T07:50:00Z',
+      }]
+      if (eventType !== 'Warning') {
+        events.push({
+          namespace: 'payments', name: 'gateway-scheduled', type: 'Normal', reason: 'Scheduled',
+          message: 'Successfully assigned pod', message_truncated: false,
+          source: 'default-scheduler', object_kind: 'Pod', object_name: 'gateway-0', count: 1,
+          first_seen: '2026-07-28T08:04:00Z', last_seen: '2026-07-28T08:04:00Z', created_at: '2026-07-28T08:04:00Z',
+        })
+      }
+      data = events
     } else {
       data = []
     }
