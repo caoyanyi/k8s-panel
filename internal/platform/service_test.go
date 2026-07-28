@@ -972,6 +972,56 @@ func TestServiceListsNamespaceGovernanceAndValidatesScopeBeforeGateway(t *testin
 	}
 }
 
+func TestServiceListsNamespaceAvailabilityPoliciesAndValidatesScopeBeforeGateway(t *testing.T) {
+	t.Parallel()
+
+	gateway := &fakeKubeGateway{
+		probe: domain.ClusterProbe{Version: "v1.36.2"},
+		horizontalPodAutoscalers: []domain.KubernetesHorizontalPodAutoscaler{{
+			Namespace: "payments", Name: "gateway-autoscaler", TargetKind: "Deployment", TargetName: "gateway",
+		}},
+		podDisruptionBudgets: []domain.KubernetesPodDisruptionBudget{{
+			Namespace: "payments", Name: "gateway-budget", MinAvailable: "75%",
+		}},
+	}
+	service, _, _ := newTestService(t, serviceFakes{kube: gateway})
+	cluster, err := service.CreateCluster(context.Background(), "admin", "req_cluster", domain.ClusterInput{
+		Name: "cluster", Environment: domain.EnvironmentDevelopment, Server: "https://api.example.com", BearerToken: "token",
+	})
+	if err != nil {
+		t.Fatalf("CreateCluster() error = %v", err)
+	}
+
+	autoscalers, err := service.HorizontalPodAutoscalers(context.Background(), cluster.ID, "payments")
+	if err != nil || len(autoscalers) != 1 || autoscalers[0].Name != "gateway-autoscaler" {
+		t.Fatalf("HorizontalPodAutoscalers() = %#v, %v", autoscalers, err)
+	}
+	budgets, err := service.PodDisruptionBudgets(context.Background(), cluster.ID, "payments")
+	if err != nil || len(budgets) != 1 || budgets[0].Name != "gateway-budget" {
+		t.Fatalf("PodDisruptionBudgets() = %#v, %v", budgets, err)
+	}
+	if gateway.horizontalPodAutoscalerNamespace != "payments" || gateway.podDisruptionBudgetNamespace != "payments" ||
+		gateway.horizontalPodAutoscalerCalls.Load() != 1 || gateway.podDisruptionBudgetCalls.Load() != 1 {
+		t.Fatalf("availability gateway inputs = hpa %q/%d, pdb %q/%d",
+			gateway.horizontalPodAutoscalerNamespace, gateway.horizontalPodAutoscalerCalls.Load(),
+			gateway.podDisruptionBudgetNamespace, gateway.podDisruptionBudgetCalls.Load())
+	}
+
+	hpaCalls := gateway.horizontalPodAutoscalerCalls.Load()
+	pdbCalls := gateway.podDisruptionBudgetCalls.Load()
+	for _, namespace := range []string{"", "bad/namespace"} {
+		if _, err := service.HorizontalPodAutoscalers(context.Background(), cluster.ID, namespace); err == nil {
+			t.Errorf("HorizontalPodAutoscalers(%q) succeeded", namespace)
+		}
+		if _, err := service.PodDisruptionBudgets(context.Background(), cluster.ID, namespace); err == nil {
+			t.Errorf("PodDisruptionBudgets(%q) succeeded", namespace)
+		}
+	}
+	if gateway.horizontalPodAutoscalerCalls.Load() != hpaCalls || gateway.podDisruptionBudgetCalls.Load() != pdbCalls {
+		t.Fatal("invalid availability namespace reached Kubernetes gateway")
+	}
+}
+
 func TestServiceListsEventsAndValidatesFiltersBeforeGateway(t *testing.T) {
 	t.Parallel()
 
@@ -1896,80 +1946,86 @@ func (f *sequenceKubeFactory) Connections() []kubernetes.Connection {
 }
 
 type fakeKubeGateway struct {
-	probe                          domain.ClusterProbe
-	probeErr                       error
-	probeStarted                   chan<- struct{}
-	probeRelease                   <-chan struct{}
-	capabilities                   []domain.KubernetesCapability
-	capabilityErr                  error
-	capabilityCalls                atomic.Int64
-	capabilityStarted              chan<- struct{}
-	capabilityRelease              <-chan struct{}
-	capabilityNamespace            string
-	summaryCalls                   atomic.Int64
-	summaryStarted                 chan struct{}
-	summaryRelease                 <-chan struct{}
-	namespaces                     []domain.Namespace
-	detail                         domain.WorkloadDetail
-	events                         []domain.KubernetesEvent
-	logs                           domain.PodLogs
-	detailReference                domain.WorkloadReference
-	eventLimit                     int
-	logRequest                     domain.PodLogRequest
-	nodes                          []domain.Node
-	nodeDetail                     domain.NodeDetail
-	nodeEvents                     []domain.KubernetesEvent
-	nodeName                       string
-	nodeEventLimit                 int
-	services                       []domain.KubernetesService
-	ingresses                      []domain.KubernetesIngress
-	configMaps                     []domain.KubernetesConfigMap
-	secrets                        []domain.KubernetesSecret
-	persistentVolumeClaims         []domain.KubernetesPersistentVolumeClaim
-	persistentVolumes              []domain.KubernetesPersistentVolume
-	storageClasses                 []domain.KubernetesStorageClass
-	resourceQuotas                 []domain.KubernetesResourceQuota
-	limitRanges                    []domain.KubernetesLimitRange
-	clusterEvents                  []domain.KubernetesEvent
-	accessResources                []domain.KubernetesAccessResource
-	accessDetail                   domain.KubernetesAccessResourceDetail
-	accessReviewState              domain.KubernetesCapabilityState
-	accessReviewErr                error
-	serviceCalls                   atomic.Int64
-	ingressCalls                   atomic.Int64
-	configMapCalls                 atomic.Int64
-	secretCalls                    atomic.Int64
-	persistentVolumeClaimCalls     atomic.Int64
-	persistentVolumeCalls          atomic.Int64
-	storageClassCalls              atomic.Int64
-	resourceQuotaCalls             atomic.Int64
-	limitRangeCalls                atomic.Int64
-	clusterEventCalls              atomic.Int64
-	accessListCalls                atomic.Int64
-	accessDetailCalls              atomic.Int64
-	accessReviewCalls              atomic.Int64
-	serviceNamespace               string
-	ingressNamespace               string
-	configMapNamespace             string
-	secretNamespace                string
-	persistentVolumeClaimNamespace string
-	resourceQuotaNamespace         string
-	limitRangeNamespace            string
-	clusterEventNamespace          string
-	clusterEventType               string
-	clusterEventLimit              int
-	accessKind                     domain.KubernetesAccessResourceKind
-	accessNamespace                string
-	accessReference                domain.KubernetesAccessResourceReference
-	accessReviewInput              domain.KubernetesServiceAccountAccessReviewInput
-	mutationMu                     sync.Mutex
-	scaledVersion                  string
-	scaledReplicas                 int32
-	restartedVersion               string
-	restartedAt                    time.Time
-	previewedImage                 domain.WorkloadImageChange
-	updatedImage                   domain.WorkloadImageChange
-	idleCloseCalls                 atomic.Int64
+	probe                            domain.ClusterProbe
+	probeErr                         error
+	probeStarted                     chan<- struct{}
+	probeRelease                     <-chan struct{}
+	capabilities                     []domain.KubernetesCapability
+	capabilityErr                    error
+	capabilityCalls                  atomic.Int64
+	capabilityStarted                chan<- struct{}
+	capabilityRelease                <-chan struct{}
+	capabilityNamespace              string
+	summaryCalls                     atomic.Int64
+	summaryStarted                   chan struct{}
+	summaryRelease                   <-chan struct{}
+	namespaces                       []domain.Namespace
+	detail                           domain.WorkloadDetail
+	events                           []domain.KubernetesEvent
+	logs                             domain.PodLogs
+	detailReference                  domain.WorkloadReference
+	eventLimit                       int
+	logRequest                       domain.PodLogRequest
+	nodes                            []domain.Node
+	nodeDetail                       domain.NodeDetail
+	nodeEvents                       []domain.KubernetesEvent
+	nodeName                         string
+	nodeEventLimit                   int
+	services                         []domain.KubernetesService
+	ingresses                        []domain.KubernetesIngress
+	configMaps                       []domain.KubernetesConfigMap
+	secrets                          []domain.KubernetesSecret
+	persistentVolumeClaims           []domain.KubernetesPersistentVolumeClaim
+	persistentVolumes                []domain.KubernetesPersistentVolume
+	storageClasses                   []domain.KubernetesStorageClass
+	resourceQuotas                   []domain.KubernetesResourceQuota
+	limitRanges                      []domain.KubernetesLimitRange
+	horizontalPodAutoscalers         []domain.KubernetesHorizontalPodAutoscaler
+	podDisruptionBudgets             []domain.KubernetesPodDisruptionBudget
+	clusterEvents                    []domain.KubernetesEvent
+	accessResources                  []domain.KubernetesAccessResource
+	accessDetail                     domain.KubernetesAccessResourceDetail
+	accessReviewState                domain.KubernetesCapabilityState
+	accessReviewErr                  error
+	serviceCalls                     atomic.Int64
+	ingressCalls                     atomic.Int64
+	configMapCalls                   atomic.Int64
+	secretCalls                      atomic.Int64
+	persistentVolumeClaimCalls       atomic.Int64
+	persistentVolumeCalls            atomic.Int64
+	storageClassCalls                atomic.Int64
+	resourceQuotaCalls               atomic.Int64
+	limitRangeCalls                  atomic.Int64
+	horizontalPodAutoscalerCalls     atomic.Int64
+	podDisruptionBudgetCalls         atomic.Int64
+	clusterEventCalls                atomic.Int64
+	accessListCalls                  atomic.Int64
+	accessDetailCalls                atomic.Int64
+	accessReviewCalls                atomic.Int64
+	serviceNamespace                 string
+	ingressNamespace                 string
+	configMapNamespace               string
+	secretNamespace                  string
+	persistentVolumeClaimNamespace   string
+	resourceQuotaNamespace           string
+	limitRangeNamespace              string
+	horizontalPodAutoscalerNamespace string
+	podDisruptionBudgetNamespace     string
+	clusterEventNamespace            string
+	clusterEventType                 string
+	clusterEventLimit                int
+	accessKind                       domain.KubernetesAccessResourceKind
+	accessNamespace                  string
+	accessReference                  domain.KubernetesAccessResourceReference
+	accessReviewInput                domain.KubernetesServiceAccountAccessReviewInput
+	mutationMu                       sync.Mutex
+	scaledVersion                    string
+	scaledReplicas                   int32
+	restartedVersion                 string
+	restartedAt                      time.Time
+	previewedImage                   domain.WorkloadImageChange
+	updatedImage                     domain.WorkloadImageChange
+	idleCloseCalls                   atomic.Int64
 }
 
 func (g *fakeKubeGateway) CloseIdleConnections() { g.idleCloseCalls.Add(1) }
@@ -2101,6 +2157,20 @@ func (g *fakeKubeGateway) LimitRanges(_ context.Context, namespace string) ([]do
 	g.limitRangeNamespace = namespace
 	g.mutationMu.Unlock()
 	return append([]domain.KubernetesLimitRange(nil), g.limitRanges...), nil
+}
+func (g *fakeKubeGateway) HorizontalPodAutoscalers(_ context.Context, namespace string) ([]domain.KubernetesHorizontalPodAutoscaler, error) {
+	g.horizontalPodAutoscalerCalls.Add(1)
+	g.mutationMu.Lock()
+	g.horizontalPodAutoscalerNamespace = namespace
+	g.mutationMu.Unlock()
+	return append([]domain.KubernetesHorizontalPodAutoscaler(nil), g.horizontalPodAutoscalers...), nil
+}
+func (g *fakeKubeGateway) PodDisruptionBudgets(_ context.Context, namespace string) ([]domain.KubernetesPodDisruptionBudget, error) {
+	g.podDisruptionBudgetCalls.Add(1)
+	g.mutationMu.Lock()
+	g.podDisruptionBudgetNamespace = namespace
+	g.mutationMu.Unlock()
+	return append([]domain.KubernetesPodDisruptionBudget(nil), g.podDisruptionBudgets...), nil
 }
 func (g *fakeKubeGateway) Events(_ context.Context, namespace, eventType string, limit int) ([]domain.KubernetesEvent, error) {
 	g.clusterEventCalls.Add(1)

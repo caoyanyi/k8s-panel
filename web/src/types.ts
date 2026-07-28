@@ -250,6 +250,56 @@ export interface KubernetesLimitRange {
   created_at: string
 }
 
+export interface KubernetesPolicyCondition {
+  type: string
+  status: 'True' | 'False' | 'Unknown'
+  reason?: string
+}
+
+export interface KubernetesHorizontalPodAutoscaler {
+  namespace: string
+  name: string
+  target_api_version?: string
+  target_kind: string
+  target_name: string
+  min_replicas: number
+  min_replicas_defaulted: boolean
+  max_replicas: number
+  current_replicas: number
+  desired_replicas: number
+  metric_count: number
+  current_metric_count: number
+  observed: boolean
+  conditions: KubernetesPolicyCondition[]
+  condition_count: number
+  conditions_truncated: boolean
+  last_scale_time?: string
+  created_at: string
+}
+
+export type KubernetesSelectorMode = 'none' | 'all' | 'filtered'
+
+export interface KubernetesPodDisruptionBudget {
+  namespace: string
+  name: string
+  selector_mode: KubernetesSelectorMode
+  selector_label_count: number
+  selector_expression_count: number
+  min_available?: string
+  max_unavailable?: string
+  current_healthy: number
+  desired_healthy: number
+  disruptions_allowed: number
+  expected_pods: number
+  observed: boolean
+  unhealthy_pod_eviction_policy: string
+  unhealthy_pod_eviction_policy_defaulted: boolean
+  conditions: KubernetesPolicyCondition[]
+  condition_count: number
+  conditions_truncated: boolean
+  created_at: string
+}
+
 export type KubernetesAccessResourceKind =
   | 'serviceaccounts'
   | 'roles'

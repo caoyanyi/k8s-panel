@@ -32,6 +32,7 @@ const (
 type governanceMetadata struct {
 	Name              string    `json:"name"`
 	Namespace         string    `json:"namespace"`
+	Generation        int64     `json:"generation"`
 	CreationTimestamp time.Time `json:"creationTimestamp"`
 }
 
@@ -60,6 +61,7 @@ func (c *Client) ResourceQuotas(ctx context.Context, namespace string) ([]domain
 	items, err := c.listGovernanceRaw(
 		ctx,
 		"/api/v1/namespaces/"+namespace+"/resourcequotas",
+		"v1",
 		"ResourceQuotaList",
 	)
 	if err != nil {
@@ -86,6 +88,7 @@ func (c *Client) LimitRanges(ctx context.Context, namespace string) ([]domain.Ku
 	items, err := c.listGovernanceRaw(
 		ctx,
 		"/api/v1/namespaces/"+namespace+"/limitranges",
+		"v1",
 		"LimitRangeList",
 	)
 	if err != nil {
@@ -106,7 +109,7 @@ func (c *Client) LimitRanges(ctx context.Context, namespace string) ([]domain.Ku
 
 func (c *Client) listGovernanceRaw(
 	ctx context.Context,
-	path, expectedKind string,
+	path, expectedAPIVersion, expectedKind string,
 ) ([]json.RawMessage, error) {
 	query := url.Values{"limit": {governanceListPageSize}}
 	items := make([]json.RawMessage, 0)
@@ -125,7 +128,7 @@ func (c *Client) listGovernanceRaw(
 		if err := json.Unmarshal(payload, &response); err != nil {
 			return nil, fmt.Errorf("decode Kubernetes governance list: %w", domain.ErrUpstream)
 		}
-		if response.APIVersion != "v1" || response.Kind != expectedKind {
+		if response.APIVersion != expectedAPIVersion || response.Kind != expectedKind {
 			return nil, fmt.Errorf("unsupported Kubernetes governance list: %w", domain.ErrUpstream)
 		}
 		if len(response.Items) > maxGovernanceListItems-len(items) {
@@ -168,7 +171,7 @@ func decodeResourceQuota(
 		return domain.KubernetesResourceQuota{}, fmt.Errorf("decode Kubernetes ResourceQuota: %w", domain.ErrUpstream)
 	}
 	if err := validateGovernanceIdentity(
-		source.APIVersion, source.Kind, "ResourceQuota", source.Metadata, expectedNamespace,
+		source.APIVersion, source.Kind, "v1", "ResourceQuota", source.Metadata, expectedNamespace,
 	); err != nil {
 		return domain.KubernetesResourceQuota{}, err
 	}
@@ -257,7 +260,7 @@ func decodeLimitRange(
 		return domain.KubernetesLimitRange{}, fmt.Errorf("decode Kubernetes LimitRange: %w", domain.ErrUpstream)
 	}
 	if err := validateGovernanceIdentity(
-		source.APIVersion, source.Kind, "LimitRange", source.Metadata, expectedNamespace,
+		source.APIVersion, source.Kind, "v1", "LimitRange", source.Metadata, expectedNamespace,
 	); err != nil {
 		return domain.KubernetesLimitRange{}, err
 	}
@@ -324,11 +327,11 @@ func projectLimitRangeConstraint(
 }
 
 func validateGovernanceIdentity(
-	apiVersion, kind, expectedKind string,
+	apiVersion, kind, expectedAPIVersion, expectedKind string,
 	metadata governanceMetadata,
 	expectedNamespace string,
 ) error {
-	if apiVersion != "v1" || kind != expectedKind || !validKubernetesMetadataString(metadata.Name) ||
+	if apiVersion != expectedAPIVersion || kind != expectedKind || !validKubernetesMetadataString(metadata.Name) ||
 		metadata.CreationTimestamp.IsZero() {
 		return fmt.Errorf("invalid Kubernetes governance object identity: %w", domain.ErrUpstream)
 	}

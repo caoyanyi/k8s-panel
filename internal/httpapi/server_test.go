@@ -541,11 +541,28 @@ func TestServerExposesAuthenticatedClusterResources(t *testing.T) {
 		!strings.Contains(limitRanges.Body.String(), `"default":"500m"`) {
 		t.Fatalf("limit ranges status = %d, body = %s", limitRanges.Code, limitRanges.Body.String())
 	}
+	autoscalers := authenticatedRequest(t, handler, cookie, http.MethodGet, base+"/horizontal-pod-autoscalers?namespace=payments", "")
+	if autoscalers.Code != http.StatusOK || !strings.Contains(autoscalers.Body.String(), `"name":"gateway-autoscaler"`) ||
+		!strings.Contains(autoscalers.Body.String(), `"desired_replicas":5`) {
+		t.Fatalf("horizontal pod autoscalers status = %d, body = %s", autoscalers.Code, autoscalers.Body.String())
+	}
+	budgets := authenticatedRequest(t, handler, cookie, http.MethodGet, base+"/pod-disruption-budgets?namespace=payments", "")
+	if budgets.Code != http.StatusOK || !strings.Contains(budgets.Body.String(), `"name":"gateway-budget"`) ||
+		!strings.Contains(budgets.Body.String(), `"disruptions_allowed":1`) {
+		t.Fatalf("pod disruption budgets status = %d, body = %s", budgets.Code, budgets.Body.String())
+	}
 	missingNamespace := authenticatedRequest(t, handler, cookie, http.MethodGet, base+"/resource-quotas", "")
 	if missingNamespace.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("missing governance namespace status = %d, body = %s", missingNamespace.Code, missingNamespace.Body.String())
 	}
 	assertErrorField(t, missingNamespace.Body.Bytes(), "namespace")
+	for _, path := range []string{"/horizontal-pod-autoscalers", "/pod-disruption-budgets"} {
+		response := authenticatedRequest(t, handler, cookie, http.MethodGet, base+path, "")
+		if response.Code != http.StatusUnprocessableEntity {
+			t.Errorf("missing namespace for %s status = %d, body = %s", path, response.Code, response.Body.String())
+		}
+		assertErrorField(t, response.Body.Bytes(), "namespace")
+	}
 	nodes := authenticatedRequest(t, handler, cookie, http.MethodGet, base+"/nodes", "")
 	if nodes.Code != http.StatusOK || !strings.Contains(nodes.Body.String(), `"name":"worker-01"`) {
 		t.Fatalf("nodes status = %d, body = %s", nodes.Code, nodes.Body.String())
@@ -925,6 +942,18 @@ func (testKube) LimitRanges(_ context.Context, namespace string) ([]domain.Kuber
 	return []domain.KubernetesLimitRange{{
 		Namespace: namespace, Name: "namespace-defaults", ConstraintCount: 1,
 		Constraints: []domain.KubernetesLimitRangeConstraint{{Type: "Container", Resource: "cpu", Default: "500m"}},
+	}}, nil
+}
+func (testKube) HorizontalPodAutoscalers(_ context.Context, namespace string) ([]domain.KubernetesHorizontalPodAutoscaler, error) {
+	return []domain.KubernetesHorizontalPodAutoscaler{{
+		Namespace: namespace, Name: "gateway-autoscaler", TargetKind: "Deployment", TargetName: "gateway",
+		MinReplicas: 2, MaxReplicas: 10, CurrentReplicas: 3, DesiredReplicas: 5, Observed: true,
+	}}, nil
+}
+func (testKube) PodDisruptionBudgets(_ context.Context, namespace string) ([]domain.KubernetesPodDisruptionBudget, error) {
+	return []domain.KubernetesPodDisruptionBudget{{
+		Namespace: namespace, Name: "gateway-budget", SelectorMode: domain.KubernetesSelectorFiltered,
+		MinAvailable: "75%", CurrentHealthy: 3, DesiredHealthy: 3, DisruptionsAllowed: 1, ExpectedPods: 4, Observed: true,
 	}}, nil
 }
 func (testKube) AccessResources(_ context.Context, kind domain.KubernetesAccessResourceKind, namespace string) ([]domain.KubernetesAccessResource, error) {

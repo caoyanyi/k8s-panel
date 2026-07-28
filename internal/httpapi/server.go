@@ -138,6 +138,8 @@ func (s *Server) routes() {
 	s.mux.Handle("GET /api/v1/clusters/{id}/storage-classes", s.protected(http.HandlerFunc(s.listStorageClasses)))
 	s.mux.Handle("GET /api/v1/clusters/{id}/resource-quotas", s.protected(http.HandlerFunc(s.listResourceQuotas)))
 	s.mux.Handle("GET /api/v1/clusters/{id}/limit-ranges", s.protected(http.HandlerFunc(s.listLimitRanges)))
+	s.mux.Handle("GET /api/v1/clusters/{id}/horizontal-pod-autoscalers", s.protected(http.HandlerFunc(s.listHorizontalPodAutoscalers)))
+	s.mux.Handle("GET /api/v1/clusters/{id}/pod-disruption-budgets", s.protected(http.HandlerFunc(s.listPodDisruptionBudgets)))
 	s.mux.Handle("GET /api/v1/clusters/{id}/access-resources", s.protected(http.HandlerFunc(s.listAccessResources)))
 	s.mux.Handle("GET /api/v1/clusters/{id}/access-resources/{kind}/{name}", s.protected(http.HandlerFunc(s.getAccessResourceDetail)))
 	s.mux.Handle("POST /api/v1/clusters/{id}/service-account-access-reviews", s.protected(http.HandlerFunc(s.reviewServiceAccountAccess)))

@@ -61,6 +61,8 @@ type KubeGateway interface {
 	StorageClasses(context.Context) ([]domain.KubernetesStorageClass, error)
 	ResourceQuotas(context.Context, string) ([]domain.KubernetesResourceQuota, error)
 	LimitRanges(context.Context, string) ([]domain.KubernetesLimitRange, error)
+	HorizontalPodAutoscalers(context.Context, string) ([]domain.KubernetesHorizontalPodAutoscaler, error)
+	PodDisruptionBudgets(context.Context, string) ([]domain.KubernetesPodDisruptionBudget, error)
 	AccessResources(context.Context, domain.KubernetesAccessResourceKind, string) ([]domain.KubernetesAccessResource, error)
 	AccessResourceDetail(context.Context, domain.KubernetesAccessResourceReference) (domain.KubernetesAccessResourceDetail, error)
 	ReviewServiceAccountAccess(context.Context, domain.KubernetesServiceAccountAccessReviewInput) (domain.KubernetesCapabilityState, error)

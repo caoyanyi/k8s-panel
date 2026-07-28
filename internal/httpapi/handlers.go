@@ -347,6 +347,24 @@ func (s *Server) listLimitRanges(w http.ResponseWriter, r *http.Request) {
 	writeData(w, http.StatusOK, items)
 }
 
+func (s *Server) listHorizontalPodAutoscalers(w http.ResponseWriter, r *http.Request) {
+	items, err := s.service.HorizontalPodAutoscalers(r.Context(), r.PathValue("id"), r.URL.Query().Get("namespace"))
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeData(w, http.StatusOK, items)
+}
+
+func (s *Server) listPodDisruptionBudgets(w http.ResponseWriter, r *http.Request) {
+	items, err := s.service.PodDisruptionBudgets(r.Context(), r.PathValue("id"), r.URL.Query().Get("namespace"))
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeData(w, http.StatusOK, items)
+}
+
 func (s *Server) listAccessResources(w http.ResponseWriter, r *http.Request) {
 	items, err := s.service.AccessResources(
 		r.Context(),

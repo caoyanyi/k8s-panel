@@ -474,6 +474,18 @@ test('namespace governance reads one bounded policy kind at a time', async ({ pa
   await expect(page.getByText('250m')).toBeVisible()
   await expect(page.getByText('500m')).toBeVisible()
 
+  await page.getByRole('button', { name: 'HPA' }).click()
+  await expect(page.getByText('gateway-autoscaler', { exact: true })).toBeVisible()
+  expect(requestedKinds).toEqual(['resourcequotas:payments', 'limitranges:payments', 'hpa:payments'])
+  await expect(page.getByText('3 -> 5')).toBeVisible()
+  await expect(page.getByText('ScalingActive=True')).toBeVisible()
+
+  await page.getByRole('button', { name: 'PDB' }).click()
+  await expect(page.getByText('gateway-budget', { exact: true })).toBeVisible()
+  expect(requestedKinds).toEqual(['resourcequotas:payments', 'limitranges:payments', 'hpa:payments', 'pdb:payments'])
+  await expect(page.getByText('75%')).toBeVisible()
+  await expect(page.getByText('DisruptionAllowed=True')).toBeVisible()
+
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
   expect(overflow).toBeLessThanOrEqual(1)
   const result = await new AxeBuilder({ page }).analyze()
@@ -772,6 +784,26 @@ async function mockGovernanceResources(page: Page, requestedKinds: string[]) {
           min: '100m', max: '2', max_limit_request_ratio: '4',
         }],
         constraint_count: 1, constraints_truncated: false, created_at: '2026-07-28T02:05:00Z',
+      }]
+    } else if (path === '/api/v1/clusters/clu_1/horizontal-pod-autoscalers') {
+      requestedKinds.push(`hpa:${url.searchParams.get('namespace') ?? 'missing'}`)
+      data = [{
+        namespace: 'payments', name: 'gateway-autoscaler', target_api_version: 'apps/v1',
+        target_kind: 'Deployment', target_name: 'gateway', min_replicas: 2, min_replicas_defaulted: false,
+        max_replicas: 10, current_replicas: 3, desired_replicas: 5, metric_count: 2, current_metric_count: 1,
+        observed: true, conditions: [{ type: 'ScalingActive', status: 'True', reason: 'ValidMetricFound' }],
+        condition_count: 1, conditions_truncated: false, last_scale_time: '2026-07-28T03:05:00Z',
+        created_at: '2026-07-28T03:00:00Z',
+      }]
+    } else if (path === '/api/v1/clusters/clu_1/pod-disruption-budgets') {
+      requestedKinds.push(`pdb:${url.searchParams.get('namespace') ?? 'missing'}`)
+      data = [{
+        namespace: 'payments', name: 'gateway-budget', selector_mode: 'filtered', selector_label_count: 1,
+        selector_expression_count: 1, min_available: '75%', current_healthy: 3, desired_healthy: 3,
+        disruptions_allowed: 1, expected_pods: 4, observed: true,
+        unhealthy_pod_eviction_policy: 'IfHealthyBudget', unhealthy_pod_eviction_policy_defaulted: true,
+        conditions: [{ type: 'DisruptionAllowed', status: 'True', reason: 'SufficientPods' }],
+        condition_count: 1, conditions_truncated: false, created_at: '2026-07-28T03:12:00Z',
       }]
     } else {
       data = []

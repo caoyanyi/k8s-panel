@@ -244,6 +244,9 @@ td strong { color: var(--text); font-size: 12px; }
 .storage-class-table { min-width: 900px; }
 .governance-quota-table { min-width: 1080px; }
 .governance-limit-table { min-width: 1320px; }
+.governance-hpa-table { min-width: 1340px; }
+.governance-pdb-table { min-width: 1540px; }
+.governance-conditions { min-width: 150px; max-width: 300px; }
 .event-table { min-width: 1320px; }
 .access-table { min-width: 820px; }
 .event-message-cell { min-width: 300px; max-width: 520px; }
@@ -290,6 +293,8 @@ td strong { color: var(--text); font-size: 12px; }
 .segmented-control button.active { background: #fff; color: var(--text); box-shadow: 0 1px 3px rgba(23, 33, 29, 0.12); }
 .access-kind-control { max-width: 100%; overflow-x: auto; }
 .access-kind-control button { min-width: 142px; }
+.governance-kind-control { max-width: 100%; overflow-x: auto; }
+.governance-kind-control button { min-width: 118px; }
 
 input, select, textarea { width: 100%; border: 1px solid var(--line-strong); border-radius: 5px; background: #fff; color: var(--text); }
 input, select { height: 38px; padding: 0 10px; }
@@ -485,6 +490,8 @@ select:disabled { cursor: not-allowed; background: #f3f5f4; color: #89938d; }
   .segmented-control button { min-width: 0; flex: 1; }
   .access-kind-control { justify-content: flex-start; }
   .access-kind-control button { min-width: 142px; flex: 0 0 142px; }
+  .governance-kind-control { justify-content: flex-start; }
+  .governance-kind-control button { min-width: 118px; flex: 0 0 118px; }
   .modal-backdrop { padding: 0; align-items: end; }
   .modal { width: 100%; max-height: 92vh; border-radius: 8px 8px 0 0; border-bottom: 0; }
   .modal-body { padding: 16px; }

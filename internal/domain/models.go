@@ -413,6 +413,62 @@ type KubernetesLimitRange struct {
 	CreatedAt            time.Time                        `json:"created_at"`
 }
 
+type KubernetesPolicyCondition struct {
+	Type   string `json:"type"`
+	Status string `json:"status"`
+	Reason string `json:"reason,omitempty"`
+}
+
+type KubernetesHorizontalPodAutoscaler struct {
+	Namespace            string                      `json:"namespace"`
+	Name                 string                      `json:"name"`
+	TargetAPIVersion     string                      `json:"target_api_version,omitempty"`
+	TargetKind           string                      `json:"target_kind"`
+	TargetName           string                      `json:"target_name"`
+	MinReplicas          int32                       `json:"min_replicas"`
+	MinReplicasDefaulted bool                        `json:"min_replicas_defaulted"`
+	MaxReplicas          int32                       `json:"max_replicas"`
+	CurrentReplicas      int32                       `json:"current_replicas"`
+	DesiredReplicas      int32                       `json:"desired_replicas"`
+	MetricCount          int                         `json:"metric_count"`
+	CurrentMetricCount   int                         `json:"current_metric_count"`
+	Observed             bool                        `json:"observed"`
+	Conditions           []KubernetesPolicyCondition `json:"conditions"`
+	ConditionCount       int                         `json:"condition_count"`
+	ConditionsTruncated  bool                        `json:"conditions_truncated"`
+	LastScaleTime        *time.Time                  `json:"last_scale_time,omitempty"`
+	CreatedAt            time.Time                   `json:"created_at"`
+}
+
+type KubernetesSelectorMode string
+
+const (
+	KubernetesSelectorNone     KubernetesSelectorMode = "none"
+	KubernetesSelectorAll      KubernetesSelectorMode = "all"
+	KubernetesSelectorFiltered KubernetesSelectorMode = "filtered"
+)
+
+type KubernetesPodDisruptionBudget struct {
+	Namespace                           string                      `json:"namespace"`
+	Name                                string                      `json:"name"`
+	SelectorMode                        KubernetesSelectorMode      `json:"selector_mode"`
+	SelectorLabelCount                  int                         `json:"selector_label_count"`
+	SelectorExpressionCount             int                         `json:"selector_expression_count"`
+	MinAvailable                        string                      `json:"min_available,omitempty"`
+	MaxUnavailable                      string                      `json:"max_unavailable,omitempty"`
+	CurrentHealthy                      int32                       `json:"current_healthy"`
+	DesiredHealthy                      int32                       `json:"desired_healthy"`
+	DisruptionsAllowed                  int32                       `json:"disruptions_allowed"`
+	ExpectedPods                        int32                       `json:"expected_pods"`
+	Observed                            bool                        `json:"observed"`
+	UnhealthyPodEvictionPolicy          string                      `json:"unhealthy_pod_eviction_policy"`
+	UnhealthyPodEvictionPolicyDefaulted bool                        `json:"unhealthy_pod_eviction_policy_defaulted"`
+	Conditions                          []KubernetesPolicyCondition `json:"conditions"`
+	ConditionCount                      int                         `json:"condition_count"`
+	ConditionsTruncated                 bool                        `json:"conditions_truncated"`
+	CreatedAt                           time.Time                   `json:"created_at"`
+}
+
 type KubernetesAccessResourceKind string
 
 const (

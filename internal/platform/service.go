@@ -673,6 +673,44 @@ func (s *Service) LimitRanges(
 	return gateway.LimitRanges(ctx, namespace)
 }
 
+func (s *Service) HorizontalPodAutoscalers(
+	ctx context.Context,
+	clusterID, namespace string,
+) ([]domain.KubernetesHorizontalPodAutoscaler, error) {
+	if err := domain.ValidateNamespace(namespace); err != nil {
+		return nil, err
+	}
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	gateway, err := s.kubeGateway(ctx, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	return gateway.HorizontalPodAutoscalers(ctx, namespace)
+}
+
+func (s *Service) PodDisruptionBudgets(
+	ctx context.Context,
+	clusterID, namespace string,
+) ([]domain.KubernetesPodDisruptionBudget, error) {
+	if err := domain.ValidateNamespace(namespace); err != nil {
+		return nil, err
+	}
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	gateway, err := s.kubeGateway(ctx, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	return gateway.PodDisruptionBudgets(ctx, namespace)
+}
+
 func (s *Service) AccessResources(
 	ctx context.Context,
 	clusterID string,
