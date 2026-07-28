@@ -116,6 +116,40 @@ func ValidateNamespace(namespace string) error {
 	return nil
 }
 
+func ValidateAccessResourceScope(kind KubernetesAccessResourceKind, namespace string) error {
+	switch kind {
+	case AccessResourceServiceAccounts, AccessResourceRoles, AccessResourceRoleBindings:
+		return ValidateNamespace(namespace)
+	case AccessResourceClusterRoles, AccessResourceClusterRoleBindings:
+		if namespace != "" {
+			return Invalid("namespace", "must be empty for a cluster-scoped access resource")
+		}
+		return nil
+	default:
+		return Invalid("kind", "must be serviceaccounts, roles, rolebindings, clusterroles or clusterrolebindings")
+	}
+}
+
+func ValidateAccessResourceReference(reference KubernetesAccessResourceReference) error {
+	if err := ValidateAccessResourceScope(reference.Kind, reference.Namespace); err != nil {
+		return err
+	}
+	validName := validRBACResourceName(reference.Name)
+	if reference.Kind == AccessResourceServiceAccounts {
+		validName = validDNSSubdomain(reference.Name)
+	}
+	if !validName {
+		return Invalid("name", "must be a valid Kubernetes resource name")
+	}
+	return nil
+}
+
+func validRBACResourceName(value string) bool {
+	return value != "" && len(value) <= 253 && value != "." && value != ".." &&
+		value == strings.TrimSpace(value) && !strings.ContainsAny(value, "/%") &&
+		strings.IndexFunc(value, unicode.IsControl) < 0
+}
+
 func ValidateKubernetesEventList(namespace, eventType string, limit int) error {
 	if namespace != "" {
 		if err := ValidateNamespace(namespace); err != nil {

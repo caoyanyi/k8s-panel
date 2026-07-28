@@ -329,6 +329,33 @@ func (s *Server) listStorageClasses(w http.ResponseWriter, r *http.Request) {
 	writeData(w, http.StatusOK, items)
 }
 
+func (s *Server) listAccessResources(w http.ResponseWriter, r *http.Request) {
+	items, err := s.service.AccessResources(
+		r.Context(),
+		r.PathValue("id"),
+		domain.KubernetesAccessResourceKind(r.URL.Query().Get("kind")),
+		r.URL.Query().Get("namespace"),
+	)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeData(w, http.StatusOK, items)
+}
+
+func (s *Server) getAccessResourceDetail(w http.ResponseWriter, r *http.Request) {
+	item, err := s.service.AccessResourceDetail(r.Context(), r.PathValue("id"), domain.KubernetesAccessResourceReference{
+		Kind:      domain.KubernetesAccessResourceKind(r.PathValue("kind")),
+		Namespace: r.URL.Query().Get("namespace"),
+		Name:      r.PathValue("name"),
+	})
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeData(w, http.StatusOK, item)
+}
+
 func (s *Server) getWorkloadDetail(w http.ResponseWriter, r *http.Request) {
 	item, err := s.service.WorkloadDetail(r.Context(), r.PathValue("id"), workloadReference(r))
 	if err != nil {

@@ -38,6 +38,9 @@ test('login, navigation, validation and logout', async ({ page }, testInfo) => {
   await navigate(page, testInfo.project.name, '存储')
   await expect(page.getByRole('heading', { name: '存储资源' })).toBeVisible()
   await expect(page.getByText('尚未选择集群')).toBeVisible()
+  await navigate(page, testInfo.project.name, '访问控制')
+  await expect(page.getByRole('heading', { name: '访问控制' })).toBeVisible()
+  await expect(page.getByText('尚未选择集群')).toBeVisible()
   await navigate(page, testInfo.project.name, '事件')
   await expect(page.getByRole('heading', { name: '集群事件' })).toBeVisible()
   await expect(page.getByText('尚未选择集群')).toBeVisible()
@@ -408,6 +411,48 @@ test('storage inventory keeps cluster resources namespace independent', async ({
   expect(consoleErrors).toEqual([])
 })
 
+test('access inventory loads metadata by kind and fetches details on demand', async ({ page }, testInfo) => {
+  const consoleErrors: string[] = []
+  const requestedKinds: string[] = []
+  page.on('console', (message) => {
+    if (message.type() === 'error') consoleErrors.push(message.text())
+  })
+  page.on('pageerror', (error) => consoleErrors.push(error.message))
+  await mockAccessResources(page, requestedKinds)
+
+  await page.goto('/#access')
+  await expect(page.getByRole('heading', { name: '访问控制' })).toBeVisible()
+  await expect(page.getByText('view', { exact: true })).toBeVisible()
+  expect(requestedKinds).toContain('clusterroles:all')
+  expect(requestedKinds.some((request) => request.startsWith('roles:'))).toBe(false)
+
+  await page.getByRole('button', { name: '查看 view' }).click()
+  const dialog = page.getByRole('dialog', { name: 'ClusterRole · view' })
+  await expect(dialog.getByText('pods, deployments')).toBeVisible()
+  await expect(dialog.getByText('get, list')).toBeVisible()
+  expect(requestedKinds).toContain('detail:clusterroles:view:all')
+  let overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
+  expect(overflow).toBeLessThanOrEqual(1)
+  const detailAccessibility = await new AxeBuilder({ page }).include('.modal').analyze()
+  expect(detailAccessibility.violations.filter((violation) => ['serious', 'critical'].includes(violation.impact ?? ''))).toEqual([])
+  await page.screenshot({ path: `test-results/${testInfo.project.name}-access-detail.png` })
+  await dialog.getByRole('button', { name: '关闭' }).click()
+
+  await page.getByRole('button', { name: 'Role', exact: true }).click()
+  await expect(page.getByText('请选择命名空间', { exact: true }).last()).toBeVisible()
+  expect(requestedKinds.some((request) => request.startsWith('roles:'))).toBe(false)
+  await page.getByLabel('命名空间').selectOption('payments')
+  await expect(page.getByText('gateway-reader', { exact: true })).toBeVisible()
+  expect(requestedKinds).toContain('roles:payments')
+
+  overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
+  expect(overflow).toBeLessThanOrEqual(1)
+  const result = await new AxeBuilder({ page }).analyze()
+  expect(result.violations.filter((violation) => ['serious', 'critical'].includes(violation.impact ?? ''))).toEqual([])
+  await page.screenshot({ path: `test-results/${testInfo.project.name}-access-inventory.png`, fullPage: true })
+  expect(consoleErrors).toEqual([])
+})
+
 test('event center defaults to bounded Warning events and supports scoped inspection', async ({ page }, testInfo) => {
   const consoleErrors: string[] = []
   const requestedEvents: string[] = []
@@ -633,6 +678,50 @@ async function mockEventResources(page: Page, requestedEvents: string[]) {
         })
       }
       data = events
+    } else {
+      data = []
+    }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data }) })
+  })
+}
+
+async function mockAccessResources(page: Page, requestedKinds: string[]) {
+  await page.route('**/api/v1/**', async (route) => {
+    const url = new URL(route.request().url())
+    const path = url.pathname
+    let data: unknown
+    if (path === '/api/v1/session') {
+      data = { username: 'access-admin', role: 'admin', expires_at: '2026-07-29T16:00:00Z' }
+    } else if (path === '/api/v1/clusters') {
+      data = [{
+        id: 'clu_1', name: 'production-cn', environment: 'production', server: 'https://api.example.com',
+        status: 'connected', version: 'v1.36.2', credentials_configured: true,
+        created_at: '2026-07-20T08:00:00Z', updated_at: '2026-07-28T08:00:00Z',
+      }]
+    } else if (path === '/api/v1/clusters/clu_1/namespaces') {
+      data = [{ name: 'payments', status: 'Active', labels: {}, finalizers: [], created_at: '2026-07-20T08:00:00Z' }]
+    } else if (path === '/api/v1/clusters/clu_1/access-resources') {
+      const kind = url.searchParams.get('kind') ?? 'missing'
+      const namespace = url.searchParams.get('namespace') ?? 'all'
+      requestedKinds.push(`${kind}:${namespace}`)
+      if (kind === 'clusterroles') {
+        data = [{ kind: 'ClusterRole', name: 'view', created_at: '2026-07-24T08:00:00Z' }]
+      } else if (kind === 'roles') {
+        data = [{ kind: 'Role', namespace: 'payments', name: 'gateway-reader', created_at: '2026-07-24T08:00:00Z' }]
+      } else {
+        data = []
+      }
+    } else if (path === '/api/v1/clusters/clu_1/access-resources/clusterroles/view') {
+      requestedKinds.push('detail:clusterroles:view:all')
+      data = {
+        kind: 'ClusterRole', name: 'view', created_at: '2026-07-24T08:00:00Z',
+        rules: [{
+          api_groups: ['', 'apps'], resources: ['pods', 'deployments'], resource_names: [],
+          verbs: ['get', 'list'], non_resource_urls: [],
+        }],
+        rule_count: 1, rules_truncated: false, subjects: [], subject_count: 0, subjects_truncated: false,
+        secret_count: 0, image_pull_secret_count: 0,
+      }
     } else {
       data = []
     }

@@ -196,6 +196,58 @@ func TestValidateNamespace(t *testing.T) {
 	}
 }
 
+func TestValidateAccessResourceScopeAndReference(t *testing.T) {
+	t.Parallel()
+
+	validScopes := []KubernetesAccessResourceReference{
+		{Kind: AccessResourceServiceAccounts, Namespace: "payments"},
+		{Kind: AccessResourceRoles, Namespace: "payments"},
+		{Kind: AccessResourceRoleBindings, Namespace: "payments"},
+		{Kind: AccessResourceClusterRoles},
+		{Kind: AccessResourceClusterRoleBindings},
+	}
+	for _, reference := range validScopes {
+		if err := ValidateAccessResourceScope(reference.Kind, reference.Namespace); err != nil {
+			t.Errorf("ValidateAccessResourceScope(%q, %q) error = %v", reference.Kind, reference.Namespace, err)
+		}
+	}
+
+	tests := []struct {
+		name      string
+		reference KubernetesAccessResourceReference
+		wantField string
+	}{
+		{name: "unknown kind", reference: KubernetesAccessResourceReference{Kind: "secrets", Namespace: "payments"}, wantField: "kind"},
+		{name: "missing namespace", reference: KubernetesAccessResourceReference{Kind: AccessResourceRoles}, wantField: "namespace"},
+		{name: "invalid namespace", reference: KubernetesAccessResourceReference{Kind: AccessResourceRoleBindings, Namespace: "bad/namespace"}, wantField: "namespace"},
+		{name: "cluster scope with namespace", reference: KubernetesAccessResourceReference{Kind: AccessResourceClusterRoles, Namespace: "payments"}, wantField: "namespace"},
+		{name: "missing name", reference: KubernetesAccessResourceReference{Kind: AccessResourceRoles, Namespace: "payments"}, wantField: "name"},
+		{name: "invalid name", reference: KubernetesAccessResourceReference{Kind: AccessResourceClusterRoleBindings, Name: "../binding"}, wantField: "name"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := ValidateAccessResourceReference(tt.reference)
+			var validationErr *ValidationError
+			if !errors.As(err, &validationErr) || validationErr.Field != tt.wantField {
+				t.Fatalf("ValidateAccessResourceReference() error = %v, want field %q", err, tt.wantField)
+			}
+		})
+	}
+
+	validDetail := KubernetesAccessResourceReference{
+		Kind: AccessResourceRoleBindings, Namespace: "payments", Name: "gateway-readers",
+	}
+	if err := ValidateAccessResourceReference(validDetail); err != nil {
+		t.Fatalf("ValidateAccessResourceReference() error = %v", err)
+	}
+	if err := ValidateAccessResourceReference(KubernetesAccessResourceReference{
+		Kind: AccessResourceClusterRoles, Name: "system:discovery",
+	}); err != nil {
+		t.Fatalf("ValidateAccessResourceReference(system RBAC name) error = %v", err)
+	}
+}
+
 func TestValidateRepositoryInput(t *testing.T) {
 	t.Parallel()
 

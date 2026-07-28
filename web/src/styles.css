@@ -130,7 +130,7 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
 .sidebar-brand { height: 64px; padding: 0 18px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid #293832; }
 .sidebar-brand .brand-mark { width: 34px; height: 34px; background: #244538; color: #d9f4e6; }
 .sidebar-brand strong { font-size: 17px; }
-.main-nav { padding: 14px 10px; display: grid; gap: 4px; }
+.main-nav { min-height: 0; padding: 14px 10px; display: grid; gap: 4px; overflow-y: auto; }
 .nav-item {
   width: 100%;
   height: 40px;
@@ -243,6 +243,7 @@ td strong { color: var(--text); font-size: 12px; }
 .storage-table { min-width: 1180px; }
 .storage-class-table { min-width: 900px; }
 .event-table { min-width: 1320px; }
+.access-table { min-width: 820px; }
 .event-message-cell { min-width: 300px; max-width: 520px; }
 .event-message-cell > span:first-child { display: inline; overflow-wrap: anywhere; }
 .event-message-cell .kind-label { margin-left: 6px; white-space: nowrap; }
@@ -284,6 +285,8 @@ td strong { color: var(--text); font-size: 12px; }
 .segmented-control { width: fit-content; margin-bottom: 14px; padding: 3px; display: flex; background: #e8ece9; border-radius: 6px; }
 .segmented-control button { min-width: 110px; height: 34px; padding: 0 13px; border-radius: 4px; background: transparent; color: #58665e; font-size: 12px; font-weight: 620; }
 .segmented-control button.active { background: #fff; color: var(--text); box-shadow: 0 1px 3px rgba(23, 33, 29, 0.12); }
+.access-kind-control { max-width: 100%; overflow-x: auto; }
+.access-kind-control button { min-width: 142px; }
 
 input, select, textarea { width: 100%; border: 1px solid var(--line-strong); border-radius: 5px; background: #fff; color: var(--text); }
 input, select { height: 38px; padding: 0 10px; }
@@ -384,6 +387,13 @@ select:disabled { cursor: not-allowed; background: #f3f5f4; color: #89938d; }
 .label-list span { max-width: 100%; padding: 4px 7px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface-muted); overflow-wrap: anywhere; font-family: "SFMono-Regular", Consolas, monospace; font-size: 10px; }
 .label-list strong { font-weight: 700; }
 .detail-table { min-width: 680px; border: 1px solid var(--line); }
+.access-detail { min-height: 400px; }
+.access-detail-heading { min-height: 32px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.access-detail-heading > span { color: var(--muted); font-size: 11px; }
+.access-rule-table { min-width: 900px; }
+.access-subject-table { min-width: 680px; }
+.access-list-cell { max-width: 320px; line-height: 1.45; overflow-wrap: anywhere; }
+.access-truncated { padding: 8px 10px; border-left: 3px solid var(--warning); background: #fff8ea; color: #80540f; font-size: 11px; }
 .node-resource-table { min-width: 520px; }
 .address-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-top: 1px solid var(--line); border-left: 1px solid var(--line); }
 .address-list > div { min-height: 48px; padding: 9px 12px; display: flex; flex-direction: column; gap: 5px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); overflow: hidden; }
@@ -465,6 +475,8 @@ select:disabled { cursor: not-allowed; background: #f3f5f4; color: #89938d; }
   .toolbar-field select { min-width: 0; }
   .segmented-control { width: 100%; }
   .segmented-control button { min-width: 0; flex: 1; }
+  .access-kind-control { justify-content: flex-start; }
+  .access-kind-control button { min-width: 142px; flex: 0 0 142px; }
   .modal-backdrop { padding: 0; align-items: end; }
   .modal { width: 100%; max-height: 92vh; border-radius: 8px 8px 0 0; border-bottom: 0; }
   .modal-body { padding: 16px; }

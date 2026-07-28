@@ -701,6 +701,16 @@ func TestServiceRejectsKubernetesReadsDuringCriticalResourcePressure(t *testing.
 			_, err := service.StorageClasses(context.Background(), cluster.ID)
 			return err
 		}},
+		{name: "access resources", call: func() error {
+			_, err := service.AccessResources(context.Background(), cluster.ID, domain.AccessResourceRoles, "payments")
+			return err
+		}},
+		{name: "access resource detail", call: func() error {
+			_, err := service.AccessResourceDetail(context.Background(), cluster.ID, domain.KubernetesAccessResourceReference{
+				Kind: domain.AccessResourceRoles, Namespace: "payments", Name: "reader",
+			})
+			return err
+		}},
 		{name: "workload detail", call: func() error {
 			_, err := service.WorkloadDetail(context.Background(), cluster.ID, reference)
 			return err
@@ -748,6 +758,9 @@ func TestServiceRejectsKubernetesReadsDuringCriticalResourcePressure(t *testing.
 	}
 	if calls := gateway.clusterEventCalls.Load(); calls != 0 {
 		t.Fatalf("event reads reached Kubernetes %d times under critical pressure", calls)
+	}
+	if listCalls, detailCalls := gateway.accessListCalls.Load(), gateway.accessDetailCalls.Load(); listCalls != 0 || detailCalls != 0 {
+		t.Fatalf("access reads reached Kubernetes under critical pressure: lists=%d details=%d", listCalls, detailCalls)
 	}
 	capacity := service.OperationCapacity().KubernetesReads
 	if !capacity.Adaptive || capacity.Pressure != resourceguard.PressureCritical || capacity.Limit != 0 || capacity.Maximum != 4 {
@@ -944,6 +957,62 @@ func TestServiceListsEventsAndValidatesFiltersBeforeGateway(t *testing.T) {
 	}
 	if gateway.clusterEventCalls.Load() != calls {
 		t.Fatal("invalid event filters reached Kubernetes gateway")
+	}
+}
+
+func TestServiceListsAccessResourcesAndValidatesScopeBeforeGateway(t *testing.T) {
+	t.Parallel()
+
+	reference := domain.KubernetesAccessResourceReference{
+		Kind: domain.AccessResourceRoleBindings, Namespace: "payments", Name: "gateway-readers",
+	}
+	gateway := &fakeKubeGateway{
+		probe:           domain.ClusterProbe{Version: "v1.36.2"},
+		accessResources: []domain.KubernetesAccessResource{{Kind: "RoleBinding", Namespace: "payments", Name: "gateway-readers"}},
+		accessDetail: domain.KubernetesAccessResourceDetail{
+			KubernetesAccessResource: domain.KubernetesAccessResource{Kind: "RoleBinding", Namespace: "payments", Name: "gateway-readers"},
+			RoleRef:                  &domain.KubernetesRoleReference{Kind: "Role", Name: "gateway-reader"},
+		},
+	}
+	service, _, _ := newTestService(t, serviceFakes{kube: gateway})
+	cluster, err := service.CreateCluster(context.Background(), "admin", "req_cluster", domain.ClusterInput{
+		Name: "cluster", Environment: domain.EnvironmentDevelopment, Server: "https://api.example.com", BearerToken: "token",
+	})
+	if err != nil {
+		t.Fatalf("CreateCluster() error = %v", err)
+	}
+
+	items, err := service.AccessResources(context.Background(), cluster.ID, reference.Kind, reference.Namespace)
+	if err != nil || len(items) != 1 || items[0].Name != reference.Name {
+		t.Fatalf("AccessResources() = %#v, %v", items, err)
+	}
+	detail, err := service.AccessResourceDetail(context.Background(), cluster.ID, reference)
+	if err != nil || detail.RoleRef == nil || detail.RoleRef.Name != "gateway-reader" {
+		t.Fatalf("AccessResourceDetail() = %#v, %v", detail, err)
+	}
+	if gateway.accessKind != reference.Kind || gateway.accessNamespace != reference.Namespace || gateway.accessReference != reference {
+		t.Fatalf("access gateway inputs = kind %q, namespace %q, reference %#v", gateway.accessKind, gateway.accessNamespace, gateway.accessReference)
+	}
+
+	listCalls := gateway.accessListCalls.Load()
+	detailCalls := gateway.accessDetailCalls.Load()
+	invalidLists := []domain.KubernetesAccessResourceReference{
+		{Kind: domain.AccessResourceRoles},
+		{Kind: domain.AccessResourceClusterRoles, Namespace: "payments"},
+		{Kind: "secrets", Namespace: "payments"},
+	}
+	for _, invalid := range invalidLists {
+		if _, err := service.AccessResources(context.Background(), cluster.ID, invalid.Kind, invalid.Namespace); err == nil {
+			t.Errorf("AccessResources() accepted %#v", invalid)
+		}
+	}
+	if _, err := service.AccessResourceDetail(context.Background(), cluster.ID, domain.KubernetesAccessResourceReference{
+		Kind: domain.AccessResourceRoles, Namespace: "payments", Name: "../reader",
+	}); err == nil {
+		t.Fatal("AccessResourceDetail() accepted an invalid name")
+	}
+	if gateway.accessListCalls.Load() != listCalls || gateway.accessDetailCalls.Load() != detailCalls {
+		t.Fatal("invalid access scope reached Kubernetes gateway")
 	}
 }
 
@@ -1739,6 +1808,8 @@ type fakeKubeGateway struct {
 	persistentVolumes              []domain.KubernetesPersistentVolume
 	storageClasses                 []domain.KubernetesStorageClass
 	clusterEvents                  []domain.KubernetesEvent
+	accessResources                []domain.KubernetesAccessResource
+	accessDetail                   domain.KubernetesAccessResourceDetail
 	serviceCalls                   atomic.Int64
 	ingressCalls                   atomic.Int64
 	configMapCalls                 atomic.Int64
@@ -1747,6 +1818,8 @@ type fakeKubeGateway struct {
 	persistentVolumeCalls          atomic.Int64
 	storageClassCalls              atomic.Int64
 	clusterEventCalls              atomic.Int64
+	accessListCalls                atomic.Int64
+	accessDetailCalls              atomic.Int64
 	serviceNamespace               string
 	ingressNamespace               string
 	configMapNamespace             string
@@ -1755,6 +1828,9 @@ type fakeKubeGateway struct {
 	clusterEventNamespace          string
 	clusterEventType               string
 	clusterEventLimit              int
+	accessKind                     domain.KubernetesAccessResourceKind
+	accessNamespace                string
+	accessReference                domain.KubernetesAccessResourceReference
 	mutationMu                     sync.Mutex
 	scaledVersion                  string
 	scaledReplicas                 int32
@@ -1889,6 +1965,21 @@ func (g *fakeKubeGateway) Events(_ context.Context, namespace, eventType string,
 	g.clusterEventLimit = limit
 	g.mutationMu.Unlock()
 	return append([]domain.KubernetesEvent(nil), g.clusterEvents...), nil
+}
+func (g *fakeKubeGateway) AccessResources(_ context.Context, kind domain.KubernetesAccessResourceKind, namespace string) ([]domain.KubernetesAccessResource, error) {
+	g.accessListCalls.Add(1)
+	g.mutationMu.Lock()
+	g.accessKind = kind
+	g.accessNamespace = namespace
+	g.mutationMu.Unlock()
+	return append([]domain.KubernetesAccessResource(nil), g.accessResources...), nil
+}
+func (g *fakeKubeGateway) AccessResourceDetail(_ context.Context, reference domain.KubernetesAccessResourceReference) (domain.KubernetesAccessResourceDetail, error) {
+	g.accessDetailCalls.Add(1)
+	g.mutationMu.Lock()
+	g.accessReference = reference
+	g.mutationMu.Unlock()
+	return g.accessDetail, nil
 }
 func (g *fakeKubeGateway) WorkloadDetail(_ context.Context, reference domain.WorkloadReference) (domain.WorkloadDetail, error) {
 	g.detailReference = reference

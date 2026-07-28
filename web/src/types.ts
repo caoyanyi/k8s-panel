@@ -211,6 +211,52 @@ export interface KubernetesStorageClass {
   created_at: string
 }
 
+export type KubernetesAccessResourceKind =
+  | 'serviceaccounts'
+  | 'roles'
+  | 'rolebindings'
+  | 'clusterroles'
+  | 'clusterrolebindings'
+
+export interface KubernetesAccessResource {
+  kind: 'ServiceAccount' | 'Role' | 'RoleBinding' | 'ClusterRole' | 'ClusterRoleBinding'
+  namespace?: string
+  name: string
+  created_at: string
+}
+
+export interface KubernetesRoleRule {
+  api_groups: string[]
+  resources: string[]
+  resource_names: string[]
+  verbs: string[]
+  non_resource_urls: string[]
+}
+
+export interface KubernetesRoleReference {
+  kind: 'Role' | 'ClusterRole'
+  name: string
+}
+
+export interface KubernetesAccessSubject {
+  kind: 'User' | 'Group' | 'ServiceAccount'
+  namespace?: string
+  name: string
+}
+
+export interface KubernetesAccessResourceDetail extends KubernetesAccessResource {
+  role_ref?: KubernetesRoleReference
+  rules: KubernetesRoleRule[]
+  rule_count: number
+  rules_truncated: boolean
+  subjects: KubernetesAccessSubject[]
+  subject_count: number
+  subjects_truncated: boolean
+  automount_service_account_token?: boolean
+  secret_count: number
+  image_pull_secret_count: number
+}
+
 export interface WorkloadContainer {
   name: string
   image: string

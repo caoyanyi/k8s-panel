@@ -632,6 +632,47 @@ func (s *Service) StorageClasses(ctx context.Context, clusterID string) ([]domai
 	return gateway.StorageClasses(ctx)
 }
 
+func (s *Service) AccessResources(
+	ctx context.Context,
+	clusterID string,
+	kind domain.KubernetesAccessResourceKind,
+	namespace string,
+) ([]domain.KubernetesAccessResource, error) {
+	if err := domain.ValidateAccessResourceScope(kind, namespace); err != nil {
+		return nil, err
+	}
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	gateway, err := s.kubeGateway(ctx, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	return gateway.AccessResources(ctx, kind, namespace)
+}
+
+func (s *Service) AccessResourceDetail(
+	ctx context.Context,
+	clusterID string,
+	reference domain.KubernetesAccessResourceReference,
+) (domain.KubernetesAccessResourceDetail, error) {
+	if err := domain.ValidateAccessResourceReference(reference); err != nil {
+		return domain.KubernetesAccessResourceDetail{}, err
+	}
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return domain.KubernetesAccessResourceDetail{}, err
+	}
+	defer release()
+	gateway, err := s.kubeGateway(ctx, clusterID)
+	if err != nil {
+		return domain.KubernetesAccessResourceDetail{}, err
+	}
+	return gateway.AccessResourceDetail(ctx, reference)
+}
+
 func (s *Service) WorkloadDetail(ctx context.Context, clusterID string, reference domain.WorkloadReference) (domain.WorkloadDetail, error) {
 	if err := domain.ValidateWorkloadReference(reference); err != nil {
 		return domain.WorkloadDetail{}, err

@@ -56,6 +56,11 @@ func TestServerAuthenticationAndClusterLifecycle(t *testing.T) {
 	if unauthorizedEvents.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthorized events status = %d, want 401", unauthorizedEvents.Code)
 	}
+	unauthorizedAccess := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorizedAccess, httptest.NewRequest(http.MethodGet, "/api/v1/clusters/clu_1/access-resources?kind=clusterroles", nil))
+	if unauthorizedAccess.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized access resources status = %d, want 401", unauthorizedAccess.Code)
+	}
 
 	cookie := login(t, handler)
 	createBody := `{
@@ -175,6 +180,47 @@ func TestServerAuthenticationAndClusterLifecycle(t *testing.T) {
 		!strings.Contains(classes.Body.String(), `"default":true`) || strings.Contains(classes.Body.String(), "storage-account") {
 		t.Fatalf("storage classes status = %d, body = %s", classes.Code, classes.Body.String())
 	}
+	accessPath := "/api/v1/clusters/" + created.Data.ID + "/access-resources"
+	clusterRoles := authenticatedRequest(t, handler, cookie, http.MethodGet, accessPath+"?kind=clusterroles", "")
+	if clusterRoles.Code != http.StatusOK || !strings.Contains(clusterRoles.Body.String(), `"kind":"ClusterRole"`) ||
+		!strings.Contains(clusterRoles.Body.String(), `"name":"view"`) {
+		t.Fatalf("cluster roles status = %d, body = %s", clusterRoles.Code, clusterRoles.Body.String())
+	}
+	missingAccessNamespace := authenticatedRequest(t, handler, cookie, http.MethodGet, accessPath+"?kind=roles", "")
+	if missingAccessNamespace.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("missing access namespace status = %d, body = %s", missingAccessNamespace.Code, missingAccessNamespace.Body.String())
+	}
+	assertErrorField(t, missingAccessNamespace.Body.Bytes(), "namespace")
+	ambiguousClusterScope := authenticatedRequest(t, handler, cookie, http.MethodGet, accessPath+"?kind=clusterroles&namespace=payments", "")
+	if ambiguousClusterScope.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("ambiguous cluster access scope status = %d, body = %s", ambiguousClusterScope.Code, ambiguousClusterScope.Body.String())
+	}
+	assertErrorField(t, ambiguousClusterScope.Body.Bytes(), "namespace")
+	unknownAccessKind := authenticatedRequest(t, handler, cookie, http.MethodGet, accessPath+"?kind=secrets&namespace=payments", "")
+	if unknownAccessKind.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("unknown access kind status = %d, body = %s", unknownAccessKind.Code, unknownAccessKind.Body.String())
+	}
+	assertErrorField(t, unknownAccessKind.Body.Bytes(), "kind")
+	roleBindings := authenticatedRequest(t, handler, cookie, http.MethodGet, accessPath+"?kind=rolebindings&namespace=payments", "")
+	if roleBindings.Code != http.StatusOK || !strings.Contains(roleBindings.Body.String(), `"name":"gateway-readers"`) {
+		t.Fatalf("role bindings status = %d, body = %s", roleBindings.Code, roleBindings.Body.String())
+	}
+	bindingDetail := authenticatedRequest(
+		t, handler, cookie, http.MethodGet,
+		accessPath+"/rolebindings/gateway-readers?namespace=payments", "",
+	)
+	if bindingDetail.Code != http.StatusOK || !strings.Contains(bindingDetail.Body.String(), `"role_ref":{"kind":"Role","name":"gateway-reader"}`) ||
+		!strings.Contains(bindingDetail.Body.String(), `"subject_count":1`) || strings.Contains(bindingDetail.Body.String(), "private-subject-field") {
+		t.Fatalf("role binding detail status = %d, body = %s", bindingDetail.Code, bindingDetail.Body.String())
+	}
+	invalidAccessName := authenticatedRequest(
+		t, handler, cookie, http.MethodGet,
+		accessPath+"/rolebindings/..%2Fbinding?namespace=payments", "",
+	)
+	if invalidAccessName.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid access name status = %d, body = %s", invalidAccessName.Code, invalidAccessName.Body.String())
+	}
+	assertErrorField(t, invalidAccessName.Body.Bytes(), "name")
 	eventsPath := "/api/v1/clusters/" + created.Data.ID + "/events"
 	events := authenticatedRequest(t, handler, cookie, http.MethodGet, eventsPath+"?namespace=payments&type=Warning&limit=100", "")
 	if events.Code != http.StatusOK || !strings.Contains(events.Body.String(), `"name":"gateway-warning"`) ||
@@ -793,6 +839,22 @@ func (testKube) StorageClasses(context.Context) ([]domain.KubernetesStorageClass
 		Name: "standard", Provisioner: "csi.example.com", ReclaimPolicy: "Delete",
 		VolumeBindingMode: "WaitForFirstConsumer", AllowVolumeExpansion: true, Default: true,
 	}}, nil
+}
+func (testKube) AccessResources(_ context.Context, kind domain.KubernetesAccessResourceKind, namespace string) ([]domain.KubernetesAccessResource, error) {
+	if kind == domain.AccessResourceClusterRoles {
+		return []domain.KubernetesAccessResource{{Kind: "ClusterRole", Name: "view"}}, nil
+	}
+	return []domain.KubernetesAccessResource{{Kind: "RoleBinding", Namespace: namespace, Name: "gateway-readers"}}, nil
+}
+func (testKube) AccessResourceDetail(_ context.Context, reference domain.KubernetesAccessResourceReference) (domain.KubernetesAccessResourceDetail, error) {
+	return domain.KubernetesAccessResourceDetail{
+		KubernetesAccessResource: domain.KubernetesAccessResource{
+			Kind: "RoleBinding", Namespace: reference.Namespace, Name: reference.Name,
+		},
+		RoleRef:      &domain.KubernetesRoleReference{Kind: "Role", Name: "gateway-reader"},
+		Subjects:     []domain.KubernetesAccessSubject{{Kind: "Group", Name: "payments-readers"}},
+		SubjectCount: 1,
+	}, nil
 }
 func (testKube) WorkloadDetail(_ context.Context, reference domain.WorkloadReference) (domain.WorkloadDetail, error) {
 	return domain.WorkloadDetail{

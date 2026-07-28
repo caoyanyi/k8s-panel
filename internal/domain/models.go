@@ -374,6 +374,62 @@ type KubernetesStorageClass struct {
 	CreatedAt            time.Time `json:"created_at"`
 }
 
+type KubernetesAccessResourceKind string
+
+const (
+	AccessResourceServiceAccounts     KubernetesAccessResourceKind = "serviceaccounts"
+	AccessResourceRoles               KubernetesAccessResourceKind = "roles"
+	AccessResourceRoleBindings        KubernetesAccessResourceKind = "rolebindings"
+	AccessResourceClusterRoles        KubernetesAccessResourceKind = "clusterroles"
+	AccessResourceClusterRoleBindings KubernetesAccessResourceKind = "clusterrolebindings"
+)
+
+type KubernetesAccessResourceReference struct {
+	Kind      KubernetesAccessResourceKind
+	Namespace string
+	Name      string
+}
+
+type KubernetesAccessResource struct {
+	Kind      string    `json:"kind"`
+	Namespace string    `json:"namespace,omitempty"`
+	Name      string    `json:"name"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type KubernetesRoleRule struct {
+	APIGroups       []string `json:"api_groups"`
+	Resources       []string `json:"resources"`
+	ResourceNames   []string `json:"resource_names"`
+	Verbs           []string `json:"verbs"`
+	NonResourceURLs []string `json:"non_resource_urls"`
+}
+
+type KubernetesRoleReference struct {
+	Kind string `json:"kind"`
+	Name string `json:"name"`
+}
+
+type KubernetesAccessSubject struct {
+	Kind      string `json:"kind"`
+	Namespace string `json:"namespace,omitempty"`
+	Name      string `json:"name"`
+}
+
+type KubernetesAccessResourceDetail struct {
+	KubernetesAccessResource
+	RoleRef                      *KubernetesRoleReference  `json:"role_ref,omitempty"`
+	Rules                        []KubernetesRoleRule      `json:"rules"`
+	RuleCount                    int                       `json:"rule_count"`
+	RulesTruncated               bool                      `json:"rules_truncated"`
+	Subjects                     []KubernetesAccessSubject `json:"subjects"`
+	SubjectCount                 int                       `json:"subject_count"`
+	SubjectsTruncated            bool                      `json:"subjects_truncated"`
+	AutomountServiceAccountToken *bool                     `json:"automount_service_account_token,omitempty"`
+	SecretCount                  int                       `json:"secret_count"`
+	ImagePullSecretCount         int                       `json:"image_pull_secret_count"`
+}
+
 type Workload struct {
 	Kind      string    `json:"kind"`
 	Namespace string    `json:"namespace"`
