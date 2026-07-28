@@ -239,6 +239,7 @@ td strong { color: var(--text); font-size: 12px; }
 .scheduling-disabled { color: var(--danger); font-size: 11px; font-weight: 650; white-space: nowrap; }
 .node-table { min-width: 1120px; }
 .network-table { min-width: 1180px; }
+.endpoint-slice-table { min-width: 1480px; }
 .network-policy-table { min-width: 1320px; }
 .configuration-table { min-width: 760px; }
 .storage-table { min-width: 1180px; }
@@ -296,6 +297,8 @@ td strong { color: var(--text); font-size: 12px; }
 .access-kind-control button { min-width: 142px; }
 .governance-kind-control { max-width: 100%; overflow-x: auto; }
 .governance-kind-control button { min-width: 118px; }
+.network-kind-control { max-width: 100%; overflow-x: auto; }
+.network-kind-control button { min-width: 122px; }
 
 input, select, textarea { width: 100%; border: 1px solid var(--line-strong); border-radius: 5px; background: #fff; color: var(--text); }
 input, select { height: 38px; padding: 0 10px; }
@@ -493,6 +496,8 @@ select:disabled { cursor: not-allowed; background: #f3f5f4; color: #89938d; }
   .access-kind-control button { min-width: 142px; flex: 0 0 142px; }
   .governance-kind-control { justify-content: flex-start; }
   .governance-kind-control button { min-width: 118px; flex: 0 0 118px; }
+  .network-kind-control { justify-content: flex-start; }
+  .network-kind-control button { min-width: 122px; flex: 0 0 122px; }
   .modal-backdrop { padding: 0; align-items: end; }
   .modal { width: 100%; max-height: 92vh; border-radius: 8px 8px 0 0; border-bottom: 0; }
   .modal-body { padding: 16px; }

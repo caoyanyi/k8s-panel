@@ -41,6 +41,11 @@ func TestServerAuthenticationAndClusterLifecycle(t *testing.T) {
 	if unauthorizedNetwork.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthorized network status = %d, want 401", unauthorizedNetwork.Code)
 	}
+	unauthorizedEndpointSlice := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorizedEndpointSlice, httptest.NewRequest(http.MethodGet, "/api/v1/clusters/clu_1/endpoint-slices", nil))
+	if unauthorizedEndpointSlice.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized endpoint slice status = %d, want 401", unauthorizedEndpointSlice.Code)
+	}
 	unauthorizedNetworkPolicy := httptest.NewRecorder()
 	handler.ServeHTTP(unauthorizedNetworkPolicy, httptest.NewRequest(http.MethodGet, "/api/v1/clusters/clu_1/network-policies", nil))
 	if unauthorizedNetworkPolicy.Code != http.StatusUnauthorized {
@@ -143,6 +148,14 @@ func TestServerAuthenticationAndClusterLifecycle(t *testing.T) {
 		!strings.Contains(ingresses.Body.String(), `"host_count":1`) {
 		t.Fatalf("ingresses status = %d, body = %s", ingresses.Code, ingresses.Body.String())
 	}
+	endpointSlicesPath := "/api/v1/clusters/" + created.Data.ID + "/endpoint-slices"
+	endpointSlices := authenticatedRequest(t, handler, cookie, http.MethodGet, endpointSlicesPath+"?namespace=payments", "")
+	if endpointSlices.Code != http.StatusOK || !strings.Contains(endpointSlices.Body.String(), `"name":"gateway-ipv4"`) ||
+		!strings.Contains(endpointSlices.Body.String(), `"service_name":"gateway"`) ||
+		!strings.Contains(endpointSlices.Body.String(), `"ready_endpoint_count":2`) ||
+		strings.Contains(endpointSlices.Body.String(), "10.42.0.10") {
+		t.Fatalf("endpoint slices status = %d, body = %s", endpointSlices.Code, endpointSlices.Body.String())
+	}
 	networkPoliciesPath := "/api/v1/clusters/" + created.Data.ID + "/network-policies"
 	networkPolicies := authenticatedRequest(t, handler, cookie, http.MethodGet, networkPoliciesPath+"?namespace=payments", "")
 	if networkPolicies.Code != http.StatusOK || !strings.Contains(networkPolicies.Body.String(), `"name":"gateway-policy"`) ||
@@ -155,6 +168,11 @@ func TestServerAuthenticationAndClusterLifecycle(t *testing.T) {
 		t.Fatalf("invalid network namespace status = %d, body = %s", invalidNetworkNamespace.Code, invalidNetworkNamespace.Body.String())
 	}
 	assertErrorField(t, invalidNetworkNamespace.Body.Bytes(), "namespace")
+	invalidEndpointSliceNamespace := authenticatedRequest(t, handler, cookie, http.MethodGet, endpointSlicesPath+"?namespace=bad%2Fnamespace", "")
+	if invalidEndpointSliceNamespace.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid endpoint slice namespace status = %d, body = %s", invalidEndpointSliceNamespace.Code, invalidEndpointSliceNamespace.Body.String())
+	}
+	assertErrorField(t, invalidEndpointSliceNamespace.Body.Bytes(), "namespace")
 	invalidNetworkPolicyNamespace := authenticatedRequest(t, handler, cookie, http.MethodGet, networkPoliciesPath+"?namespace=bad%2Fnamespace", "")
 	if invalidNetworkPolicyNamespace.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("invalid network policy namespace status = %d, body = %s", invalidNetworkPolicyNamespace.Code, invalidNetworkPolicyNamespace.Body.String())
@@ -921,6 +939,13 @@ func (testKube) Services(_ context.Context, namespace string) ([]domain.Kubernet
 func (testKube) Ingresses(context.Context, string) ([]domain.KubernetesIngress, error) {
 	return []domain.KubernetesIngress{{
 		Namespace: "payments", Name: "gateway", ClassName: "nginx", Hosts: []string{"gateway.example.com"}, HostCount: 1,
+	}}, nil
+}
+func (testKube) EndpointSlices(_ context.Context, namespace string) ([]domain.KubernetesEndpointSlice, error) {
+	return []domain.KubernetesEndpointSlice{{
+		Namespace: namespace, Name: "gateway-ipv4", ServiceName: "gateway", AddressType: "IPv4",
+		EndpointCount: 3, ReadyEndpointCount: 2, ServingEndpointCount: 2, TerminatingEndpointCount: 1,
+		ReadyDefaultedCount: 1, ServingDefaultedCount: 1, TerminatingDefaultedCount: 1, PortCount: 1,
 	}}, nil
 }
 func (testKube) NetworkPolicies(_ context.Context, namespace string) ([]domain.KubernetesNetworkPolicy, error) {

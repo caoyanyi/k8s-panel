@@ -162,6 +162,22 @@ export interface KubernetesIngress {
   created_at: string
 }
 
+export interface KubernetesEndpointSlice {
+  namespace: string
+  name: string
+  service_name: string
+  address_type: 'IPv4' | 'IPv6' | 'FQDN'
+  endpoint_count: number
+  ready_endpoint_count: number
+  ready_defaulted_count: number
+  serving_endpoint_count: number
+  serving_defaulted_count: number
+  terminating_endpoint_count: number
+  terminating_defaulted_count: number
+  port_count: number
+  created_at: string
+}
+
 export interface KubernetesNetworkPolicy {
   namespace: string
   name: string

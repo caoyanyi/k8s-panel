@@ -325,6 +325,22 @@ type KubernetesIngress struct {
 	CreatedAt    time.Time `json:"created_at"`
 }
 
+type KubernetesEndpointSlice struct {
+	Namespace                 string    `json:"namespace"`
+	Name                      string    `json:"name"`
+	ServiceName               string    `json:"service_name"`
+	AddressType               string    `json:"address_type"`
+	EndpointCount             int       `json:"endpoint_count"`
+	ReadyEndpointCount        int       `json:"ready_endpoint_count"`
+	ReadyDefaultedCount       int       `json:"ready_defaulted_count"`
+	ServingEndpointCount      int       `json:"serving_endpoint_count"`
+	ServingDefaultedCount     int       `json:"serving_defaulted_count"`
+	TerminatingEndpointCount  int       `json:"terminating_endpoint_count"`
+	TerminatingDefaultedCount int       `json:"terminating_defaulted_count"`
+	PortCount                 int       `json:"port_count"`
+	CreatedAt                 time.Time `json:"created_at"`
+}
+
 type KubernetesNetworkPolicy struct {
 	Namespace                  string                 `json:"namespace"`
 	Name                       string                 `json:"name"`

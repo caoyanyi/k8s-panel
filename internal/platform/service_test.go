@@ -681,6 +681,10 @@ func TestServiceRejectsKubernetesReadsDuringCriticalResourcePressure(t *testing.
 			_, err := service.Ingresses(context.Background(), cluster.ID, "payments")
 			return err
 		}},
+		{name: "endpoint slices", call: func() error {
+			_, err := service.EndpointSlices(context.Background(), cluster.ID, "payments")
+			return err
+		}},
 		{name: "config maps", call: func() error {
 			_, err := service.ConfigMaps(context.Background(), cluster.ID, "payments")
 			return err
@@ -753,8 +757,8 @@ func TestServiceRejectsKubernetesReadsDuringCriticalResourcePressure(t *testing.
 	if calls := gateway.summaryCalls.Load(); calls != 0 {
 		t.Fatalf("Summary() reached Kubernetes %d times under critical pressure", calls)
 	}
-	if serviceCalls, ingressCalls, policyCalls := gateway.serviceCalls.Load(), gateway.ingressCalls.Load(), gateway.networkPolicyCalls.Load(); serviceCalls != 0 || ingressCalls != 0 || policyCalls != 0 {
-		t.Fatalf("network reads reached Kubernetes under critical pressure: services=%d ingresses=%d policies=%d", serviceCalls, ingressCalls, policyCalls)
+	if serviceCalls, ingressCalls, endpointSliceCalls, policyCalls := gateway.serviceCalls.Load(), gateway.ingressCalls.Load(), gateway.endpointSliceCalls.Load(), gateway.networkPolicyCalls.Load(); serviceCalls != 0 || ingressCalls != 0 || endpointSliceCalls != 0 || policyCalls != 0 {
+		t.Fatalf("network reads reached Kubernetes under critical pressure: services=%d ingresses=%d endpointSlices=%d policies=%d", serviceCalls, ingressCalls, endpointSliceCalls, policyCalls)
 	}
 	if configMapCalls, secretCalls := gateway.configMapCalls.Load(), gateway.secretCalls.Load(); configMapCalls != 0 || secretCalls != 0 {
 		t.Fatalf("configuration reads reached Kubernetes under critical pressure: configmaps=%d secrets=%d", configMapCalls, secretCalls)
@@ -781,6 +785,7 @@ func TestServiceListsNetworkResourcesAndValidatesNamespaceBeforeGateway(t *testi
 		probe:           domain.ClusterProbe{Version: "v1.36.2"},
 		services:        []domain.KubernetesService{{Namespace: "payments", Name: "gateway"}},
 		ingresses:       []domain.KubernetesIngress{{Namespace: "payments", Name: "gateway"}},
+		endpointSlices:  []domain.KubernetesEndpointSlice{{Namespace: "payments", Name: "gateway-ipv4"}},
 		networkPolicies: []domain.KubernetesNetworkPolicy{{Namespace: "payments", Name: "gateway-policy"}},
 	}
 	service, _, _ := newTestService(t, serviceFakes{kube: gateway})
@@ -799,16 +804,21 @@ func TestServiceListsNetworkResourcesAndValidatesNamespaceBeforeGateway(t *testi
 	if err != nil || len(ingresses) != 1 || ingresses[0].Name != "gateway" {
 		t.Fatalf("Ingresses() = %#v, %v", ingresses, err)
 	}
+	endpointSlices, err := service.EndpointSlices(context.Background(), cluster.ID, "payments")
+	if err != nil || len(endpointSlices) != 1 || endpointSlices[0].Name != "gateway-ipv4" {
+		t.Fatalf("EndpointSlices() = %#v, %v", endpointSlices, err)
+	}
 	policies, err := service.NetworkPolicies(context.Background(), cluster.ID, "payments")
 	if err != nil || len(policies) != 1 || policies[0].Name != "gateway-policy" {
 		t.Fatalf("NetworkPolicies() = %#v, %v", policies, err)
 	}
-	if gateway.serviceNamespace != "payments" || gateway.ingressNamespace != "" || gateway.networkPolicyNamespace != "payments" {
-		t.Fatalf("network namespaces = service %q, ingress %q, policies %q", gateway.serviceNamespace, gateway.ingressNamespace, gateway.networkPolicyNamespace)
+	if gateway.serviceNamespace != "payments" || gateway.ingressNamespace != "" || gateway.endpointSliceNamespace != "payments" || gateway.networkPolicyNamespace != "payments" {
+		t.Fatalf("network namespaces = service %q, ingress %q, endpointSlices %q, policies %q", gateway.serviceNamespace, gateway.ingressNamespace, gateway.endpointSliceNamespace, gateway.networkPolicyNamespace)
 	}
 
 	serviceCalls := gateway.serviceCalls.Load()
 	ingressCalls := gateway.ingressCalls.Load()
+	endpointSliceCalls := gateway.endpointSliceCalls.Load()
 	networkPolicyCalls := gateway.networkPolicyCalls.Load()
 	if _, err := service.Services(context.Background(), cluster.ID, "bad/namespace"); err == nil {
 		t.Fatal("Services() accepted an invalid namespace")
@@ -816,10 +826,13 @@ func TestServiceListsNetworkResourcesAndValidatesNamespaceBeforeGateway(t *testi
 	if _, err := service.Ingresses(context.Background(), cluster.ID, "bad/namespace"); err == nil {
 		t.Fatal("Ingresses() accepted an invalid namespace")
 	}
+	if _, err := service.EndpointSlices(context.Background(), cluster.ID, "bad/namespace"); err == nil {
+		t.Fatal("EndpointSlices() accepted an invalid namespace")
+	}
 	if _, err := service.NetworkPolicies(context.Background(), cluster.ID, "bad/namespace"); err == nil {
 		t.Fatal("NetworkPolicies() accepted an invalid namespace")
 	}
-	if gateway.serviceCalls.Load() != serviceCalls || gateway.ingressCalls.Load() != ingressCalls ||
+	if gateway.serviceCalls.Load() != serviceCalls || gateway.ingressCalls.Load() != ingressCalls || gateway.endpointSliceCalls.Load() != endpointSliceCalls ||
 		gateway.networkPolicyCalls.Load() != networkPolicyCalls {
 		t.Fatal("invalid namespace reached Kubernetes gateway")
 	}
@@ -1983,6 +1996,7 @@ type fakeKubeGateway struct {
 	nodeEventLimit                   int
 	services                         []domain.KubernetesService
 	ingresses                        []domain.KubernetesIngress
+	endpointSlices                   []domain.KubernetesEndpointSlice
 	networkPolicies                  []domain.KubernetesNetworkPolicy
 	configMaps                       []domain.KubernetesConfigMap
 	secrets                          []domain.KubernetesSecret
@@ -2000,6 +2014,7 @@ type fakeKubeGateway struct {
 	accessReviewErr                  error
 	serviceCalls                     atomic.Int64
 	ingressCalls                     atomic.Int64
+	endpointSliceCalls               atomic.Int64
 	networkPolicyCalls               atomic.Int64
 	configMapCalls                   atomic.Int64
 	secretCalls                      atomic.Int64
@@ -2016,6 +2031,7 @@ type fakeKubeGateway struct {
 	accessReviewCalls                atomic.Int64
 	serviceNamespace                 string
 	ingressNamespace                 string
+	endpointSliceNamespace           string
 	networkPolicyNamespace           string
 	configMapNamespace               string
 	secretNamespace                  string
@@ -2127,6 +2143,13 @@ func (g *fakeKubeGateway) Ingresses(_ context.Context, namespace string) ([]doma
 	g.ingressNamespace = namespace
 	g.mutationMu.Unlock()
 	return append([]domain.KubernetesIngress(nil), g.ingresses...), nil
+}
+func (g *fakeKubeGateway) EndpointSlices(_ context.Context, namespace string) ([]domain.KubernetesEndpointSlice, error) {
+	g.endpointSliceCalls.Add(1)
+	g.mutationMu.Lock()
+	g.endpointSliceNamespace = namespace
+	g.mutationMu.Unlock()
+	return append([]domain.KubernetesEndpointSlice(nil), g.endpointSlices...), nil
 }
 func (g *fakeKubeGateway) NetworkPolicies(_ context.Context, namespace string) ([]domain.KubernetesNetworkPolicy, error) {
 	g.networkPolicyCalls.Add(1)

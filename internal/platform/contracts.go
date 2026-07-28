@@ -54,6 +54,7 @@ type KubeGateway interface {
 	Workloads(context.Context, string, string) ([]domain.Workload, error)
 	Services(context.Context, string) ([]domain.KubernetesService, error)
 	Ingresses(context.Context, string) ([]domain.KubernetesIngress, error)
+	EndpointSlices(context.Context, string) ([]domain.KubernetesEndpointSlice, error)
 	NetworkPolicies(context.Context, string) ([]domain.KubernetesNetworkPolicy, error)
 	ConfigMaps(context.Context, string) ([]domain.KubernetesConfigMap, error)
 	Secrets(context.Context, string) ([]domain.KubernetesSecret, error)

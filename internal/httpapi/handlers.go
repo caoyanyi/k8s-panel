@@ -282,6 +282,15 @@ func (s *Server) listIngresses(w http.ResponseWriter, r *http.Request) {
 	writeData(w, http.StatusOK, items)
 }
 
+func (s *Server) listEndpointSlices(w http.ResponseWriter, r *http.Request) {
+	items, err := s.service.EndpointSlices(r.Context(), r.PathValue("id"), r.URL.Query().Get("namespace"))
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeData(w, http.StatusOK, items)
+}
+
 func (s *Server) listNetworkPolicies(w http.ResponseWriter, r *http.Request) {
 	items, err := s.service.NetworkPolicies(r.Context(), r.PathValue("id"), r.URL.Query().Get("namespace"))
 	if err != nil {

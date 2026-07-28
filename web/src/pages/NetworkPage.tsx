@@ -6,13 +6,14 @@ import { PageHeader } from '../components/PageHeader'
 import { TablePagination, TABLE_PAGE_SIZE } from '../components/TablePagination'
 import { usePanel } from '../context'
 import { useResource } from '../hooks'
-import type { KubernetesIngress, KubernetesNetworkPolicy, KubernetesService, Namespace, ServicePort } from '../types'
+import type { KubernetesEndpointSlice, KubernetesIngress, KubernetesNetworkPolicy, KubernetesService, Namespace, ServicePort } from '../types'
 import { formatDateTime, truncate } from '../utils'
 
-type NetworkView = 'services' | 'ingresses' | 'policies'
+type NetworkView = 'services' | 'ingresses' | 'endpoints' | 'policies'
 type NetworkInventory =
   | { kind: 'services'; items: KubernetesService[] }
   | { kind: 'ingresses'; items: KubernetesIngress[] }
+  | { kind: 'endpoints'; items: KubernetesEndpointSlice[] }
   | { kind: 'policies'; items: KubernetesNetworkPolicy[] }
 
 export function NetworkPage() {
@@ -31,6 +32,7 @@ export function NetworkPage() {
     if (!selectedClusterId) {
       if (view === 'services') return { kind: 'services', items: [] }
       if (view === 'ingresses') return { kind: 'ingresses', items: [] }
+      if (view === 'endpoints') return { kind: 'endpoints', items: [] }
       return { kind: 'policies', items: [] }
     }
     const query = new URLSearchParams()
@@ -45,6 +47,10 @@ export function NetworkPage() {
       const items = await api.get<KubernetesIngress[]>(`/api/v1/clusters/${selectedClusterId}/ingresses${suffix}`, signal)
       return { kind: 'ingresses', items }
     }
+    if (view === 'endpoints') {
+      const items = await api.get<KubernetesEndpointSlice[]>(`/api/v1/clusters/${selectedClusterId}/endpoint-slices${suffix}`, signal)
+      return { kind: 'endpoints', items }
+    }
     const items = await api.get<KubernetesNetworkPolicy[]>(`/api/v1/clusters/${selectedClusterId}/network-policies${suffix}`, signal)
     return { kind: 'policies', items }
   }, [selectedClusterId, selectedNamespace, view])
@@ -58,6 +64,7 @@ export function NetworkPage() {
   const normalizedSearch = search.trim().toLowerCase()
   const services = inventory.data?.kind === 'services' ? inventory.data.items : []
   const ingresses = inventory.data?.kind === 'ingresses' ? inventory.data.items : []
+  const endpointSlices = inventory.data?.kind === 'endpoints' ? inventory.data.items : []
   const policies = inventory.data?.kind === 'policies' ? inventory.data.items : []
   const visibleServices = useMemo(() => services.filter((item) => (
     !normalizedSearch || serviceSearchText(item).includes(normalizedSearch)
@@ -65,6 +72,9 @@ export function NetworkPage() {
   const visibleIngresses = useMemo(() => ingresses.filter((item) => (
     !normalizedSearch || ingressSearchText(item).includes(normalizedSearch)
   )), [ingresses, normalizedSearch])
+  const visibleEndpointSlices = useMemo(() => endpointSlices.filter((item) => (
+    !normalizedSearch || endpointSliceSearchText(item).includes(normalizedSearch)
+  )), [endpointSlices, normalizedSearch])
   const visiblePolicies = useMemo(() => policies.filter((item) => (
     !normalizedSearch || networkPolicySearchText(item).includes(normalizedSearch)
   )), [normalizedSearch, policies])
@@ -72,18 +82,25 @@ export function NetworkPage() {
 
   const visibleCount = view === 'services'
     ? visibleServices.length
-    : view === 'ingresses' ? visibleIngresses.length : visiblePolicies.length
-  const activeCount = view === 'services' ? services.length : view === 'ingresses' ? ingresses.length : policies.length
+    : view === 'ingresses' ? visibleIngresses.length : view === 'endpoints' ? visibleEndpointSlices.length : visiblePolicies.length
+  const activeCount = view === 'services'
+    ? services.length
+    : view === 'ingresses' ? ingresses.length : view === 'endpoints' ? endpointSlices.length : policies.length
   const totalPages = Math.max(1, Math.ceil(visibleCount / TABLE_PAGE_SIZE))
   const currentPage = Math.min(page, totalPages - 1)
   const pageStart = currentPage * TABLE_PAGE_SIZE
   const pageServices = visibleServices.slice(pageStart, pageStart + TABLE_PAGE_SIZE)
   const pageIngresses = visibleIngresses.slice(pageStart, pageStart + TABLE_PAGE_SIZE)
+  const pageEndpointSlices = visibleEndpointSlices.slice(pageStart, pageStart + TABLE_PAGE_SIZE)
   const pagePolicies = visiblePolicies.slice(pageStart, pageStart + TABLE_PAGE_SIZE)
-  const resourceLabel = view === 'services' ? 'Service' : view === 'ingresses' ? 'Ingress' : 'NetworkPolicy'
+  const resourceLabel = view === 'services'
+    ? 'Service'
+    : view === 'ingresses' ? 'Ingress' : view === 'endpoints' ? 'EndpointSlice' : 'NetworkPolicy'
   const searchPlaceholder = view === 'services'
     ? '搜索 Service、地址或端口'
-    : view === 'ingresses' ? '搜索 Ingress、域名或地址' : '搜索 NetworkPolicy、命名空间或方向'
+    : view === 'ingresses'
+      ? '搜索 Ingress、域名或地址'
+      : view === 'endpoints' ? '搜索名称、Service、地址族' : '搜索 NetworkPolicy、命名空间或方向'
 
   return (
     <div className="page">
@@ -95,9 +112,10 @@ export function NetworkPage() {
       {selectedCluster?.environment === 'production' && <div className="production-banner"><strong>生产环境</strong><span>{selectedCluster.name}</span></div>}
       {!selectedClusterId ? <EmptyState title="尚未选择集群" /> : (
         <>
-          <div className="segmented-control" role="group" aria-label="网络资源类型">
+          <div className="segmented-control network-kind-control" role="group" aria-label="网络资源类型">
             <button type="button" aria-pressed={view === 'services'} className={view === 'services' ? 'active' : ''} onClick={() => setView('services')}>Service</button>
             <button type="button" aria-pressed={view === 'ingresses'} className={view === 'ingresses' ? 'active' : ''} onClick={() => setView('ingresses')}>Ingress</button>
+            <button type="button" aria-pressed={view === 'endpoints'} className={view === 'endpoints' ? 'active' : ''} onClick={() => setView('endpoints')}>EndpointSlice</button>
             <button type="button" aria-pressed={view === 'policies'} className={view === 'policies' ? 'active' : ''} onClick={() => setView('policies')}>NetworkPolicy</button>
           </div>
           <section className="toolbar" aria-label="网络资源筛选">
@@ -109,6 +127,8 @@ export function NetworkPage() {
               <><ServiceTable services={pageServices} /><TablePagination page={currentPage} totalItems={visibleServices.length} onPage={setPage} /></>
             ) : view === 'ingresses' ? (
               <><IngressTable ingresses={pageIngresses} /><TablePagination page={currentPage} totalItems={visibleIngresses.length} onPage={setPage} /></>
+            ) : view === 'endpoints' ? (
+              <><EndpointSliceTable endpointSlices={pageEndpointSlices} /><TablePagination page={currentPage} totalItems={visibleEndpointSlices.length} onPage={setPage} /></>
             ) : (
               <><NetworkPolicyTable policies={pagePolicies} /><TablePagination page={currentPage} totalItems={visiblePolicies.length} onPage={setPage} /></>
             )}
@@ -152,6 +172,31 @@ function IngressTable({ ingresses }: { ingresses: KubernetesIngress[] }) {
       </tr>)}</tbody>
     </table></div>
   )
+}
+
+function EndpointSliceTable({ endpointSlices }: { endpointSlices: KubernetesEndpointSlice[] }) {
+  return (
+    <div className="table-wrap" role="region" aria-label="EndpointSlice 清单" tabIndex={0}><table className="endpoint-slice-table">
+      <thead><tr><th>名称</th><th>命名空间</th><th>Service</th><th>地址族</th><th>端点</th><th>Ready</th><th>Serving</th><th>Terminating</th><th>端口</th><th>创建时间</th></tr></thead>
+      <tbody>{endpointSlices.map((endpointSlice) => <tr key={`${endpointSlice.namespace}:${endpointSlice.name}`}>
+        <td><strong>{endpointSlice.name}</strong></td>
+        <td className="mono">{endpointSlice.namespace}</td>
+        <td className="mono">{endpointSlice.service_name}</td>
+        <td><div className="inline-labels"><span className="kind-label">{endpointSlice.address_type}</span>{endpointSlice.address_type === 'FQDN' && <span className="detail-muted">已弃用</span>}</div></td>
+        <td className="network-count">{endpointSlice.endpoint_count}</td>
+        <td><EndpointConditionCount count={endpointSlice.ready_endpoint_count} total={endpointSlice.endpoint_count} defaulted={endpointSlice.ready_defaulted_count} /></td>
+        <td><EndpointConditionCount count={endpointSlice.serving_endpoint_count} total={endpointSlice.endpoint_count} defaulted={endpointSlice.serving_defaulted_count} /></td>
+        <td><EndpointConditionCount count={endpointSlice.terminating_endpoint_count} total={endpointSlice.endpoint_count} defaulted={endpointSlice.terminating_defaulted_count} inverse /></td>
+        <td className="network-count">{endpointSlice.port_count}</td>
+        <td>{formatDateTime(endpointSlice.created_at)}</td>
+      </tr>)}</tbody>
+    </table></div>
+  )
+}
+
+function EndpointConditionCount({ count, total, defaulted, inverse = false }: { count: number; total: number; defaulted: number; inverse?: boolean }) {
+  const attention = inverse ? count > 0 : total === 0 || count < total
+  return <div className="network-value-list"><span className={attention ? 'replica-warning' : 'replica-ready'}>{count} / {total}</span>{defaulted > 0 && <span className="detail-muted">{defaulted} 个按 API 默认</span>}</div>
 }
 
 function NetworkPolicyTable({ policies }: { policies: KubernetesNetworkPolicy[] }) {
@@ -206,6 +251,10 @@ function serviceSearchText(service: KubernetesService) {
 
 function ingressSearchText(ingress: KubernetesIngress) {
   return [ingress.name, ingress.namespace, ingress.class_name ?? '', ...ingress.hosts, ...ingress.addresses].join(' ').toLowerCase()
+}
+
+function endpointSliceSearchText(endpointSlice: KubernetesEndpointSlice) {
+  return [endpointSlice.name, endpointSlice.namespace, endpointSlice.service_name, endpointSlice.address_type].join(' ').toLowerCase()
 }
 
 function networkPolicySearchText(policy: KubernetesNetworkPolicy) {

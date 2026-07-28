@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { type ReactNode, useState } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -29,6 +29,7 @@ describe('NetworkPage', () => {
       if (path.endsWith('/namespaces')) return Promise.resolve(dataResponse([namespace]))
       if (path.includes('/services')) return Promise.resolve(dataResponse([service]))
       if (path.includes('/ingresses')) return Promise.resolve(dataResponse([ingress]))
+      if (path.includes('/endpoint-slices')) return Promise.resolve(dataResponse([endpointSlice]))
       if (path.includes('/network-policies')) return Promise.resolve(dataResponse([networkPolicy]))
       return Promise.resolve(errorResponse(404, 'not_found'))
     })
@@ -39,6 +40,7 @@ describe('NetworkPage', () => {
 
     expect(await screen.findByText('gateway-service')).toBeInTheDocument()
     expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/ingresses'))).toBe(false)
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/endpoint-slices'))).toBe(false)
     expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/network-policies'))).toBe(false)
     expect(screen.getByText('10.96.0.20')).toBeInTheDocument()
     expect(screen.getAllByText('+1')).toHaveLength(2)
@@ -53,6 +55,15 @@ describe('NetworkPage', () => {
     expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/ingresses?namespace=payments'))).toBe(true)
     expect(screen.getByText('gateway.example.com')).toBeInTheDocument()
     expect(screen.getByText('已启用')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'EndpointSlice' }))
+    const endpointRow = await screen.findByRole('row', { name: /gateway-ipv4/ })
+    expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/endpoint-slices?namespace=payments'))).toBe(true)
+    expect(within(endpointRow).getByText('gateway-service')).toBeInTheDocument()
+    expect(within(endpointRow).getByText('IPv4')).toBeInTheDocument()
+    expect(within(endpointRow).getAllByText('2 / 3')).toHaveLength(2)
+    expect(within(endpointRow).getByText('1 / 3')).toBeInTheDocument()
+    expect(within(endpointRow).getAllByText('1 个按 API 默认')).toHaveLength(3)
 
     await user.click(screen.getByRole('button', { name: 'NetworkPolicy' }))
     expect(await screen.findByText('gateway-policy')).toBeInTheDocument()
@@ -146,6 +157,16 @@ const ingress = {
   addresses: ['203.0.113.30'], address_count: 1,
   tls: true, rule_count: 1, path_count: 2,
   created_at: '2026-07-24T08:00:00Z',
+}
+
+const endpointSlice = {
+  namespace: 'payments', name: 'gateway-ipv4', service_name: 'gateway-service', address_type: 'IPv4',
+  endpoint_count: 3,
+  ready_endpoint_count: 2, ready_defaulted_count: 1,
+  serving_endpoint_count: 2, serving_defaulted_count: 1,
+  terminating_endpoint_count: 1, terminating_defaulted_count: 1,
+  port_count: 1,
+  created_at: '2026-07-28T05:00:00Z',
 }
 
 const networkPolicy = {
