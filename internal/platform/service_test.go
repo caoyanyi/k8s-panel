@@ -660,6 +660,14 @@ func TestServiceRejectsKubernetesReadsDuringCriticalResourcePressure(t *testing.
 		{name: "summary", call: func() error { _, err := service.Summary(context.Background(), cluster.ID); return err }},
 		{name: "namespaces", call: func() error { _, err := service.Namespaces(context.Background(), cluster.ID); return err }},
 		{name: "nodes", call: func() error { _, err := service.Nodes(context.Background(), cluster.ID); return err }},
+		{name: "custom resource definitions", call: func() error {
+			_, err := service.CustomResourceDefinitions(context.Background(), cluster.ID)
+			return err
+		}},
+		{name: "custom resource definition detail", call: func() error {
+			_, err := service.CustomResourceDefinition(context.Background(), cluster.ID, "widgets.platform.example.com")
+			return err
+		}},
 		{name: "node detail", call: func() error { _, err := service.NodeDetail(context.Background(), cluster.ID, "worker-01"); return err }},
 		{name: "node events", call: func() error {
 			_, err := service.NodeEvents(context.Background(), cluster.ID, "worker-01", 20)
@@ -1144,6 +1152,51 @@ func TestServiceListsAccessResourcesAndValidatesScopeBeforeGateway(t *testing.T)
 	}
 	if gateway.accessListCalls.Load() != listCalls || gateway.accessDetailCalls.Load() != detailCalls {
 		t.Fatal("invalid access scope reached Kubernetes gateway")
+	}
+}
+
+func TestServiceListsCustomResourceDefinitionsAndValidatesDetailNameBeforeGateway(t *testing.T) {
+	t.Parallel()
+
+	const name = "widgets.platform.example.com"
+	gateway := &fakeKubeGateway{
+		probe: domain.ClusterProbe{Version: "v1.36.2"},
+		crds: []domain.KubernetesCustomResourceDefinition{{
+			Name: name, Resource: "widgets", Group: "platform.example.com",
+		}},
+		crdDetail: domain.KubernetesCustomResourceDefinitionDetail{
+			KubernetesCustomResourceDefinition: domain.KubernetesCustomResourceDefinition{
+				Name: name, Resource: "widgets", Group: "platform.example.com",
+			},
+			Scope: "Namespaced", Kind: "Widget",
+		},
+	}
+	service, _, _ := newTestService(t, serviceFakes{kube: gateway})
+	cluster, err := service.CreateCluster(context.Background(), "admin", "req_cluster", domain.ClusterInput{
+		Name: "cluster", Environment: domain.EnvironmentDevelopment, Server: "https://api.example.com", BearerToken: "token",
+	})
+	if err != nil {
+		t.Fatalf("CreateCluster() error = %v", err)
+	}
+
+	items, err := service.CustomResourceDefinitions(context.Background(), cluster.ID)
+	if err != nil || len(items) != 1 || items[0].Name != name {
+		t.Fatalf("CustomResourceDefinitions() = %#v, %v", items, err)
+	}
+	detail, err := service.CustomResourceDefinition(context.Background(), cluster.ID, name)
+	if err != nil || detail.Name != name || detail.Kind != "Widget" {
+		t.Fatalf("CustomResourceDefinition() = %#v, %v", detail, err)
+	}
+	if gateway.crdName != name || gateway.crdListCalls.Load() != 1 || gateway.crdDetailCalls.Load() != 1 {
+		t.Fatalf("CRD gateway inputs = name %q, list calls %d, detail calls %d",
+			gateway.crdName, gateway.crdListCalls.Load(), gateway.crdDetailCalls.Load())
+	}
+
+	if _, err := service.CustomResourceDefinition(context.Background(), cluster.ID, "../customresourcedefinitions"); err == nil {
+		t.Fatal("CustomResourceDefinition() accepted an invalid name")
+	}
+	if gateway.crdDetailCalls.Load() != 1 {
+		t.Fatal("invalid CRD name reached Kubernetes gateway")
 	}
 }
 
@@ -1994,6 +2047,11 @@ type fakeKubeGateway struct {
 	nodeEvents                       []domain.KubernetesEvent
 	nodeName                         string
 	nodeEventLimit                   int
+	crds                             []domain.KubernetesCustomResourceDefinition
+	crdDetail                        domain.KubernetesCustomResourceDefinitionDetail
+	crdName                          string
+	crdListCalls                     atomic.Int64
+	crdDetailCalls                   atomic.Int64
 	services                         []domain.KubernetesService
 	ingresses                        []domain.KubernetesIngress
 	endpointSlices                   []domain.KubernetesEndpointSlice
@@ -2126,6 +2184,17 @@ func (g *fakeKubeGateway) NodeEvents(_ context.Context, name string, limit int) 
 	g.nodeName = name
 	g.nodeEventLimit = limit
 	return append([]domain.KubernetesEvent(nil), g.nodeEvents...), nil
+}
+func (g *fakeKubeGateway) CustomResourceDefinitions(context.Context) ([]domain.KubernetesCustomResourceDefinition, error) {
+	g.crdListCalls.Add(1)
+	return append([]domain.KubernetesCustomResourceDefinition(nil), g.crds...), nil
+}
+func (g *fakeKubeGateway) CustomResourceDefinition(_ context.Context, name string) (domain.KubernetesCustomResourceDefinitionDetail, error) {
+	g.crdDetailCalls.Add(1)
+	g.mutationMu.Lock()
+	g.crdName = name
+	g.mutationMu.Unlock()
+	return g.crdDetail, nil
 }
 func (g *fakeKubeGateway) Workloads(context.Context, string, string) ([]domain.Workload, error) {
 	return nil, nil

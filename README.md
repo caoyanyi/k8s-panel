@@ -6,7 +6,7 @@ K8s Panel 是一个独立实现的 Kubernetes 与 Helm 管理面板。后端使�
 
 - 单管理员登录、HttpOnly 会话 Cookie、登录失败限流
 - 多集群配置、连接测试、命名空间权限能力检测、启停和删除确认，支持验证后原子轮换访问凭据
-- 集群概览、节点/命名空间资源清单与节点诊断详情
+- 集群概览、节点/命名空间资源清单、节点诊断详情，以及 CRD 元数据与按需状态详情
 - Deployment/StatefulSet/DaemonSet/Job/CronJob/Pod 工作负载查询
 - Service/Ingress/EndpointSlice/NetworkPolicy 网络清单、ConfigMap/Secret 最小配置摘要，以及 PVC/PV/StorageClass 存储摘要
 - 命名空间 ResourceQuota、LimitRange、HPA 和 PodDisruptionBudget 治理清单
@@ -61,7 +61,7 @@ go run ./cmd/panel
 
 面板默认拒绝访问私网地址。若 Kubernetes API 或 Helm 仓库位于私网，应将其精确网段加入 `PANEL_ALLOWED_PRIVATE_CIDRS`，不要无条件放开全部内网。
 
-Kubernetes 单类资源清单最多读取 5,000 项、20 页和 32 MiB 原始数据，Web 表格每页只渲染 100 行；工作负载同时查询多种类型时共享这一总预算并固定串行读取，指定类型时只请求对应 API。资源治理必须限定到单个命名空间，一次只读取 ResourceQuota、LimitRange、HPA 或 PodDisruptionBudget 中的一类；单次最多 4 页、1,000 个对象、4 MiB 原始数据和 4,096 条投影资源、约束或状态条件，ResourceQuota 另限制 1,024 个 Scope。HPA 只返回目标、副本与指标计数，不查询 Metrics API；PodDisruptionBudget 只返回选择器计数和可用性状态，不返回标签值或 disruptedPods。EndpointSlice 和 NetworkPolicy 清单沿用 4 页、1,000 个对象和 4 MiB 上限，并分别把单次端点/端口或 selector/规则/peer/port 处理量限制为 16,384 项；EndpointSlice 响应只返回 Service 归属、地址族和条件计数，不返回端点地址、节点、目标对象或端口详情，NetworkPolicy 响应只包含选择范围和规则计数，不返回标签、CIDR 或端口内容，也不推断有效连通性或 CNI 执行状态。事件中心不自动轮询，默认在 API Server 侧过滤 Warning，单次最多串行读取 8 页、2,000 项和 16 MiB 原始事件并返回最近 200 条，用户可请求的返回上限为 500。配置与存储清单使用 Kubernetes Table 内容协商，只接收最小摘要且不回退读取完整对象；Secret 必须限定到单个命名空间，PV 卷源、CSI 标识、挂载选项和 StorageClass 参数不会进入面板响应。访问控制清单一次只读取一种资源并使用元数据内容协商，命名空间资源不允许全集群读取；清单最多 8 页、2,000 项和 16 MiB，单对象详情最多 2 MiB，规则和主体分别最多展示 128 项，ServiceAccount 详情不返回 Secret 名称。ServiceAccount 权限模拟每次只提交一个 64 KiB 上限的 SubjectAccessReview，不扫描 RBAC 图谱、不轮询、不缓存结果。超过后端上限会停止读取并返回错误，避免大集群拖垮控制面。
+Kubernetes 单类资源清单最多读取 5,000 项、20 页和 32 MiB 原始数据，Web 表格每页只渲染 100 行；工作负载同时查询多种类型时共享这一总预算并固定串行读取，指定类型时只请求对应 API。资源治理必须限定到单个命名空间，一次只读取 ResourceQuota、LimitRange、HPA 或 PodDisruptionBudget 中的一类；单次最多 4 页、1,000 个对象、4 MiB 原始数据和 4,096 条投影资源、约束或状态条件，ResourceQuota 另限制 1,024 个 Scope。HPA 只返回目标、副本与指标计数，不查询 Metrics API；PodDisruptionBudget 只返回选择器计数和可用性状态，不返回标签值或 disruptedPods。EndpointSlice 和 NetworkPolicy 清单沿用 4 页、1,000 个对象和 4 MiB 上限，并分别把单次端点/端口或 selector/规则/peer/port 处理量限制为 16,384 项；EndpointSlice 响应只返回 Service 归属、地址族和条件计数，不返回端点地址、节点、目标对象或端口详情，NetworkPolicy 响应只包含选择范围和规则计数，不返回标签、CIDR 或端口内容，也不推断有效连通性或 CNI 执行状态。CRD 清单仅使用 PartialObjectMetadata，最多读取 8 页、2,000 项和 16 MiB；完整 CRD 只在用户选择单个对象后读取，响应上限为 2 MiB，且不会返回 OpenAPI Schema、转换 Webhook 配置或扫描自定义资源实例。事件中心不自动轮询，默认在 API Server 侧过滤 Warning，单次最多串行读取 8 页、2,000 项和 16 MiB 原始事件并返回最近 200 条，用户可请求的返回上限为 500。配置与存储清单使用 Kubernetes Table 内容协商，只接收最小摘要且不回退读取完整对象；Secret 必须限定到单个命名空间，PV 卷源、CSI 标识、挂载选项和 StorageClass 参数不会进入面板响应。访问控制清单一次只读取一种资源并使用元数据内容协商，命名空间资源不允许全集群读取；清单最多 8 页、2,000 项和 16 MiB，单对象详情最多 2 MiB，规则和主体分别最多展示 128 项，ServiceAccount 详情不返回 Secret 名称。ServiceAccount 权限模拟每次只提交一个 64 KiB 上限的 SubjectAccessReview，不扫描 RBAC 图谱、不轮询、不缓存结果。超过后端上限会停止读取并返回错误，避免大集群拖垮控制面。
 
 自适应资源控制默认在内存或归一化系统负载达到 80% 时，将后台操作、Kubernetes 读取并发和客户端缓存容量分别减半；达到 95% 时暂停启动新任务、快速拒绝新的集群读取、显式连接测试、权限能力检测和凭据轮换，并将客户端缓存收缩到 1。权限能力检测固定顺序执行 10 次轻量授权检查，单批次只占用一个读取槽，不轮询、不缓存结果；重复检测同一集群和命名空间时快速拒绝。凭据轮换先使用独立客户端验证候选凭据，成功后再原子替换，失败时保留原凭据和缓存连接。客户端按集群与凭据版本复用，闲置超时、LRU 淘汰、禁用/删除集群或服务关闭时释放空闲连接，不缓存 Kubernetes 对象和日志。指标暂不可用时按配置上限运行。低配置主机建议设置 `PANEL_HELM_WORKERS=1`、`PANEL_KUBERNETES_READ_CONCURRENCY=2`、`PANEL_KUBERNETES_CLIENT_CACHE_SIZE=4`、较小的 `PANEL_OPERATION_QUEUE_SIZE`，并按实际流量下调 `PANEL_MAX_CONCURRENT_REQUESTS`。
 

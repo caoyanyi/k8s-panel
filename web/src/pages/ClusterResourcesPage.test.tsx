@@ -104,6 +104,59 @@ describe('ClusterResourcesPage', () => {
     expect(screen.getByText('没有匹配的命名空间')).toBeInTheDocument()
   })
 
+  it('loads CRD metadata only on demand and fetches one bounded detail', async () => {
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const path = String(input)
+      if (path.endsWith('/custom-resource-definitions/widgets.platform.example.com')) {
+        return Promise.resolve(dataResponse({
+          ...crd,
+          scope: 'Namespaced', singular: 'widget', kind: 'Widget', list_kind: 'WidgetList',
+          short_names: ['wdg'], categories: ['all'], generation: 7, observed_generation: 7,
+          conversion_strategy: 'Webhook', conversion_strategy_defaulted: false,
+          versions: [
+            { name: 'v1', served: true, storage: true, deprecated: false },
+            { name: 'v1beta1', served: false, storage: false, deprecated: true },
+          ],
+          version_count: 2, versions_truncated: false,
+          stored_versions: ['v1'], stored_version_count: 1, stored_versions_truncated: false,
+          conditions: [{
+            type: 'Established', status: 'True', reason: 'InitialNamesAccepted', observed_generation: 7,
+            last_transition_time: '2026-07-26T08:01:00Z',
+          }],
+          condition_count: 1, conditions_truncated: false,
+        }))
+      }
+      if (path.endsWith('/custom-resource-definitions')) return Promise.resolve(dataResponse([crd]))
+      if (path.endsWith('/nodes')) return Promise.resolve(dataResponse([node]))
+      return Promise.resolve(errorResponse(404, 'not_found'))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const user = userEvent.setup()
+
+    renderPage(context)
+    await screen.findByText(node.name)
+    expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/custom-resource-definitions'))).toBe(false)
+    await user.click(screen.getByRole('button', { name: 'CRD' }))
+
+    expect(await screen.findByText('widgets')).toBeInTheDocument()
+    expect(screen.getByText('platform.example.com')).toBeInTheDocument()
+    expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/namespaces'))).toBe(false)
+    expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/widgets.platform.example.com'))).toBe(false)
+    await user.click(screen.getByRole('button', { name: `查看 ${crd.name}` }))
+
+    const dialog = await screen.findByRole('dialog', { name: `CRD · ${crd.name}` })
+    expect(within(dialog).getByText('Namespaced')).toBeInTheDocument()
+    expect(within(dialog).getByText('Widget')).toBeInTheDocument()
+    expect(within(dialog).getByText('v1beta1')).toBeInTheDocument()
+    expect(within(dialog).getByText('已弃用')).toBeInTheDocument()
+    expect(within(dialog).getByText('Established')).toBeInTheDocument()
+    expect(within(dialog).queryByText('schema-secret')).not.toBeInTheDocument()
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/clusters/clu_1/custom-resource-definitions/widgets.platform.example.com',
+      expect.objectContaining({ credentials: 'same-origin' }),
+    )
+  })
+
   it('shows an empty state without a selected cluster', () => {
     vi.stubGlobal('fetch', vi.fn())
     renderPage({ ...context, clusters: [], selectedClusterId: '' })
@@ -146,6 +199,11 @@ const node = {
 const namespace = {
   name: 'payments', status: 'Active', labels: { team: 'payments' }, finalizers: ['kubernetes'],
   created_at: '2026-07-20T08:00:00Z',
+}
+
+const crd = {
+  name: 'widgets.platform.example.com', resource: 'widgets', group: 'platform.example.com',
+  created_at: '2026-07-26T08:00:00Z',
 }
 
 function renderPage(value: PanelContextValue) {

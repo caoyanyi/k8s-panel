@@ -575,6 +575,38 @@ func TestValidateNodeName(t *testing.T) {
 	}
 }
 
+func TestValidateCustomResourceDefinitionName(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		value     string
+		wantField string
+	}{
+		{name: "valid", value: "widgets.platform.example.com"},
+		{name: "missing group", value: "widgets", wantField: "name"},
+		{name: "missing resource", value: ".platform.example.com", wantField: "name"},
+		{name: "uppercase", value: "Widgets.platform.example.com", wantField: "name"},
+		{name: "path traversal", value: "../customresourcedefinitions", wantField: "name"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := ValidateCustomResourceDefinitionName(tt.value)
+			if tt.wantField == "" {
+				if err != nil {
+					t.Fatalf("ValidateCustomResourceDefinitionName() error = %v", err)
+				}
+				return
+			}
+			var validationErr *ValidationError
+			if !errors.As(err, &validationErr) || validationErr.Field != tt.wantField {
+				t.Fatalf("ValidateCustomResourceDefinitionName() error = %v, want field %q", err, tt.wantField)
+			}
+		})
+	}
+}
+
 func TestValidateWorkloadOperationInput(t *testing.T) {
 	t.Parallel()
 

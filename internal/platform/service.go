@@ -469,6 +469,41 @@ func (s *Service) NodeEvents(ctx context.Context, clusterID, name string, limit 
 	return gateway.NodeEvents(ctx, name, limit)
 }
 
+func (s *Service) CustomResourceDefinitions(
+	ctx context.Context,
+	clusterID string,
+) ([]domain.KubernetesCustomResourceDefinition, error) {
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	gateway, err := s.kubeGateway(ctx, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	return gateway.CustomResourceDefinitions(ctx)
+}
+
+func (s *Service) CustomResourceDefinition(
+	ctx context.Context,
+	clusterID, name string,
+) (domain.KubernetesCustomResourceDefinitionDetail, error) {
+	if err := domain.ValidateCustomResourceDefinitionName(name); err != nil {
+		return domain.KubernetesCustomResourceDefinitionDetail{}, err
+	}
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return domain.KubernetesCustomResourceDefinitionDetail{}, err
+	}
+	defer release()
+	gateway, err := s.kubeGateway(ctx, clusterID)
+	if err != nil {
+		return domain.KubernetesCustomResourceDefinitionDetail{}, err
+	}
+	return gateway.CustomResourceDefinition(ctx, name)
+}
+
 func (s *Service) Events(
 	ctx context.Context,
 	clusterID, namespace, eventType string,

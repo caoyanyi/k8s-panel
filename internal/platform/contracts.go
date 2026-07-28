@@ -50,6 +50,8 @@ type KubeGateway interface {
 	Nodes(context.Context) ([]domain.Node, error)
 	NodeDetail(context.Context, string) (domain.NodeDetail, error)
 	NodeEvents(context.Context, string, int) ([]domain.KubernetesEvent, error)
+	CustomResourceDefinitions(context.Context) ([]domain.KubernetesCustomResourceDefinition, error)
+	CustomResourceDefinition(context.Context, string) (domain.KubernetesCustomResourceDefinitionDetail, error)
 	Events(context.Context, string, string, int) ([]domain.KubernetesEvent, error)
 	Workloads(context.Context, string, string) ([]domain.Workload, error)
 	Services(context.Context, string) ([]domain.KubernetesService, error)

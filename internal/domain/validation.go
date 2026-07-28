@@ -326,6 +326,14 @@ func ValidateNodeName(name string) error {
 	return nil
 }
 
+func ValidateCustomResourceDefinitionName(name string) error {
+	resource, group, found := strings.Cut(name, ".")
+	if !found || !validDNSSubdomain(name) || !validDNSLabel(resource) || !validDNSSubdomain(group) {
+		return Invalid("name", "must be a valid Kubernetes CustomResourceDefinition name")
+	}
+	return nil
+}
+
 func validateHTTPSURL(raw string, allowPath bool) (*url.URL, error) {
 	parsed, err := url.ParseRequestURI(strings.TrimSpace(raw))
 	if err != nil {

@@ -310,17 +310,19 @@ test('production deployment image update requires a fresh dry-run preview', asyn
   expect(consoleErrors).toEqual([])
 })
 
-test('cluster resources show node diagnostics and namespaces', async ({ page }, testInfo) => {
+test('cluster resources show node diagnostics, namespaces and bounded CRDs', async ({ page }, testInfo) => {
   const consoleErrors: string[] = []
+  const requestedResources: string[] = []
   page.on('console', (message) => {
     if (message.type() === 'error') consoleErrors.push(message.text())
   })
   page.on('pageerror', (error) => consoleErrors.push(error.message))
-  await mockClusterResources(page)
+  await mockClusterResources(page, requestedResources)
 
   await page.goto('/#resources')
   await expect(page.getByRole('heading', { name: '集群资源' })).toBeVisible()
   await expect(page.getByText('control-01.example.internal', { exact: true }).first()).toBeVisible()
+  expect(requestedResources).toEqual(['nodes'])
   await page.getByRole('button', { name: '查看 control-01.example.internal' }).click()
 
   const dialog = page.getByRole('dialog', { name: '节点 · control-01.example.internal' })
@@ -343,6 +345,23 @@ test('cluster resources show node diagnostics and namespaces', async ({ page }, 
   expect(overflow).toBeLessThanOrEqual(1)
   result = await new AxeBuilder({ page }).analyze()
   expect(result.violations.filter((violation) => ['serious', 'critical'].includes(violation.impact ?? ''))).toEqual([])
+
+  await page.getByRole('button', { name: 'CRD' }).click()
+  await expect(page.getByText('widgets', { exact: true })).toBeVisible()
+  expect(requestedResources).toContain('crds')
+  expect(requestedResources).not.toContain('crd-detail')
+  await page.getByRole('button', { name: '查看 widgets.platform.example.com' }).click()
+  const crdDialog = page.getByRole('dialog', { name: 'CRD · widgets.platform.example.com' })
+  await expect(crdDialog.getByText('Widget', { exact: true })).toBeVisible()
+  await expect(crdDialog.getByText('v1beta1')).toBeVisible()
+  await expect(crdDialog.getByText('已弃用')).toBeVisible()
+  await expect(crdDialog.getByText('Established')).toBeVisible()
+  expect(requestedResources).toContain('crd-detail')
+  overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
+  expect(overflow).toBeLessThanOrEqual(1)
+  result = await new AxeBuilder({ page }).analyze()
+  expect(result.violations.filter((violation) => ['serious', 'critical'].includes(violation.impact ?? ''))).toEqual([])
+  await page.screenshot({ path: `test-results/${testInfo.project.name}-crd-detail.png` })
   expect(consoleErrors).toEqual([])
 })
 
@@ -1107,7 +1126,7 @@ async function mockWorkloadDiagnostics(page: Page) {
   })
 }
 
-async function mockClusterResources(page: Page) {
+async function mockClusterResources(page: Page, requestedResources: string[]) {
   await page.route('**/api/v1/**', async (route) => {
     const url = new URL(route.request().url())
     const path = url.pathname
@@ -1122,6 +1141,7 @@ async function mockClusterResources(page: Page) {
         created_at: '2026-07-20T08:00:00Z', updated_at: '2026-07-25T08:00:00Z',
       }]
     } else if (path === '/api/v1/clusters/clu_1/nodes') {
+      requestedResources.push('nodes')
       data = [{
         name: 'control-01.example.internal', status: 'Ready', roles: ['control-plane'], version: 'v1.36.2',
         internal_ip: '10.0.0.11', os_image: 'Ubuntu 24.04.2 LTS', architecture: 'amd64',
@@ -1155,10 +1175,38 @@ async function mockClusterResources(page: Page) {
         },
       }
     } else if (path === '/api/v1/clusters/clu_1/namespaces') {
+      requestedResources.push('namespaces')
       data = [{
         name: 'payments', status: 'Active', labels: { team: 'payments' }, finalizers: ['kubernetes'],
         created_at: '2026-07-20T08:00:00Z',
       }]
+    } else if (path === '/api/v1/clusters/clu_1/custom-resource-definitions') {
+      requestedResources.push('crds')
+      data = [{
+        name: 'widgets.platform.example.com', resource: 'widgets', group: 'platform.example.com',
+        created_at: '2026-07-26T08:00:00Z',
+      }]
+    } else if (path === '/api/v1/clusters/clu_1/custom-resource-definitions/widgets.platform.example.com') {
+      requestedResources.push('crd-detail')
+      data = {
+        name: 'widgets.platform.example.com', resource: 'widgets', group: 'platform.example.com',
+        created_at: '2026-07-26T08:00:00Z', scope: 'Namespaced', singular: 'widget', kind: 'Widget',
+        list_kind: 'WidgetList', short_names: ['wdg'], short_name_count: 1, short_names_truncated: false,
+        categories: ['all'], category_count: 1, categories_truncated: false,
+        versions: [
+          { name: 'v1', served: true, storage: true, deprecated: false },
+          { name: 'v1beta1', served: false, storage: false, deprecated: true },
+        ],
+        version_count: 2, versions_truncated: false,
+        stored_versions: ['v1'], stored_version_count: 1, stored_versions_truncated: false,
+        conversion_strategy: 'None', conversion_strategy_defaulted: true,
+        generation: 7, observed_generation: 7,
+        conditions: [{
+          type: 'Established', status: 'True', reason: 'InitialNamesAccepted', observed_generation: 7,
+          last_transition_time: '2026-07-26T08:01:00Z',
+        }],
+        condition_count: 1, conditions_truncated: false,
+      }
     } else {
       await route.fulfill({
         status: 404,

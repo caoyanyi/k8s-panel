@@ -51,6 +51,11 @@ func TestServerAuthenticationAndClusterLifecycle(t *testing.T) {
 	if unauthorizedNetworkPolicy.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthorized network policy status = %d, want 401", unauthorizedNetworkPolicy.Code)
 	}
+	unauthorizedCRDs := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorizedCRDs, httptest.NewRequest(http.MethodGet, "/api/v1/clusters/clu_1/custom-resource-definitions", nil))
+	if unauthorizedCRDs.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized CRD status = %d, want 401", unauthorizedCRDs.Code)
+	}
 	unauthorizedConfiguration := httptest.NewRecorder()
 	handler.ServeHTTP(unauthorizedConfiguration, httptest.NewRequest(http.MethodGet, "/api/v1/clusters/clu_1/configmaps", nil))
 	if unauthorizedConfiguration.Code != http.StatusUnauthorized {
@@ -156,6 +161,25 @@ func TestServerAuthenticationAndClusterLifecycle(t *testing.T) {
 		strings.Contains(endpointSlices.Body.String(), "10.42.0.10") {
 		t.Fatalf("endpoint slices status = %d, body = %s", endpointSlices.Code, endpointSlices.Body.String())
 	}
+	crdPath := "/api/v1/clusters/" + created.Data.ID + "/custom-resource-definitions"
+	crds := authenticatedRequest(t, handler, cookie, http.MethodGet, crdPath, "")
+	if crds.Code != http.StatusOK || !strings.Contains(crds.Body.String(), `"name":"widgets.platform.example.com"`) ||
+		!strings.Contains(crds.Body.String(), `"resource":"widgets"`) ||
+		!strings.Contains(crds.Body.String(), `"group":"platform.example.com"`) {
+		t.Fatalf("CRDs status = %d, body = %s", crds.Code, crds.Body.String())
+	}
+	crdDetail := authenticatedRequest(t, handler, cookie, http.MethodGet, crdPath+"/widgets.platform.example.com", "")
+	if crdDetail.Code != http.StatusOK || !strings.Contains(crdDetail.Body.String(), `"scope":"Namespaced"`) ||
+		!strings.Contains(crdDetail.Body.String(), `"conversion_strategy":"None"`) ||
+		!strings.Contains(crdDetail.Body.String(), `"version_count":1`) ||
+		strings.Contains(crdDetail.Body.String(), "private-schema-field") {
+		t.Fatalf("CRD detail status = %d, body = %s", crdDetail.Code, crdDetail.Body.String())
+	}
+	invalidCRDName := authenticatedRequest(t, handler, cookie, http.MethodGet, crdPath+"/..%2Fcustomresourcedefinitions", "")
+	if invalidCRDName.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid CRD name status = %d, body = %s", invalidCRDName.Code, invalidCRDName.Body.String())
+	}
+	assertErrorField(t, invalidCRDName.Body.Bytes(), "name")
 	networkPoliciesPath := "/api/v1/clusters/" + created.Data.ID + "/network-policies"
 	networkPolicies := authenticatedRequest(t, handler, cookie, http.MethodGet, networkPoliciesPath+"?namespace=payments", "")
 	if networkPolicies.Code != http.StatusOK || !strings.Contains(networkPolicies.Body.String(), `"name":"gateway-policy"`) ||
@@ -913,6 +937,23 @@ func (testKube) NodeDetail(_ context.Context, name string) (domain.NodeDetail, e
 }
 func (testKube) NodeEvents(context.Context, string, int) ([]domain.KubernetesEvent, error) {
 	return []domain.KubernetesEvent{{Type: "Warning", Reason: "NodeNotReady"}}, nil
+}
+func (testKube) CustomResourceDefinitions(context.Context) ([]domain.KubernetesCustomResourceDefinition, error) {
+	return []domain.KubernetesCustomResourceDefinition{{
+		Name: "widgets.platform.example.com", Resource: "widgets", Group: "platform.example.com",
+	}}, nil
+}
+func (testKube) CustomResourceDefinition(_ context.Context, name string) (domain.KubernetesCustomResourceDefinitionDetail, error) {
+	return domain.KubernetesCustomResourceDefinitionDetail{
+		KubernetesCustomResourceDefinition: domain.KubernetesCustomResourceDefinition{
+			Name: name, Resource: "widgets", Group: "platform.example.com",
+		},
+		Scope: "Namespaced", Singular: "widget", Kind: "Widget", ListKind: "WidgetList",
+		ShortNames: []string{}, Categories: []string{},
+		Versions:     []domain.KubernetesCustomResourceDefinitionVersion{{Name: "v1", Served: true, Storage: true}},
+		VersionCount: 1, StoredVersions: []string{"v1"}, StoredVersionCount: 1,
+		ConversionStrategy: "None", Conditions: []domain.KubernetesCustomResourceDefinitionCondition{},
+	}, nil
 }
 func (testKube) Events(_ context.Context, namespace, eventType string, _ int) ([]domain.KubernetesEvent, error) {
 	return []domain.KubernetesEvent{{

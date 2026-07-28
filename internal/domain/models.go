@@ -502,6 +502,55 @@ type KubernetesPodDisruptionBudget struct {
 	CreatedAt                           time.Time                   `json:"created_at"`
 }
 
+type KubernetesCustomResourceDefinition struct {
+	Name      string    `json:"name"`
+	Resource  string    `json:"resource"`
+	Group     string    `json:"group"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type KubernetesCustomResourceDefinitionVersion struct {
+	Name       string `json:"name"`
+	Served     bool   `json:"served"`
+	Storage    bool   `json:"storage"`
+	Deprecated bool   `json:"deprecated"`
+}
+
+type KubernetesCustomResourceDefinitionCondition struct {
+	Type               string    `json:"type"`
+	Status             string    `json:"status"`
+	Reason             string    `json:"reason,omitempty"`
+	ObservedGeneration int64     `json:"observed_generation"`
+	LastTransitionTime time.Time `json:"last_transition_time"`
+}
+
+type KubernetesCustomResourceDefinitionDetail struct {
+	KubernetesCustomResourceDefinition
+	Scope                       string                                        `json:"scope"`
+	Singular                    string                                        `json:"singular"`
+	Kind                        string                                        `json:"kind"`
+	ListKind                    string                                        `json:"list_kind"`
+	ShortNames                  []string                                      `json:"short_names"`
+	ShortNameCount              int                                           `json:"short_name_count"`
+	ShortNamesTruncated         bool                                          `json:"short_names_truncated"`
+	Categories                  []string                                      `json:"categories"`
+	CategoryCount               int                                           `json:"category_count"`
+	CategoriesTruncated         bool                                          `json:"categories_truncated"`
+	Versions                    []KubernetesCustomResourceDefinitionVersion   `json:"versions"`
+	VersionCount                int                                           `json:"version_count"`
+	VersionsTruncated           bool                                          `json:"versions_truncated"`
+	StoredVersions              []string                                      `json:"stored_versions"`
+	StoredVersionCount          int                                           `json:"stored_version_count"`
+	StoredVersionsTruncated     bool                                          `json:"stored_versions_truncated"`
+	ConversionStrategy          string                                        `json:"conversion_strategy"`
+	ConversionStrategyDefaulted bool                                          `json:"conversion_strategy_defaulted"`
+	Generation                  int64                                         `json:"generation"`
+	ObservedGeneration          int64                                         `json:"observed_generation"`
+	Conditions                  []KubernetesCustomResourceDefinitionCondition `json:"conditions"`
+	ConditionCount              int                                           `json:"condition_count"`
+	ConditionsTruncated         bool                                          `json:"conditions_truncated"`
+}
+
 type KubernetesAccessResourceKind string
 
 const (

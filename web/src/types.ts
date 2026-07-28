@@ -116,6 +116,54 @@ export interface NodeDetail extends ClusterNode {
   system_info: NodeSystemInfo
 }
 
+export interface KubernetesCustomResourceDefinition {
+  name: string
+  resource: string
+  group: string
+  created_at: string
+}
+
+export interface KubernetesCustomResourceDefinitionVersion {
+  name: string
+  served: boolean
+  storage: boolean
+  deprecated: boolean
+}
+
+export interface KubernetesCustomResourceDefinitionCondition {
+  type: string
+  status: string
+  reason?: string
+  observed_generation: number
+  last_transition_time: string
+}
+
+export interface KubernetesCustomResourceDefinitionDetail extends KubernetesCustomResourceDefinition {
+  scope: 'Cluster' | 'Namespaced'
+  singular: string
+  kind: string
+  list_kind: string
+  short_names: string[]
+  short_name_count: number
+  short_names_truncated: boolean
+  categories: string[]
+  category_count: number
+  categories_truncated: boolean
+  versions: KubernetesCustomResourceDefinitionVersion[]
+  version_count: number
+  versions_truncated: boolean
+  stored_versions: string[]
+  stored_version_count: number
+  stored_versions_truncated: boolean
+  conversion_strategy: 'None' | 'Webhook'
+  conversion_strategy_defaulted: boolean
+  generation: number
+  observed_generation: number
+  conditions: KubernetesCustomResourceDefinitionCondition[]
+  condition_count: number
+  conditions_truncated: boolean
+}
+
 export interface Workload {
   kind: string
   namespace: string

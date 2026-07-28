@@ -238,6 +238,7 @@ td strong { color: var(--text); font-size: 12px; }
 .namespace-labels { min-width: 240px; }
 .scheduling-disabled { color: var(--danger); font-size: 11px; font-weight: 650; white-space: nowrap; }
 .node-table { min-width: 1120px; }
+.crd-table { min-width: 920px; }
 .network-table { min-width: 1180px; }
 .endpoint-slice-table { min-width: 1480px; }
 .network-policy-table { min-width: 1320px; }
@@ -404,6 +405,8 @@ select:disabled { cursor: not-allowed; background: #f3f5f4; color: #89938d; }
 .access-detail-heading > span { color: var(--muted); font-size: 11px; }
 .access-rule-table { min-width: 900px; }
 .access-subject-table { min-width: 680px; }
+.crd-version-table { min-width: 760px; }
+.crd-condition-table { min-width: 820px; }
 .access-list-cell { max-width: 320px; line-height: 1.45; overflow-wrap: anywhere; }
 .access-truncated { padding: 8px 10px; border-left: 3px solid var(--warning); background: #fff8ea; color: #80540f; font-size: 11px; }
 .service-account-access-review { padding-top: 2px; border-top: 1px solid var(--line); }

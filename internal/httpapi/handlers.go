@@ -239,6 +239,24 @@ func (s *Server) listNodeEvents(w http.ResponseWriter, r *http.Request) {
 	writeData(w, http.StatusOK, items)
 }
 
+func (s *Server) listCustomResourceDefinitions(w http.ResponseWriter, r *http.Request) {
+	items, err := s.service.CustomResourceDefinitions(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeData(w, http.StatusOK, items)
+}
+
+func (s *Server) getCustomResourceDefinition(w http.ResponseWriter, r *http.Request) {
+	item, err := s.service.CustomResourceDefinition(r.Context(), r.PathValue("id"), r.PathValue("name"))
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeData(w, http.StatusOK, item)
+}
+
 func (s *Server) listEvents(w http.ResponseWriter, r *http.Request) {
 	limit, err := parseBoundedInt(r.URL.Query().Get("limit"), 200, 1, domain.MaxClusterEventLimit, "limit")
 	if err != nil {
