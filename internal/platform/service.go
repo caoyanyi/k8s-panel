@@ -490,6 +490,9 @@ func (s *Service) Events(
 }
 
 func (s *Service) Workloads(ctx context.Context, clusterID, namespace, kind string) ([]domain.Workload, error) {
+	if err := domain.ValidateWorkloadList(namespace, kind); err != nil {
+		return nil, err
+	}
 	release, err := s.acquireKubernetesRead(ctx)
 	if err != nil {
 		return nil, err

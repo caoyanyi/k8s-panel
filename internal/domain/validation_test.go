@@ -450,6 +450,8 @@ func TestValidateWorkloadReference(t *testing.T) {
 	}{
 		{name: "deployment", input: WorkloadReference{Kind: "deployment", Namespace: "payments", Name: "gateway-api"}},
 		{name: "pod", input: WorkloadReference{Kind: "pod", Namespace: "payments", Name: "gateway-api-6f778d8b4f-k7c2w"}},
+		{name: "job", input: WorkloadReference{Kind: "job", Namespace: "payments", Name: "daily-settlement"}},
+		{name: "cronjob", input: WorkloadReference{Kind: "cronjob", Namespace: "payments", Name: "nightly-report"}},
 		{name: "unknown kind", input: WorkloadReference{Kind: "secret", Namespace: "payments", Name: "credentials"}, wantField: "kind"},
 		{name: "invalid namespace", input: WorkloadReference{Kind: "pod", Namespace: "../system", Name: "gateway"}, wantField: "namespace"},
 		{name: "uppercase name", input: WorkloadReference{Kind: "pod", Namespace: "payments", Name: "Gateway"}, wantField: "name"},
@@ -463,6 +465,40 @@ func TestValidateWorkloadReference(t *testing.T) {
 			if tt.wantField == "" {
 				if err != nil {
 					t.Fatalf("ValidateWorkloadReference() error = %v", err)
+				}
+				return
+			}
+			var validationErr *ValidationError
+			if !errors.As(err, &validationErr) || validationErr.Field != tt.wantField {
+				t.Fatalf("expected validation field %q, got %v", tt.wantField, err)
+			}
+		})
+	}
+}
+
+func TestValidateWorkloadList(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		namespace string
+		kind      string
+		wantField string
+	}{
+		{name: "all kinds and namespaces"},
+		{name: "Job", namespace: "payments", kind: "job"},
+		{name: "CronJob", namespace: "payments", kind: "cronjob"},
+		{name: "invalid namespace", namespace: "../system", kind: "job", wantField: "namespace"},
+		{name: "invalid kind", namespace: "payments", kind: "secret", wantField: "kind"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := ValidateWorkloadList(tt.namespace, tt.kind)
+			if tt.wantField == "" {
+				if err != nil {
+					t.Fatalf("ValidateWorkloadList() error = %v", err)
 				}
 				return
 			}

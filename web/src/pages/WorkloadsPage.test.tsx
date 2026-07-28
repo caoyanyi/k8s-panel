@@ -89,6 +89,42 @@ describe('WorkloadsPage', () => {
     expect(screen.getByRole('button', { name: '扩缩容' })).toBeInTheDocument()
     expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/events'))).toBe(false)
   })
+
+  it('filters batch workloads and labels Job and CronJob progress accurately', async () => {
+    const batchWorkloads = [{
+      kind: 'Job', namespace: 'payments', name: 'daily-settlement', ready: 2, desired: 4,
+      status: 'Running', images: ['settlement:1.8.0'], created_at: '2026-07-28T01:00:00Z',
+    }, {
+      kind: 'CronJob', namespace: 'payments', name: 'nightly-report', ready: 0, desired: 0,
+      status: 'Scheduled', images: ['report:2.3.0'], created_at: '2026-07-27T01:00:00Z',
+    }]
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const path = String(input)
+      if (path.endsWith('/namespaces')) return Promise.resolve(dataResponse([{
+        name: 'payments', status: 'Active', labels: {}, finalizers: [], created_at: '2026-07-20T08:00:00Z',
+      }]))
+      if (path.includes('/workloads?')) {
+        const selectedKind = new URL(path, 'http://panel.local').searchParams.get('kind')
+        const result = selectedKind ? batchWorkloads.filter((item) => item.kind.toLowerCase() === selectedKind) : batchWorkloads
+        return Promise.resolve(dataResponse(result))
+      }
+      return Promise.resolve(new Response('', { status: 404 }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const user = userEvent.setup()
+
+    render(<PanelContext.Provider value={context}>
+      <WorkloadsPage notify={vi.fn()} openOperations={vi.fn()} />
+    </PanelContext.Provider>)
+
+    expect(await screen.findByText('daily-settlement')).toBeInTheDocument()
+    expect(screen.getByText('2/4 完成')).toBeInTheDocument()
+    expect(screen.getByText('等待调度')).toBeInTheDocument()
+    await user.selectOptions(screen.getByLabelText('类型'), 'cronjob')
+    expect(await screen.findByText('nightly-report')).toBeInTheDocument()
+    expect(screen.queryByText('daily-settlement')).not.toBeInTheDocument()
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('kind=cronjob'))).toBe(true)
+  })
 })
 
 function dataResponse(data: unknown): Response {

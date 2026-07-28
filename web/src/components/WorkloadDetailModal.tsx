@@ -632,12 +632,15 @@ function ImageUpdateForm({
 
 function Overview({ detail }: { detail: WorkloadDetail }) {
   const labels = Object.entries(detail.labels)
+  const kind = detail.kind.toLowerCase()
+  const progressLabel = kind === 'job' ? '完成进度' : kind === 'cronjob' ? '活动任务' : '就绪'
+  const progress = kind === 'cronjob' ? `${detail.ready} 个活动任务` : `${detail.ready}/${detail.desired}`
   return (
     <div className="detail-overview">
       <dl className="detail-grid">
         <div><dt>状态</dt><dd><StatusBadge status={detail.status} /></dd></div>
         <div><dt>命名空间</dt><dd className="mono">{detail.namespace}</dd></div>
-        <div><dt>就绪</dt><dd>{detail.ready}/{detail.desired}</dd></div>
+        <div><dt>{progressLabel}</dt><dd>{progress}</dd></div>
         <div><dt>创建时间</dt><dd>{formatDateTime(detail.created_at)}</dd></div>
         <div><dt>UID</dt><dd className="mono">{detail.uid}</dd></div>
         <div><dt>Resource Version</dt><dd className="mono">{detail.resource_version}</dd></div>

@@ -97,8 +97,8 @@ func ValidateHelmOperationInput(input HelmOperationInput) error {
 
 func ValidateWorkloadReference(reference WorkloadReference) error {
 	kind := strings.ToLower(strings.TrimSpace(reference.Kind))
-	if kind != "deployment" && kind != "statefulset" && kind != "daemonset" && kind != "pod" {
-		return Invalid("kind", "must be deployment, statefulset, daemonset or pod")
+	if !validWorkloadKind(kind) {
+		return Invalid("kind", "must be deployment, statefulset, daemonset, job, cronjob or pod")
 	}
 	if !validDNSLabel(reference.Namespace) {
 		return Invalid("namespace", "must be a valid Kubernetes namespace")
@@ -107,6 +107,28 @@ func ValidateWorkloadReference(reference WorkloadReference) error {
 		return Invalid("name", "must be a valid Kubernetes resource name")
 	}
 	return nil
+}
+
+func ValidateWorkloadList(namespace, kind string) error {
+	if namespace != "" {
+		if err := ValidateNamespace(namespace); err != nil {
+			return err
+		}
+	}
+	kind = strings.ToLower(strings.TrimSpace(kind))
+	if kind != "" && !validWorkloadKind(kind) {
+		return Invalid("kind", "must be deployment, statefulset, daemonset, job, cronjob or pod")
+	}
+	return nil
+}
+
+func validWorkloadKind(kind string) bool {
+	switch kind {
+	case "deployment", "statefulset", "daemonset", "job", "cronjob", "pod":
+		return true
+	default:
+		return false
+	}
 }
 
 func ValidateNamespace(namespace string) error {

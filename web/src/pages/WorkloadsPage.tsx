@@ -69,19 +69,19 @@ export function WorkloadsPage({ notify, openOperations }: WorkloadsPageProps) {
         <>
           <section className="toolbar" aria-label="工作负载筛选">
             <div className="toolbar-field"><label htmlFor="workload-namespace">命名空间</label><select id="workload-namespace" value={selectedNamespace} onChange={(event) => setSelectedNamespace(event.target.value)} disabled={namespaces.loading}><option value="">全部命名空间</option>{namespaces.data?.map((item) => <option key={item.name} value={item.name}>{item.name}</option>)}</select></div>
-            <div className="toolbar-field"><label htmlFor="workload-kind">类型</label><select id="workload-kind" value={kind} onChange={(event) => setKind(event.target.value)}><option value="">全部类型</option><option value="deployment">Deployment</option><option value="statefulset">StatefulSet</option><option value="daemonset">DaemonSet</option><option value="pod">Pod</option></select></div>
+            <div className="toolbar-field"><label htmlFor="workload-kind">类型</label><select id="workload-kind" value={kind} onChange={(event) => setKind(event.target.value)}><option value="">全部类型</option><option value="deployment">Deployment</option><option value="statefulset">StatefulSet</option><option value="daemonset">DaemonSet</option><option value="job">Job</option><option value="cronjob">CronJob</option><option value="pod">Pod</option></select></div>
             <div className="search-field"><Search size={16} aria-hidden="true" /><label className="sr-only" htmlFor="workload-search">搜索工作负载</label><input id="workload-search" type="search" placeholder="搜索名称或镜像" value={search} onChange={(event) => setSearch(event.target.value)} /></div>
           </section>
           <section className="section-block table-section">
             {namespaces.error ? <ErrorState error={namespaces.error} onRetry={() => void namespaces.refresh()} /> : workloads.loading ? <LoadingState label="正在读取工作负载" /> : workloads.error ? <ErrorState error={workloads.error} onRetry={() => void workloads.refresh()} /> : visible.length === 0 ? <EmptyState title="当前范围没有工作负载" /> : (
               <><div className="table-wrap"><table>
-                <thead><tr><th>名称</th><th>类型</th><th>命名空间</th><th>状态</th><th>就绪</th><th>镜像</th><th>创建时间</th><th className="actions-column">操作</th></tr></thead>
+                <thead><tr><th>名称</th><th>类型</th><th>命名空间</th><th>状态</th><th>进度</th><th>镜像</th><th>创建时间</th><th className="actions-column">操作</th></tr></thead>
                 <tbody>{pageWorkloads.map((item) => <tr key={`${item.kind}:${item.namespace}:${item.name}`}>
                   <td><strong>{item.name}</strong></td>
                   <td><span className="kind-label">{item.kind}</span></td>
                   <td className="mono">{item.namespace}</td>
                   <td><StatusBadge status={item.status} /></td>
-                  <td><span className={item.ready === item.desired ? 'replica-ready' : 'replica-warning'}>{item.ready}/{item.desired}</span></td>
+                  <td><span className={workloadProgressTone(item)}>{workloadProgress(item)}</span></td>
                   <td><div className="image-list">{item.images.length ? item.images.map((image) => <span key={image} className="mono" title={image}>{truncate(image, 54)}</span>) : '-'}</div></td>
                   <td>{formatDateTime(item.created_at)}</td>
                   <td className="actions-column"><button type="button" className="icon-button" aria-label={`查看 ${item.name}`} title="查看详情" onClick={() => setSelectedWorkload(item)}><Eye size={16} /></button></td>
@@ -103,4 +103,18 @@ export function WorkloadsPage({ notify, openOperations }: WorkloadsPageProps) {
       />}
     </div>
   )
+}
+
+function workloadProgress(item: Workload): string {
+  const kind = item.kind.toLowerCase()
+  if (kind === 'job') return `${item.ready}/${item.desired} 完成`
+  if (kind === 'cronjob') return item.ready > 0 ? `${item.ready} 个活动任务` : item.status.toLowerCase() === 'suspended' ? '已暂停' : '等待调度'
+  return `${item.ready}/${item.desired}`
+}
+
+function workloadProgressTone(item: Workload): string {
+  const status = item.status.toLowerCase()
+  if (item.kind.toLowerCase() === 'job') return status === 'succeeded' ? 'replica-ready' : 'replica-warning'
+  if (item.kind.toLowerCase() === 'cronjob') return status === 'scheduled' ? 'replica-ready' : 'replica-warning'
+  return item.ready === item.desired ? 'replica-ready' : 'replica-warning'
 }

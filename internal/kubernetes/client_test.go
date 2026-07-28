@@ -87,7 +87,9 @@ func TestClientReadsProbeNamespacesAndWorkloads(t *testing.T) {
 					},
 				},
 			})
-		case "/apis/apps/v1/namespaces/payments/statefulsets", "/apis/apps/v1/namespaces/payments/daemonsets", "/api/v1/namespaces/payments/pods":
+		case "/apis/apps/v1/namespaces/payments/statefulsets", "/apis/apps/v1/namespaces/payments/daemonsets",
+			"/apis/batch/v1/namespaces/payments/jobs", "/apis/batch/v1/namespaces/payments/cronjobs",
+			"/api/v1/namespaces/payments/pods":
 			writeTestJSON(t, w, map[string]any{"items": []any{}})
 		default:
 			http.NotFound(w, r)

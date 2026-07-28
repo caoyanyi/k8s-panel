@@ -465,6 +465,16 @@ func TestServerExposesAuthenticatedWorkloadDiagnostics(t *testing.T) {
 	}
 	decodeTestJSON(t, create.Body.Bytes(), &created)
 	base := "/api/v1/clusters/" + created.Data.ID
+	batch := authenticatedRequest(t, handler, cookie, http.MethodGet, base+"/workloads?namespace=payments&kind=job", "")
+	if batch.Code != http.StatusOK || !strings.Contains(batch.Body.String(), `"kind":"Job"`) ||
+		!strings.Contains(batch.Body.String(), `"name":"daily-settlement"`) {
+		t.Fatalf("batch workloads status = %d, body = %s", batch.Code, batch.Body.String())
+	}
+	invalidKind := authenticatedRequest(t, handler, cookie, http.MethodGet, base+"/workloads?namespace=payments&kind=secret", "")
+	if invalidKind.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid workload kind status = %d, body = %s", invalidKind.Code, invalidKind.Body.String())
+	}
+	assertErrorField(t, invalidKind.Body.Bytes(), "kind")
 
 	detail := authenticatedRequest(t, handler, cookie, http.MethodGet, base+"/workloads/pod/payments/gateway-0", "")
 	if detail.Code != http.StatusOK || !strings.Contains(detail.Body.String(), `"uid":"uid-gateway-0"`) {
@@ -844,8 +854,14 @@ func (testKube) Events(_ context.Context, namespace, eventType string, _ int) ([
 		Source: "kubelet", Count: 3,
 	}}, nil
 }
-func (testKube) Workloads(context.Context, string, string) ([]domain.Workload, error) {
-	return nil, nil
+func (testKube) Workloads(_ context.Context, namespace, kind string) ([]domain.Workload, error) {
+	if kind != "job" {
+		return nil, nil
+	}
+	return []domain.Workload{{
+		Kind: "Job", Namespace: namespace, Name: "daily-settlement", Ready: 2, Desired: 4,
+		Status: "Running", Images: []string{"settlement:1.8.0"},
+	}}, nil
 }
 func (testKube) Services(_ context.Context, namespace string) ([]domain.KubernetesService, error) {
 	return []domain.KubernetesService{{

@@ -259,10 +259,10 @@ td strong { color: var(--text); font-size: 12px; }
 .status-badge { min-height: 24px; padding: 0 8px; display: inline-flex; align-items: center; gap: 6px; border: 1px solid #d9dfdb; border-radius: 999px; background: #f6f8f7; color: #536159; font-size: 11px; font-weight: 630; white-space: nowrap; }
 .status-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .status-connected, .status-succeeded, .status-ready, .status-active, .status-deployed, .status-true, .status-normal { color: var(--success); background: #eff9f3; border-color: #c5e6d3; }
-.status-degraded, .status-pending, .status-queued, .status-progressing, .status-submitted, .status-warning, .status-constrained { color: var(--warning); background: #fff8ea; border-color: #efd9aa; }
+.status-degraded, .status-pending, .status-queued, .status-progressing, .status-retrying, .status-suspended, .status-submitted, .status-warning, .status-constrained { color: var(--warning); background: #fff8ea; border-color: #efd9aa; }
 .status-unreachable, .status-failed, .status-unavailable, .status-uninstalled, .status-critical { color: var(--danger); background: #fff1f1; border-color: #edc6c6; }
 .status-notready { color: var(--danger); background: #fff1f1; border-color: #edc6c6; }
-.status-running { color: var(--info); background: #eef6fc; border-color: #c8dff0; }
+.status-running, .status-scheduled { color: var(--info); background: #eef6fc; border-color: #c8dff0; }
 .status-disabled, .status-canceled, .status-unknown, .status-superseded { color: #5f6b64; background: #f1f3f2; border-color: #d9dfdb; }
 
 .data-state { min-height: 178px; padding: 28px 18px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--muted); text-align: center; font-size: 13px; }

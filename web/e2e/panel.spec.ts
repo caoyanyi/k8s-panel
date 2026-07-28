@@ -173,6 +173,40 @@ test('workload diagnostics show details, events, YAML and bounded logs', async (
   expect(consoleErrors).toEqual([])
 })
 
+test('batch workloads stay scoped and expose read-only diagnostics', async ({ page }, testInfo) => {
+  const consoleErrors: string[] = []
+  page.on('console', (message) => {
+    if (message.type() === 'error') consoleErrors.push(message.text())
+  })
+  page.on('pageerror', (error) => consoleErrors.push(error.message))
+  await mockWorkloadDiagnostics(page)
+
+  await page.goto('/#workloads')
+  const requestPromise = page.waitForRequest((request) => (
+    request.method() === 'GET' && new URL(request.url()).pathname.endsWith('/clusters/clu_1/workloads') &&
+    new URL(request.url()).searchParams.get('kind') === 'cronjob'
+  ))
+  await page.getByLabel('类型').selectOption('cronjob')
+  await requestPromise
+  await expect(page.getByText('nightly-report', { exact: true })).toBeVisible()
+  await expect(page.getByText('等待调度')).toBeVisible()
+  await page.getByRole('button', { name: '查看 nightly-report' }).click()
+
+  const dialog = page.getByRole('dialog', { name: 'CronJob · nightly-report' })
+  await expect(dialog.getByText('0 个活动任务')).toBeVisible()
+  await expect(dialog.getByRole('button', { name: '扩缩容' })).toHaveCount(0)
+  await expect(dialog.getByRole('tab', { name: '日志' })).toHaveCount(0)
+  await dialog.getByRole('tab', { name: 'YAML' }).click()
+  await expect(dialog.getByText(/value: <redacted>/)).toBeVisible()
+
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
+  expect(overflow).toBeLessThanOrEqual(1)
+  const result = await new AxeBuilder({ page }).include('.modal').analyze()
+  expect(result.violations.filter((violation) => ['serious', 'critical'].includes(violation.impact ?? ''))).toEqual([])
+  await page.screenshot({ path: `test-results/${testInfo.project.name}-batch-workloads.png` })
+  expect(consoleErrors).toEqual([])
+})
+
 test('queued deployment scale can be canceled while resources are constrained', async ({ page }, testInfo) => {
   const consoleErrors: string[] = []
   page.on('console', (message) => {
@@ -790,7 +824,7 @@ async function mockWorkloadDiagnostics(page: Page) {
     } else if (path === '/api/v1/clusters/clu_1/namespaces') {
       data = [{ name: 'payments', status: 'Active', created_at: '2026-07-24T08:00:00Z' }]
     } else if (path === '/api/v1/clusters/clu_1/workloads') {
-      data = [
+      const workloads = [
         {
           kind: 'Pod', namespace: 'payments', name: 'gateway-0', ready: 1, desired: 1, status: 'Ready',
           images: ['registry.example.com/payments/gateway:1.4.0'], created_at: '2026-07-24T08:00:00Z',
@@ -799,7 +833,17 @@ async function mockWorkloadDiagnostics(page: Page) {
           kind: 'Deployment', namespace: 'payments', name: 'gateway-api', ready: 3, desired: 3, status: 'Ready',
           images: ['registry.example.com/payments/gateway:1.4.0'], created_at: '2026-07-24T08:00:00Z',
         },
+        {
+          kind: 'Job', namespace: 'payments', name: 'daily-settlement', ready: 2, desired: 4, status: 'Running',
+          images: ['registry.example.com/payments/settlement:1.8.0'], created_at: '2026-07-28T01:00:00Z',
+        },
+        {
+          kind: 'CronJob', namespace: 'payments', name: 'nightly-report', ready: 0, desired: 0, status: 'Scheduled',
+          images: ['registry.example.com/payments/report:2.3.0'], created_at: '2026-07-27T01:00:00Z',
+        },
       ]
+      const kind = url.searchParams.get('kind')
+      data = kind ? workloads.filter((item) => item.kind.toLowerCase() === kind) : workloads
     } else if (path.endsWith('/workloads/deployment/payments/gateway-api/scales') && route.request().method() === 'POST') {
       operationKind = 'workload.scale'
       operationID = 'op_scale'
@@ -839,6 +883,18 @@ async function mockWorkloadDiagnostics(page: Page) {
           ready: true, restart_count: 0, state: 'Running',
         }],
         yaml: 'apiVersion: apps/v1\nkind: Deployment\n',
+      }
+    } else if (path.endsWith('/workloads/cronjob/payments/nightly-report')) {
+      data = {
+        kind: 'CronJob', namespace: 'payments', name: 'nightly-report', ready: 0, desired: 0, status: 'Scheduled',
+        images: ['registry.example.com/payments/report:2.3.0'], created_at: '2026-07-27T01:00:00Z',
+        uid: 'uid-nightly-report', resource_version: '72', labels: { app: 'report' },
+        containers: [{
+          name: 'report', image: 'registry.example.com/payments/report:2.3.0', type: 'container',
+          ready: false, restart_count: 0,
+        }],
+        conditions: [],
+        yaml: 'apiVersion: batch/v1\nkind: CronJob\nspec:\n  schedule: 0 2 * * *\n  jobTemplate:\n    spec:\n      template:\n        spec:\n          containers:\n            - env:\n                - name: REPORT_TOKEN\n                  value: <redacted>\n',
       }
     } else if (path === `/api/v1/operations/${operationID}/cancellations` && route.request().method() === 'POST') {
       operationState = 'canceled'

@@ -91,6 +91,30 @@ describe('WorkloadDetailModal', () => {
     expect(within(dialog).queryByRole('tab', { name: '日志' })).not.toBeInTheDocument()
   })
 
+  it('shows a CronJob as a read-only scheduled workload', async () => {
+    const workload: Workload = {
+      kind: 'CronJob', namespace: 'payments', name: 'nightly-report', ready: 1, desired: 1,
+      status: 'Running', images: ['report:2.3.0'], created_at: '2026-07-27T01:00:00Z',
+    }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(dataResponse({
+      ...workload,
+      uid: 'uid-nightly-report',
+      resource_version: '72',
+      labels: { app: 'report' },
+      containers: [{ name: 'report', image: 'report:2.3.0', type: 'container', ready: false, restart_count: 0 }],
+      conditions: [],
+      yaml: 'apiVersion: batch/v1\nkind: CronJob\nspec:\n  schedule: 0 2 * * *\n',
+    })))
+
+    render(<WorkloadDetailModal clusterId="clu_1" clusterName="development" environment="development" workload={workload} open onClose={vi.fn()} notify={vi.fn()} openOperations={vi.fn()} />)
+
+    const dialog = await screen.findByRole('dialog', { name: 'CronJob · nightly-report' })
+    expect(within(dialog).getByText('1 个活动任务')).toBeInTheDocument()
+    expect(within(dialog).queryByRole('button', { name: '扩缩容' })).not.toBeInTheDocument()
+    expect(within(dialog).queryByRole('button', { name: '滚动重启' })).not.toBeInTheDocument()
+    expect(within(dialog).queryByRole('tab', { name: '日志' })).not.toBeInTheDocument()
+  })
+
   it('ignores an older log response after the query changes', async () => {
     const workload: Workload = {
       kind: 'Pod', namespace: 'payments', name: 'gateway-0', ready: 1, desired: 1,

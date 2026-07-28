@@ -315,16 +315,17 @@ func (c *Client) NodeEvents(ctx context.Context, name string, limit int) ([]doma
 
 func (c *Client) Workloads(ctx context.Context, namespace, kind string) ([]domain.Workload, error) {
 	kind = strings.ToLower(strings.TrimSpace(kind))
-	if kind != "" && kind != "deployment" && kind != "statefulset" && kind != "daemonset" && kind != "pod" {
-		return nil, domain.Invalid("kind", "must be deployment, statefulset, daemonset or pod")
+	if err := domain.ValidateWorkloadList(namespace, kind); err != nil {
+		return nil, err
 	}
 	paths := workloadPaths(namespace)
 	workloads := make([]domain.Workload, 0)
-	for _, resourceKind := range []string{"deployment", "statefulset", "daemonset", "pod"} {
+	budget := newListBudget()
+	for _, resourceKind := range []string{"deployment", "statefulset", "daemonset", "job", "cronjob", "pod"} {
 		if kind != "" && kind != resourceKind {
 			continue
 		}
-		items, err := c.listRaw(ctx, paths[resourceKind], nil)
+		items, err := c.listRawWithBudget(ctx, paths[resourceKind], nil, &budget)
 		if err != nil {
 			return nil, err
 		}
@@ -666,6 +667,29 @@ func (c *Client) Summary(ctx context.Context) (domain.ClusterSummary, error) {
 }
 
 func (c *Client) listRaw(ctx context.Context, path string, query url.Values) ([]json.RawMessage, error) {
+	budget := newListBudget()
+	return c.listRawWithBudget(ctx, path, query, &budget)
+}
+
+type listBudget struct {
+	items int
+	pages int
+	bytes int64
+}
+
+func newListBudget() listBudget {
+	return listBudget{}
+}
+
+func (c *Client) listRawWithBudget(
+	ctx context.Context,
+	path string,
+	query url.Values,
+	budget *listBudget,
+) ([]json.RawMessage, error) {
+	if budget == nil {
+		return nil, errors.New("Kubernetes list budget is required")
+	}
 	if query == nil {
 		query = make(url.Values)
 	} else {
@@ -673,8 +697,11 @@ func (c *Client) listRaw(ctx context.Context, path string, query url.Values) ([]
 	}
 	query.Set("limit", listPageSize)
 	items := make([]json.RawMessage, 0)
-	var totalBytes int64
-	for page := 0; page < maxListPages; page++ {
+	for {
+		if budget.pages >= maxListPages {
+			return nil, fmt.Errorf("Kubernetes list exceeded safe page limit: %w", domain.ErrUpstream)
+		}
+		budget.pages++
 		var response struct {
 			Metadata struct {
 				Continue string `json:"continue"`
@@ -685,7 +712,7 @@ func (c *Client) listRaw(ctx context.Context, path string, query url.Values) ([]
 			return nil, err
 		}
 		var appendErr error
-		items, totalBytes, appendErr = appendListItems(items, totalBytes, response.Items)
+		items, appendErr = appendListItemsWithBudget(items, response.Items, budget)
 		if appendErr != nil {
 			return nil, appendErr
 		}
@@ -694,7 +721,6 @@ func (c *Client) listRaw(ctx context.Context, path string, query url.Values) ([]
 		}
 		query.Set("continue", response.Metadata.Continue)
 	}
-	return nil, fmt.Errorf("Kubernetes list exceeded safe page limit: %w", domain.ErrUpstream)
 }
 
 func appendListItems(
@@ -702,16 +728,29 @@ func appendListItems(
 	totalBytes int64,
 	pageItems []json.RawMessage,
 ) ([]json.RawMessage, int64, error) {
-	if len(pageItems) > maxListItems-len(items) {
-		return nil, totalBytes, fmt.Errorf("Kubernetes list exceeded safe item limit: %w", domain.ErrUpstream)
+	budget := listBudget{items: len(items), bytes: totalBytes}
+	appended, err := appendListItemsWithBudget(items, pageItems, &budget)
+	return appended, budget.bytes, err
+}
+
+func appendListItemsWithBudget(
+	items []json.RawMessage,
+	pageItems []json.RawMessage,
+	budget *listBudget,
+) ([]json.RawMessage, error) {
+	if len(pageItems) > maxListItems-budget.items {
+		return nil, fmt.Errorf("Kubernetes list exceeded safe item limit: %w", domain.ErrUpstream)
 	}
+	pageBytes := int64(0)
 	for _, item := range pageItems {
-		if int64(len(item)) > maxListBytes-totalBytes {
-			return nil, totalBytes, fmt.Errorf("Kubernetes list exceeded safe byte limit: %w", domain.ErrUpstream)
+		if int64(len(item)) > maxListBytes-budget.bytes-pageBytes {
+			return nil, fmt.Errorf("Kubernetes list exceeded safe byte limit: %w", domain.ErrUpstream)
 		}
-		totalBytes += int64(len(item))
+		pageBytes += int64(len(item))
 	}
-	return append(items, pageItems...), totalBytes, nil
+	budget.items += len(pageItems)
+	budget.bytes += pageBytes
+	return append(items, pageItems...), nil
 }
 
 func (c *Client) getJSON(ctx context.Context, path string, query url.Values, target any) error {
@@ -895,6 +934,16 @@ type workloadDetailResource struct {
 				InitContainers []containerSpec `json:"initContainers"`
 			} `json:"spec"`
 		} `json:"template"`
+		JobTemplate struct {
+			Spec struct {
+				Template struct {
+					Spec struct {
+						Containers     []containerSpec `json:"containers"`
+						InitContainers []containerSpec `json:"initContainers"`
+					} `json:"spec"`
+				} `json:"template"`
+			} `json:"spec"`
+		} `json:"jobTemplate"`
 	} `json:"spec"`
 	Status struct {
 		Conditions                 []workloadCondition `json:"conditions"`
@@ -937,6 +986,10 @@ func workloadResourcePath(reference domain.WorkloadReference) string {
 		base = "/apis/apps/v1/namespaces/" + reference.Namespace + "/statefulsets/"
 	case "daemonset":
 		base = "/apis/apps/v1/namespaces/" + reference.Namespace + "/daemonsets/"
+	case "job":
+		base = "/apis/batch/v1/namespaces/" + reference.Namespace + "/jobs/"
+	case "cronjob":
+		base = "/apis/batch/v1/namespaces/" + reference.Namespace + "/cronjobs/"
 	}
 	return base + reference.Name
 }
@@ -949,6 +1002,10 @@ func displayWorkloadKind(kind string) string {
 		return "StatefulSet"
 	case "daemonset":
 		return "DaemonSet"
+	case "job":
+		return "Job"
+	case "cronjob":
+		return "CronJob"
 	default:
 		return "Pod"
 	}
@@ -956,6 +1013,9 @@ func displayWorkloadKind(kind string) string {
 
 func decodeContainers(kind string, resource workloadDetailResource) []domain.WorkloadContainer {
 	if kind != "pod" {
+		if kind == "cronjob" {
+			return mergeContainerDetails(resource.Spec.JobTemplate.Spec.Template.Spec.Containers, nil, "container")
+		}
 		return mergeContainerDetails(resource.Spec.Template.Spec.Containers, nil, "container")
 	}
 	containers := mergeContainerDetails(resource.Spec.Containers, resource.Status.ContainerStatuses, "container")
@@ -1040,6 +1100,15 @@ func redactContainerEnvironment(object map[string]any) {
 			redactSpecEnvironment(templateSpec)
 		}
 	}
+	if jobTemplate, ok := spec["jobTemplate"].(map[string]any); ok {
+		if jobSpec, ok := jobTemplate["spec"].(map[string]any); ok {
+			if template, ok := jobSpec["template"].(map[string]any); ok {
+				if templateSpec, ok := template["spec"].(map[string]any); ok {
+					redactSpecEnvironment(templateSpec)
+				}
+			}
+		}
+	}
 }
 
 func redactSpecEnvironment(spec map[string]any) {
@@ -1116,6 +1185,12 @@ func firstNonZeroTime(values ...time.Time) time.Time {
 func decodeWorkload(kind string, item json.RawMessage) (domain.Workload, error) {
 	if kind == "pod" {
 		return decodePod(item)
+	}
+	if kind == "job" {
+		return decodeJob(item)
+	}
+	if kind == "cronjob" {
+		return decodeCronJob(item)
 	}
 	var resource struct {
 		Metadata objectMetadata `json:"metadata"`
@@ -1344,6 +1419,8 @@ func workloadPaths(namespace string) map[string]string {
 			"deployment":  "/apis/apps/v1/deployments",
 			"statefulset": "/apis/apps/v1/statefulsets",
 			"daemonset":   "/apis/apps/v1/daemonsets",
+			"job":         "/apis/batch/v1/jobs",
+			"cronjob":     "/apis/batch/v1/cronjobs",
 			"pod":         "/api/v1/pods",
 		}
 	}
@@ -1352,6 +1429,8 @@ func workloadPaths(namespace string) map[string]string {
 		"deployment":  "/apis/apps/v1/namespaces/" + escaped + "/deployments",
 		"statefulset": "/apis/apps/v1/namespaces/" + escaped + "/statefulsets",
 		"daemonset":   "/apis/apps/v1/namespaces/" + escaped + "/daemonsets",
+		"job":         "/apis/batch/v1/namespaces/" + escaped + "/jobs",
+		"cronjob":     "/apis/batch/v1/namespaces/" + escaped + "/cronjobs",
 		"pod":         "/api/v1/namespaces/" + escaped + "/pods",
 	}
 }
