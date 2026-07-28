@@ -35,6 +35,9 @@ test('login, navigation, validation and logout', async ({ page }, testInfo) => {
   await navigate(page, testInfo.project.name, '配置')
   await expect(page.getByRole('heading', { name: '配置资源' })).toBeVisible()
   await expect(page.getByText('尚未选择集群')).toBeVisible()
+  await navigate(page, testInfo.project.name, '存储')
+  await expect(page.getByRole('heading', { name: '存储资源' })).toBeVisible()
+  await expect(page.getByText('尚未选择集群')).toBeVisible()
   await navigate(page, testInfo.project.name, 'Helm')
   await expect(page.getByRole('heading', { name: 'Helm' })).toBeVisible()
   await navigate(page, testInfo.project.name, '操作中心')
@@ -365,6 +368,43 @@ test('configuration inventory keeps Secret reads namespace scoped', async ({ pag
   expect(consoleErrors).toEqual([])
 })
 
+test('storage inventory keeps cluster resources namespace independent', async ({ page }, testInfo) => {
+  const consoleErrors: string[] = []
+  const requestedKinds: string[] = []
+  page.on('console', (message) => {
+    if (message.type() === 'error') consoleErrors.push(message.text())
+  })
+  page.on('pageerror', (error) => consoleErrors.push(error.message))
+  await mockStorageResources(page, requestedKinds)
+
+  await page.goto('/#storage')
+  await expect(page.getByRole('heading', { name: '存储资源' })).toBeVisible()
+  await expect(page.getByText('payments-data', { exact: true })).toBeVisible()
+  expect(requestedKinds).toContain('claims:all')
+  expect(requestedKinds.some((request) => request.startsWith('volumes:'))).toBe(false)
+  expect(requestedKinds.some((request) => request.startsWith('classes:'))).toBe(false)
+
+  await page.getByLabel('命名空间').selectOption('payments')
+  await expect.poll(() => requestedKinds).toContain('claims:payments')
+  await page.getByRole('button', { name: 'PV', exact: true }).click()
+  await expect(page.getByText('pv-payments-data', { exact: true })).toBeVisible()
+  expect(requestedKinds).toContain('volumes:all')
+  await expect(page.getByLabel('命名空间')).toBeDisabled()
+
+  await page.getByRole('button', { name: 'StorageClass' }).click()
+  await expect(page.getByText('csi.example.com')).toBeVisible()
+  expect(requestedKinds).toContain('classes:all')
+  await expect(page.getByText('默认')).toBeVisible()
+  await expect(page.getByText('支持')).toBeVisible()
+
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
+  expect(overflow).toBeLessThanOrEqual(1)
+  const result = await new AxeBuilder({ page }).analyze()
+  expect(result.violations.filter((violation) => ['serious', 'critical'].includes(violation.impact ?? ''))).toEqual([])
+  await page.screenshot({ path: `test-results/${testInfo.project.name}-storage-inventory.png`, fullPage: true })
+  expect(consoleErrors).toEqual([])
+})
+
 async function navigate(page: Page, projectName: string, label: string) {
   if (projectName.includes('mobile')) {
     await page.getByRole('button', { name: '打开导航' }).click()
@@ -477,6 +517,47 @@ async function mockConfigurationResources(page: Page, requestedKinds: string[]) 
       data = [{
         namespace: 'payments', name: 'registry-secret', type: 'kubernetes.io/dockerconfigjson', data_count: 1,
         created_at: '2026-07-25T08:00:00Z',
+      }]
+    } else {
+      data = []
+    }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data }) })
+  })
+}
+
+async function mockStorageResources(page: Page, requestedKinds: string[]) {
+  await page.route('**/api/v1/**', async (route) => {
+    const url = new URL(route.request().url())
+    const path = url.pathname
+    let data: unknown
+    if (path === '/api/v1/session') {
+      data = { username: 'storage-admin', role: 'admin', expires_at: '2026-07-28T16:00:00Z' }
+    } else if (path === '/api/v1/clusters') {
+      data = [{
+        id: 'clu_1', name: 'production-cn', environment: 'production', server: 'https://api.example.com',
+        status: 'connected', version: 'v1.36.2', credentials_configured: true,
+        created_at: '2026-07-20T08:00:00Z', updated_at: '2026-07-27T08:00:00Z',
+      }]
+    } else if (path === '/api/v1/clusters/clu_1/namespaces') {
+      data = [{ name: 'payments', status: 'Active', labels: {}, finalizers: [], created_at: '2026-07-20T08:00:00Z' }]
+    } else if (path === '/api/v1/clusters/clu_1/persistent-volume-claims') {
+      requestedKinds.push(`claims:${url.searchParams.get('namespace') ?? 'all'}`)
+      data = [{
+        namespace: 'payments', name: 'payments-data', status: 'Bound', volume: 'pv-payments-data', capacity: '20Gi',
+        access_modes: 'RWO', storage_class: 'standard', volume_mode: 'Filesystem', created_at: '2026-07-24T08:00:00Z',
+      }]
+    } else if (path === '/api/v1/clusters/clu_1/persistent-volumes') {
+      requestedKinds.push(`volumes:${url.searchParams.get('namespace') ?? 'all'}`)
+      data = [{
+        name: 'pv-payments-data', status: 'Bound', claim: 'payments/payments-data', capacity: '20Gi', access_modes: 'RWO',
+        storage_class: 'standard', reclaim_policy: 'Delete', volume_mode: 'Filesystem', created_at: '2026-07-23T08:00:00Z',
+      }]
+    } else if (path === '/api/v1/clusters/clu_1/storage-classes') {
+      requestedKinds.push(`classes:${url.searchParams.get('namespace') ?? 'all'}`)
+      data = [{
+        name: 'standard', provisioner: 'csi.example.com', reclaim_policy: 'Delete',
+        volume_binding_mode: 'WaitForFirstConsumer', allow_volume_expansion: true, default: true,
+        created_at: '2026-07-22T08:00:00Z',
       }]
     } else {
       data = []

@@ -240,6 +240,8 @@ td strong { color: var(--text); font-size: 12px; }
 .node-table { min-width: 1120px; }
 .network-table { min-width: 1180px; }
 .configuration-table { min-width: 760px; }
+.storage-table { min-width: 1180px; }
+.storage-class-table { min-width: 900px; }
 .network-value-list { max-width: 280px; display: flex; flex-direction: column; gap: 3px; }
 .network-value-list > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .network-count { white-space: nowrap; }
@@ -283,6 +285,7 @@ input, select { height: 38px; padding: 0 10px; }
 textarea { padding: 9px 10px; resize: vertical; line-height: 1.45; }
 input:hover, select:hover, textarea:hover { border-color: #a9b5ae; }
 input:focus, select:focus, textarea:focus { border-color: var(--primary); }
+select:disabled { cursor: not-allowed; background: #f3f5f4; color: #89938d; }
 .field { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
 .field label { color: #46534c; font-size: 12px; font-weight: 630; }
 .field small { color: var(--muted); font-size: 10px; line-height: 1.4; overflow-wrap: anywhere; }

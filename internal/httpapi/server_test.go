@@ -46,6 +46,11 @@ func TestServerAuthenticationAndClusterLifecycle(t *testing.T) {
 	if unauthorizedConfiguration.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthorized configuration status = %d, want 401", unauthorizedConfiguration.Code)
 	}
+	unauthorizedStorage := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorizedStorage, httptest.NewRequest(http.MethodGet, "/api/v1/clusters/clu_1/persistent-volumes", nil))
+	if unauthorizedStorage.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized storage status = %d, want 401", unauthorizedStorage.Code)
+	}
 
 	cookie := login(t, handler)
 	createBody := `{
@@ -143,6 +148,27 @@ func TestServerAuthenticationAndClusterLifecycle(t *testing.T) {
 		!strings.Contains(secrets.Body.String(), `"type":"kubernetes.io/dockerconfigjson"`) ||
 		strings.Contains(secrets.Body.String(), "registry-password") {
 		t.Fatalf("secrets status = %d, body = %s", secrets.Code, secrets.Body.String())
+	}
+	claimsPath := "/api/v1/clusters/" + created.Data.ID + "/persistent-volume-claims"
+	claims := authenticatedRequest(t, handler, cookie, http.MethodGet, claimsPath+"?namespace=payments", "")
+	if claims.Code != http.StatusOK || !strings.Contains(claims.Body.String(), `"name":"data"`) ||
+		!strings.Contains(claims.Body.String(), `"volume":"pv-data"`) {
+		t.Fatalf("persistent volume claims status = %d, body = %s", claims.Code, claims.Body.String())
+	}
+	invalidClaimNamespace := authenticatedRequest(t, handler, cookie, http.MethodGet, claimsPath+"?namespace=bad%2Fnamespace", "")
+	if invalidClaimNamespace.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid claim namespace status = %d, body = %s", invalidClaimNamespace.Code, invalidClaimNamespace.Body.String())
+	}
+	assertErrorField(t, invalidClaimNamespace.Body.Bytes(), "namespace")
+	volumes := authenticatedRequest(t, handler, cookie, http.MethodGet, "/api/v1/clusters/"+created.Data.ID+"/persistent-volumes", "")
+	if volumes.Code != http.StatusOK || !strings.Contains(volumes.Body.String(), `"name":"pv-data"`) ||
+		!strings.Contains(volumes.Body.String(), `"reclaim_policy":"Delete"`) || strings.Contains(volumes.Body.String(), "volume-handle") {
+		t.Fatalf("persistent volumes status = %d, body = %s", volumes.Code, volumes.Body.String())
+	}
+	classes := authenticatedRequest(t, handler, cookie, http.MethodGet, "/api/v1/clusters/"+created.Data.ID+"/storage-classes", "")
+	if classes.Code != http.StatusOK || !strings.Contains(classes.Body.String(), `"name":"standard"`) ||
+		!strings.Contains(classes.Body.String(), `"default":true`) || strings.Contains(classes.Body.String(), "storage-account") {
+		t.Fatalf("storage classes status = %d, body = %s", classes.Code, classes.Body.String())
 	}
 
 	list := authenticatedRequest(t, handler, cookie, http.MethodGet, "/api/v1/clusters", "")
@@ -719,6 +745,24 @@ func (testKube) ConfigMaps(context.Context, string) ([]domain.KubernetesConfigMa
 func (testKube) Secrets(_ context.Context, namespace string) ([]domain.KubernetesSecret, error) {
 	return []domain.KubernetesSecret{{
 		Namespace: namespace, Name: "registry", Type: "kubernetes.io/dockerconfigjson", DataCount: 1,
+	}}, nil
+}
+func (testKube) PersistentVolumeClaims(_ context.Context, namespace string) ([]domain.KubernetesPersistentVolumeClaim, error) {
+	return []domain.KubernetesPersistentVolumeClaim{{
+		Namespace: namespace, Name: "data", Status: "Bound", Volume: "pv-data", Capacity: "20Gi",
+		AccessModes: "RWO", StorageClass: "standard", VolumeMode: "Filesystem",
+	}}, nil
+}
+func (testKube) PersistentVolumes(context.Context) ([]domain.KubernetesPersistentVolume, error) {
+	return []domain.KubernetesPersistentVolume{{
+		Name: "pv-data", Status: "Bound", Claim: "payments/data", Capacity: "20Gi", AccessModes: "RWO",
+		StorageClass: "standard", ReclaimPolicy: "Delete", VolumeMode: "Filesystem",
+	}}, nil
+}
+func (testKube) StorageClasses(context.Context) ([]domain.KubernetesStorageClass, error) {
+	return []domain.KubernetesStorageClass{{
+		Name: "standard", Provisioner: "csi.example.com", ReclaimPolicy: "Delete",
+		VolumeBindingMode: "WaitForFirstConsumer", AllowVolumeExpansion: true, Default: true,
 	}}, nil
 }
 func (testKube) WorkloadDetail(_ context.Context, reference domain.WorkloadReference) (domain.WorkloadDetail, error) {

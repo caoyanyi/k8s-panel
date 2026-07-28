@@ -45,6 +45,12 @@ type kubernetesTableRow struct {
 	Object json.RawMessage   `json:"object"`
 }
 
+type partialObjectMetadata struct {
+	Name              string
+	Namespace         string
+	CreationTimestamp time.Time
+}
+
 func (c *Client) ConfigMaps(ctx context.Context, namespace string) ([]domain.KubernetesConfigMap, error) {
 	path := "/api/v1/configmaps"
 	if namespace != "" {
@@ -206,16 +212,12 @@ func decodeConfigurationTableRow(row kubernetesTableRow, dataColumn, typeColumn 
 	return item, nil
 }
 
-func decodePartialObjectMetadata(raw json.RawMessage) (struct {
-	Name              string
-	Namespace         string
-	CreationTimestamp time.Time
-}, error) {
-	var empty struct {
-		Name              string
-		Namespace         string
-		CreationTimestamp time.Time
-	}
+func decodePartialObjectMetadata(raw json.RawMessage) (partialObjectMetadata, error) {
+	return decodePartialObjectMetadataForScope(raw, true)
+}
+
+func decodePartialObjectMetadataForScope(raw json.RawMessage, namespaced bool) (partialObjectMetadata, error) {
+	var empty partialObjectMetadata
 	var fields map[string]json.RawMessage
 	if len(raw) == 0 || json.Unmarshal(raw, &fields) != nil {
 		return empty, fmt.Errorf("decode Kubernetes table metadata: %w", domain.ErrUpstream)
@@ -237,15 +239,17 @@ func decodePartialObjectMetadata(raw json.RawMessage) (struct {
 	if err := json.Unmarshal(raw, &envelope); err != nil || envelope.APIVersion != "meta.k8s.io/v1" || envelope.Kind != "PartialObjectMetadata" {
 		return empty, fmt.Errorf("unsupported Kubernetes table row object: %w", domain.ErrUpstream)
 	}
-	if !validKubernetesMetadataString(envelope.Metadata.Name) || domain.ValidateNamespace(envelope.Metadata.Namespace) != nil ||
-		envelope.Metadata.CreationTimestamp.IsZero() {
+	if !validKubernetesMetadataString(envelope.Metadata.Name) || envelope.Metadata.CreationTimestamp.IsZero() {
 		return empty, fmt.Errorf("invalid Kubernetes table metadata: %w", domain.ErrUpstream)
 	}
-	return struct {
-		Name              string
-		Namespace         string
-		CreationTimestamp time.Time
-	}{
+	if namespaced {
+		if domain.ValidateNamespace(envelope.Metadata.Namespace) != nil {
+			return empty, fmt.Errorf("invalid Kubernetes table namespace: %w", domain.ErrUpstream)
+		}
+	} else if envelope.Metadata.Namespace != "" {
+		return empty, fmt.Errorf("cluster-scoped Kubernetes table row contains a namespace: %w", domain.ErrUpstream)
+	}
+	return partialObjectMetadata{
 		Name:              envelope.Metadata.Name,
 		Namespace:         envelope.Metadata.Namespace,
 		CreationTimestamp: envelope.Metadata.CreationTimestamp,

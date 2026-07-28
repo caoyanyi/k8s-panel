@@ -340,6 +340,40 @@ type KubernetesSecret struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+type KubernetesPersistentVolumeClaim struct {
+	Namespace    string    `json:"namespace"`
+	Name         string    `json:"name"`
+	Status       string    `json:"status"`
+	Volume       string    `json:"volume,omitempty"`
+	Capacity     string    `json:"capacity,omitempty"`
+	AccessModes  string    `json:"access_modes,omitempty"`
+	StorageClass string    `json:"storage_class,omitempty"`
+	VolumeMode   string    `json:"volume_mode,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
+type KubernetesPersistentVolume struct {
+	Name          string    `json:"name"`
+	Status        string    `json:"status"`
+	Claim         string    `json:"claim,omitempty"`
+	Capacity      string    `json:"capacity,omitempty"`
+	AccessModes   string    `json:"access_modes,omitempty"`
+	StorageClass  string    `json:"storage_class,omitempty"`
+	ReclaimPolicy string    `json:"reclaim_policy,omitempty"`
+	VolumeMode    string    `json:"volume_mode,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+type KubernetesStorageClass struct {
+	Name                 string    `json:"name"`
+	Provisioner          string    `json:"provisioner"`
+	ReclaimPolicy        string    `json:"reclaim_policy,omitempty"`
+	VolumeBindingMode    string    `json:"volume_binding_mode,omitempty"`
+	AllowVolumeExpansion bool      `json:"allow_volume_expansion"`
+	Default              bool      `json:"default"`
+	CreatedAt            time.Time `json:"created_at"`
+}
+
 type Workload struct {
 	Kind      string    `json:"kind"`
 	Namespace string    `json:"namespace"`

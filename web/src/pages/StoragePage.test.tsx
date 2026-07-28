@@ -1,0 +1,184 @@
+import { render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { type ReactNode, useState } from 'react'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { PanelContext, type PanelContextValue } from '../context'
+import { StoragePage } from './StoragePage'
+
+const baseContext: PanelContextValue = {
+  clusters: [{
+    id: 'clu_1', name: 'production-cn', environment: 'production', server: 'https://api.example.com',
+    status: 'connected', version: 'v1.36.2', credentials_configured: true,
+    created_at: '2026-07-20T08:00:00Z', updated_at: '2026-07-24T08:00:00Z',
+  }],
+  clustersLoading: false,
+  clustersError: null,
+  selectedClusterId: 'clu_1',
+  selectedNamespace: '',
+  setSelectedClusterId: vi.fn(),
+  setSelectedNamespace: vi.fn(),
+  refreshClusters: vi.fn().mockResolvedValue(undefined),
+}
+
+describe('StoragePage', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('loads one storage kind at a time and keeps cluster resources namespace independent', async () => {
+    const requested: string[] = []
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const path = String(input)
+      if (path.endsWith('/namespaces')) return Promise.resolve(dataResponse([namespace]))
+      if (path.includes('/persistent-volume-claims')) {
+        requested.push(path)
+        return Promise.resolve(dataResponse([claim]))
+      }
+      if (path.includes('/persistent-volumes')) {
+        requested.push(path)
+        return Promise.resolve(dataResponse([volume]))
+      }
+      if (path.includes('/storage-classes')) {
+        requested.push(path)
+        return Promise.resolve(dataResponse([storageClass]))
+      }
+      return Promise.resolve(errorResponse(404, 'not_found'))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const user = userEvent.setup()
+
+    renderPage({ selectedNamespace: 'payments' })
+
+    expect(await screen.findByText('payments-data')).toBeInTheDocument()
+    expect(requested).toEqual(['/api/v1/clusters/clu_1/persistent-volume-claims?namespace=payments'])
+    await user.click(screen.getByRole('button', { name: /^PV$/ }))
+    expect(await screen.findByText('pv-payments-data')).toBeInTheDocument()
+    expect(screen.getByLabelText('命名空间')).toBeDisabled()
+    expect(requested.at(-1)).toBe('/api/v1/clusters/clu_1/persistent-volumes')
+
+    await user.click(screen.getByRole('button', { name: 'StorageClass' }))
+    expect(await screen.findByText('csi.example.com')).toBeInTheDocument()
+    expect(screen.getByText('默认')).toBeInTheDocument()
+    expect(requested.at(-1)).toBe('/api/v1/clusters/clu_1/storage-classes')
+  })
+
+  it('aborts an active claim refresh when the storage kind changes', async () => {
+    let claimRequests = 0
+    let refreshSignal: AbortSignal | null = null
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input)
+      if (path.endsWith('/namespaces')) return Promise.resolve(dataResponse([namespace]))
+      if (path.includes('/persistent-volumes')) return Promise.resolve(dataResponse([volume]))
+      if (path.includes('/persistent-volume-claims')) {
+        claimRequests++
+        if (claimRequests === 1) return Promise.resolve(dataResponse([claim]))
+        refreshSignal = init?.signal ?? null
+        return new Promise<Response>((_resolve, reject) => {
+          refreshSignal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true })
+        })
+      }
+      return Promise.resolve(errorResponse(404, 'not_found'))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const user = userEvent.setup()
+
+    renderPage()
+    expect(await screen.findByText('payments-data')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '刷新' }))
+    await waitFor(() => expect(claimRequests).toBe(2))
+    await user.click(screen.getByRole('button', { name: /^PV$/ }))
+
+    await waitFor(() => expect(refreshSignal?.aborted).toBe(true))
+    expect(await screen.findByText('pv-payments-data')).toBeInTheDocument()
+  })
+
+  it('searches and paginates the active claim inventory locally', async () => {
+    const claims = Array.from({ length: 101 }, (_, index) => ({
+      ...claim,
+      name: `claim-${String(index).padStart(3, '0')}`,
+    }))
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((input: RequestInfo | URL) => (
+      Promise.resolve(dataResponse(String(input).endsWith('/namespaces') ? [namespace] : claims))
+    )))
+    const user = userEvent.setup()
+
+    renderPage()
+
+    expect(await screen.findByText('claim-000')).toBeInTheDocument()
+    expect(screen.queryByText('claim-100')).not.toBeInTheDocument()
+    expect(screen.getByText('第 1 / 2 页 · 101 条')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '下一页' }))
+    expect(await screen.findByText('claim-100')).toBeInTheDocument()
+
+    await user.type(screen.getByLabelText('搜索存储资源'), 'missing')
+    expect(screen.getByText('没有匹配的 PVC')).toBeInTheDocument()
+  })
+
+  it('keeps cluster-scoped storage available when namespace discovery fails', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const path = String(input)
+      if (path.endsWith('/namespaces')) return Promise.resolve(errorResponse(403, 'forbidden'))
+      if (path.includes('/persistent-volume-claims')) return Promise.resolve(dataResponse([claim]))
+      if (path.includes('/persistent-volumes')) return Promise.resolve(dataResponse([volume]))
+      return Promise.resolve(errorResponse(404, 'not_found'))
+    }))
+    const user = userEvent.setup()
+
+    renderPage()
+    await user.click(screen.getByRole('button', { name: /^PV$/ }))
+
+    expect(await screen.findByText('pv-payments-data')).toBeInTheDocument()
+  })
+
+  it('does not request Kubernetes resources without a selected cluster', () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    renderPage({ clusters: [], selectedClusterId: '' })
+
+    expect(screen.getByText('尚未选择集群')).toBeInTheDocument()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+})
+
+const namespace = {
+  name: 'payments', status: 'Active', labels: {}, finalizers: [], created_at: '2026-07-20T08:00:00Z',
+}
+
+const claim = {
+  namespace: 'payments', name: 'payments-data', status: 'Bound', volume: 'pv-payments-data', capacity: '20Gi',
+  access_modes: 'RWO', storage_class: 'standard', volume_mode: 'Filesystem', created_at: '2026-07-24T08:00:00Z',
+}
+
+const volume = {
+  name: 'pv-payments-data', status: 'Bound', claim: 'payments/payments-data', capacity: '20Gi', access_modes: 'RWO',
+  storage_class: 'standard', reclaim_policy: 'Delete', volume_mode: 'Filesystem', created_at: '2026-07-23T08:00:00Z',
+}
+
+const storageClass = {
+  name: 'standard', provisioner: 'csi.example.com', reclaim_policy: 'Delete', volume_binding_mode: 'WaitForFirstConsumer',
+  allow_volume_expansion: true, default: true, created_at: '2026-07-22T08:00:00Z',
+}
+
+function renderPage(overrides: Partial<PanelContextValue> = {}) {
+  return render(<ContextHarness overrides={overrides}><StoragePage /></ContextHarness>)
+}
+
+function ContextHarness({ overrides, children }: { overrides: Partial<PanelContextValue>; children: ReactNode }) {
+  const [selectedNamespace, setSelectedNamespace] = useState(overrides.selectedNamespace ?? baseContext.selectedNamespace)
+  const value = {
+    ...baseContext,
+    ...overrides,
+    selectedNamespace,
+    setSelectedNamespace,
+  }
+  return <PanelContext.Provider value={value}>{children}</PanelContext.Provider>
+}
+
+function dataResponse(data: unknown): Response {
+  return new Response(JSON.stringify({ data }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+}
+
+function errorResponse(status: number, code: string): Response {
+  return new Response(JSON.stringify({ error: { code, message: code } }), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  })
+}

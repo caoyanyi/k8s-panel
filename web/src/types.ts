@@ -177,6 +177,40 @@ export interface KubernetesSecret {
   created_at: string
 }
 
+export interface KubernetesPersistentVolumeClaim {
+  namespace: string
+  name: string
+  status: string
+  volume?: string
+  capacity?: string
+  access_modes?: string
+  storage_class?: string
+  volume_mode?: string
+  created_at: string
+}
+
+export interface KubernetesPersistentVolume {
+  name: string
+  status: string
+  claim?: string
+  capacity?: string
+  access_modes?: string
+  storage_class?: string
+  reclaim_policy?: string
+  volume_mode?: string
+  created_at: string
+}
+
+export interface KubernetesStorageClass {
+  name: string
+  provisioner: string
+  reclaim_policy?: string
+  volume_binding_mode?: string
+  allow_volume_expansion: boolean
+  default: boolean
+  created_at: string
+}
+
 export interface WorkloadContainer {
   name: string
   image: string

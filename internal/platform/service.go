@@ -565,6 +565,53 @@ func (s *Service) Secrets(
 	return items, listErr
 }
 
+func (s *Service) PersistentVolumeClaims(
+	ctx context.Context,
+	clusterID, namespace string,
+) ([]domain.KubernetesPersistentVolumeClaim, error) {
+	if namespace != "" {
+		if err := domain.ValidateNamespace(namespace); err != nil {
+			return nil, err
+		}
+	}
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	gateway, err := s.kubeGateway(ctx, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	return gateway.PersistentVolumeClaims(ctx, namespace)
+}
+
+func (s *Service) PersistentVolumes(ctx context.Context, clusterID string) ([]domain.KubernetesPersistentVolume, error) {
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	gateway, err := s.kubeGateway(ctx, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	return gateway.PersistentVolumes(ctx)
+}
+
+func (s *Service) StorageClasses(ctx context.Context, clusterID string) ([]domain.KubernetesStorageClass, error) {
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	gateway, err := s.kubeGateway(ctx, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	return gateway.StorageClasses(ctx)
+}
+
 func (s *Service) WorkloadDetail(ctx context.Context, clusterID string, reference domain.WorkloadReference) (domain.WorkloadDetail, error) {
 	if err := domain.ValidateWorkloadReference(reference); err != nil {
 		return domain.WorkloadDetail{}, err

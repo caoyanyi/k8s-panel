@@ -685,6 +685,18 @@ func TestServiceRejectsKubernetesReadsDuringCriticalResourcePressure(t *testing.
 			_, err := service.Secrets(context.Background(), "admin", "req_secrets", cluster.ID, "payments")
 			return err
 		}},
+		{name: "persistent volume claims", call: func() error {
+			_, err := service.PersistentVolumeClaims(context.Background(), cluster.ID, "payments")
+			return err
+		}},
+		{name: "persistent volumes", call: func() error {
+			_, err := service.PersistentVolumes(context.Background(), cluster.ID)
+			return err
+		}},
+		{name: "storage classes", call: func() error {
+			_, err := service.StorageClasses(context.Background(), cluster.ID)
+			return err
+		}},
 		{name: "workload detail", call: func() error {
 			_, err := service.WorkloadDetail(context.Background(), cluster.ID, reference)
 			return err
@@ -726,6 +738,9 @@ func TestServiceRejectsKubernetesReadsDuringCriticalResourcePressure(t *testing.
 	}
 	if configMapCalls, secretCalls := gateway.configMapCalls.Load(), gateway.secretCalls.Load(); configMapCalls != 0 || secretCalls != 0 {
 		t.Fatalf("configuration reads reached Kubernetes under critical pressure: configmaps=%d secrets=%d", configMapCalls, secretCalls)
+	}
+	if claimCalls, volumeCalls, classCalls := gateway.persistentVolumeClaimCalls.Load(), gateway.persistentVolumeCalls.Load(), gateway.storageClassCalls.Load(); claimCalls != 0 || volumeCalls != 0 || classCalls != 0 {
+		t.Fatalf("storage reads reached Kubernetes under critical pressure: claims=%d volumes=%d classes=%d", claimCalls, volumeCalls, classCalls)
 	}
 	capacity := service.OperationCapacity().KubernetesReads
 	if !capacity.Adaptive || capacity.Pressure != resourceguard.PressureCritical || capacity.Limit != 0 || capacity.Maximum != 4 {
@@ -834,6 +849,48 @@ func TestServiceListsConfigurationResourcesAndValidatesSecretScopeBeforeGateway(
 	}
 	if !found {
 		t.Fatal("secret.metadata.list audit event was not written")
+	}
+}
+
+func TestServiceListsStorageResourcesAndValidatesClaimScopeBeforeGateway(t *testing.T) {
+	t.Parallel()
+
+	gateway := &fakeKubeGateway{
+		probe:                  domain.ClusterProbe{Version: "v1.36.2"},
+		persistentVolumeClaims: []domain.KubernetesPersistentVolumeClaim{{Namespace: "payments", Name: "data", Status: "Bound"}},
+		persistentVolumes:      []domain.KubernetesPersistentVolume{{Name: "pv-data", Status: "Bound"}},
+		storageClasses:         []domain.KubernetesStorageClass{{Name: "standard", Provisioner: "csi.example.com"}},
+	}
+	service, _, _ := newTestService(t, serviceFakes{kube: gateway})
+	cluster, err := service.CreateCluster(context.Background(), "admin", "req_cluster", domain.ClusterInput{
+		Name: "cluster", Environment: domain.EnvironmentDevelopment, Server: "https://api.example.com", BearerToken: "token",
+	})
+	if err != nil {
+		t.Fatalf("CreateCluster() error = %v", err)
+	}
+
+	claims, err := service.PersistentVolumeClaims(context.Background(), cluster.ID, "payments")
+	if err != nil || len(claims) != 1 || claims[0].Name != "data" {
+		t.Fatalf("PersistentVolumeClaims() = %#v, %v", claims, err)
+	}
+	volumes, err := service.PersistentVolumes(context.Background(), cluster.ID)
+	if err != nil || len(volumes) != 1 || volumes[0].Name != "pv-data" {
+		t.Fatalf("PersistentVolumes() = %#v, %v", volumes, err)
+	}
+	classes, err := service.StorageClasses(context.Background(), cluster.ID)
+	if err != nil || len(classes) != 1 || classes[0].Name != "standard" {
+		t.Fatalf("StorageClasses() = %#v, %v", classes, err)
+	}
+	if gateway.persistentVolumeClaimNamespace != "payments" {
+		t.Fatalf("claim namespace = %q", gateway.persistentVolumeClaimNamespace)
+	}
+
+	claimCalls := gateway.persistentVolumeClaimCalls.Load()
+	if _, err := service.PersistentVolumeClaims(context.Background(), cluster.ID, "bad/namespace"); err == nil {
+		t.Fatal("PersistentVolumeClaims() accepted an invalid namespace")
+	}
+	if gateway.persistentVolumeClaimCalls.Load() != claimCalls {
+		t.Fatal("invalid claim namespace reached Kubernetes gateway")
 	}
 }
 
@@ -1596,51 +1653,58 @@ func (f *sequenceKubeFactory) Connections() []kubernetes.Connection {
 }
 
 type fakeKubeGateway struct {
-	probe               domain.ClusterProbe
-	probeErr            error
-	probeStarted        chan<- struct{}
-	probeRelease        <-chan struct{}
-	capabilities        []domain.KubernetesCapability
-	capabilityErr       error
-	capabilityCalls     atomic.Int64
-	capabilityStarted   chan<- struct{}
-	capabilityRelease   <-chan struct{}
-	capabilityNamespace string
-	summaryCalls        atomic.Int64
-	summaryStarted      chan struct{}
-	summaryRelease      <-chan struct{}
-	namespaces          []domain.Namespace
-	detail              domain.WorkloadDetail
-	events              []domain.KubernetesEvent
-	logs                domain.PodLogs
-	detailReference     domain.WorkloadReference
-	eventLimit          int
-	logRequest          domain.PodLogRequest
-	nodes               []domain.Node
-	nodeDetail          domain.NodeDetail
-	nodeEvents          []domain.KubernetesEvent
-	nodeName            string
-	nodeEventLimit      int
-	services            []domain.KubernetesService
-	ingresses           []domain.KubernetesIngress
-	configMaps          []domain.KubernetesConfigMap
-	secrets             []domain.KubernetesSecret
-	serviceCalls        atomic.Int64
-	ingressCalls        atomic.Int64
-	configMapCalls      atomic.Int64
-	secretCalls         atomic.Int64
-	serviceNamespace    string
-	ingressNamespace    string
-	configMapNamespace  string
-	secretNamespace     string
-	mutationMu          sync.Mutex
-	scaledVersion       string
-	scaledReplicas      int32
-	restartedVersion    string
-	restartedAt         time.Time
-	previewedImage      domain.WorkloadImageChange
-	updatedImage        domain.WorkloadImageChange
-	idleCloseCalls      atomic.Int64
+	probe                          domain.ClusterProbe
+	probeErr                       error
+	probeStarted                   chan<- struct{}
+	probeRelease                   <-chan struct{}
+	capabilities                   []domain.KubernetesCapability
+	capabilityErr                  error
+	capabilityCalls                atomic.Int64
+	capabilityStarted              chan<- struct{}
+	capabilityRelease              <-chan struct{}
+	capabilityNamespace            string
+	summaryCalls                   atomic.Int64
+	summaryStarted                 chan struct{}
+	summaryRelease                 <-chan struct{}
+	namespaces                     []domain.Namespace
+	detail                         domain.WorkloadDetail
+	events                         []domain.KubernetesEvent
+	logs                           domain.PodLogs
+	detailReference                domain.WorkloadReference
+	eventLimit                     int
+	logRequest                     domain.PodLogRequest
+	nodes                          []domain.Node
+	nodeDetail                     domain.NodeDetail
+	nodeEvents                     []domain.KubernetesEvent
+	nodeName                       string
+	nodeEventLimit                 int
+	services                       []domain.KubernetesService
+	ingresses                      []domain.KubernetesIngress
+	configMaps                     []domain.KubernetesConfigMap
+	secrets                        []domain.KubernetesSecret
+	persistentVolumeClaims         []domain.KubernetesPersistentVolumeClaim
+	persistentVolumes              []domain.KubernetesPersistentVolume
+	storageClasses                 []domain.KubernetesStorageClass
+	serviceCalls                   atomic.Int64
+	ingressCalls                   atomic.Int64
+	configMapCalls                 atomic.Int64
+	secretCalls                    atomic.Int64
+	persistentVolumeClaimCalls     atomic.Int64
+	persistentVolumeCalls          atomic.Int64
+	storageClassCalls              atomic.Int64
+	serviceNamespace               string
+	ingressNamespace               string
+	configMapNamespace             string
+	secretNamespace                string
+	persistentVolumeClaimNamespace string
+	mutationMu                     sync.Mutex
+	scaledVersion                  string
+	scaledReplicas                 int32
+	restartedVersion               string
+	restartedAt                    time.Time
+	previewedImage                 domain.WorkloadImageChange
+	updatedImage                   domain.WorkloadImageChange
+	idleCloseCalls                 atomic.Int64
 }
 
 func (g *fakeKubeGateway) CloseIdleConnections() { g.idleCloseCalls.Add(1) }
@@ -1743,6 +1807,21 @@ func (g *fakeKubeGateway) Secrets(_ context.Context, namespace string) ([]domain
 	g.secretNamespace = namespace
 	g.mutationMu.Unlock()
 	return append([]domain.KubernetesSecret(nil), g.secrets...), nil
+}
+func (g *fakeKubeGateway) PersistentVolumeClaims(_ context.Context, namespace string) ([]domain.KubernetesPersistentVolumeClaim, error) {
+	g.persistentVolumeClaimCalls.Add(1)
+	g.mutationMu.Lock()
+	g.persistentVolumeClaimNamespace = namespace
+	g.mutationMu.Unlock()
+	return append([]domain.KubernetesPersistentVolumeClaim(nil), g.persistentVolumeClaims...), nil
+}
+func (g *fakeKubeGateway) PersistentVolumes(context.Context) ([]domain.KubernetesPersistentVolume, error) {
+	g.persistentVolumeCalls.Add(1)
+	return append([]domain.KubernetesPersistentVolume(nil), g.persistentVolumes...), nil
+}
+func (g *fakeKubeGateway) StorageClasses(context.Context) ([]domain.KubernetesStorageClass, error) {
+	g.storageClassCalls.Add(1)
+	return append([]domain.KubernetesStorageClass(nil), g.storageClasses...), nil
 }
 func (g *fakeKubeGateway) WorkloadDetail(_ context.Context, reference domain.WorkloadReference) (domain.WorkloadDetail, error) {
 	g.detailReference = reference
