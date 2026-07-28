@@ -4,15 +4,18 @@ import type {
   KubernetesAccessResource,
   KubernetesAccessResourceDetail,
   KubernetesAccessResourceKind,
+  Namespace,
 } from '../types'
 import { formatDateTime } from '../utils'
 import { ErrorState, LoadingState } from './DataState'
 import { Modal } from './Modal'
+import { ServiceAccountAccessReview } from './ServiceAccountAccessReview'
 
 interface AccessResourceDetailModalProps {
   clusterId: string
   resourceKind: KubernetesAccessResourceKind
   resource: KubernetesAccessResource
+  namespaces: Namespace[]
   onClose: () => void
 }
 
@@ -20,6 +23,7 @@ export function AccessResourceDetailModal({
   clusterId,
   resourceKind,
   resource,
+  namespaces,
   onClose,
 }: AccessResourceDetailModalProps) {
   const [detail, setDetail] = useState<KubernetesAccessResourceDetail | null>(null)
@@ -59,12 +63,20 @@ export function AccessResourceDetailModal({
     >
       {loading ? <LoadingState label="正在读取访问控制详情" />
         : error ? <ErrorState error={error} onRetry={() => setAttempt((value) => value + 1)} />
-          : detail ? <AccessResourceDetailView detail={detail} /> : null}
+          : detail ? <AccessResourceDetailView clusterId={clusterId} detail={detail} namespaces={namespaces} /> : null}
     </Modal>
   )
 }
 
-function AccessResourceDetailView({ detail }: { detail: KubernetesAccessResourceDetail }) {
+function AccessResourceDetailView({
+  clusterId,
+  detail,
+  namespaces,
+}: {
+  clusterId: string
+  detail: KubernetesAccessResourceDetail
+  namespaces: Namespace[]
+}) {
   return (
     <div className="access-detail detail-overview">
       <dl className="detail-grid">
@@ -75,6 +87,9 @@ function AccessResourceDetailView({ detail }: { detail: KubernetesAccessResource
         {detail.role_ref && <div><dt>引用角色</dt><dd className="mono">{detail.role_ref.kind}/{detail.role_ref.name}</dd></div>}
       </dl>
       {detail.kind === 'ServiceAccount' && <ServiceAccountSummary detail={detail} />}
+      {detail.kind === 'ServiceAccount' && (
+        <ServiceAccountAccessReview clusterId={clusterId} detail={detail} namespaces={namespaces} />
+      )}
       {(detail.kind === 'Role' || detail.kind === 'ClusterRole') && <RulesSummary detail={detail} />}
       {(detail.kind === 'RoleBinding' || detail.kind === 'ClusterRoleBinding') && <SubjectsSummary detail={detail} />}
     </div>

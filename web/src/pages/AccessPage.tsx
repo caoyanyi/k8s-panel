@@ -174,6 +174,7 @@ export function AccessPage() {
           clusterId={selection.clusterId}
           resourceKind={selection.resourceKind}
           resource={selection.resource}
+          namespaces={namespaces.data ?? []}
           onClose={() => setSelection(null)}
         />
       )}

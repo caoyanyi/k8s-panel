@@ -144,6 +144,45 @@ func ValidateAccessResourceReference(reference KubernetesAccessResourceReference
 	return nil
 }
 
+func ValidateServiceAccountAccessReviewInput(input KubernetesServiceAccountAccessReviewInput) error {
+	if !validDNSLabel(input.ServiceAccount.Namespace) {
+		return Invalid("service_account.namespace", "must be a valid Kubernetes namespace")
+	}
+	if !validDNSSubdomain(input.ServiceAccount.Name) {
+		return Invalid("service_account.name", "must be a valid Kubernetes resource name")
+	}
+	attributes := input.ResourceAttributes
+	if attributes.Group != "" && !validDNSSubdomain(attributes.Group) {
+		return Invalid("resource_attributes.group", "must be empty or a valid Kubernetes API group")
+	}
+	if !validDNSLabel(attributes.Resource) {
+		return Invalid("resource_attributes.resource", "must be a valid Kubernetes API resource")
+	}
+	if attributes.Subresource != "" && !validDNSLabel(attributes.Subresource) {
+		return Invalid("resource_attributes.subresource", "must be empty or a valid Kubernetes subresource")
+	}
+	if !validAccessReviewVerb(attributes.Verb) {
+		return Invalid("resource_attributes.verb", "must be an allowed Kubernetes resource verb")
+	}
+	if attributes.Namespace != "" && !validDNSLabel(attributes.Namespace) {
+		return Invalid("resource_attributes.namespace", "must be empty or a valid Kubernetes namespace")
+	}
+	if attributes.Name != "" && !validRBACResourceName(attributes.Name) {
+		return Invalid("resource_attributes.name", "must be empty or a safe Kubernetes resource name")
+	}
+	return nil
+}
+
+func validAccessReviewVerb(value string) bool {
+	switch value {
+	case "get", "list", "watch", "create", "update", "patch", "delete", "deletecollection",
+		"proxy", "use", "bind", "escalate", "impersonate", "approve", "sign":
+		return true
+	default:
+		return false
+	}
+}
+
 func validRBACResourceName(value string) bool {
 	return value != "" && len(value) <= 253 && value != "." && value != ".." &&
 		value == strings.TrimSpace(value) && !strings.ContainsAny(value, "/%") &&

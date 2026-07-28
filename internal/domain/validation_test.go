@@ -248,6 +248,69 @@ func TestValidateAccessResourceScopeAndReference(t *testing.T) {
 	}
 }
 
+func TestValidateServiceAccountAccessReviewInput(t *testing.T) {
+	t.Parallel()
+
+	valid := KubernetesServiceAccountAccessReviewInput{
+		ServiceAccount: KubernetesServiceAccountReference{Namespace: "payments", Name: "gateway"},
+		ResourceAttributes: KubernetesResourceAttributes{
+			Group: "apps", Resource: "deployments", Subresource: "scale", Verb: "patch",
+			Namespace: "payments", Name: "gateway-api",
+		},
+	}
+	if err := ValidateServiceAccountAccessReviewInput(valid); err != nil {
+		t.Fatalf("ValidateServiceAccountAccessReviewInput() error = %v", err)
+	}
+	clusterScoped := valid
+	clusterScoped.ResourceAttributes = KubernetesResourceAttributes{Resource: "nodes", Verb: "list"}
+	if err := ValidateServiceAccountAccessReviewInput(clusterScoped); err != nil {
+		t.Fatalf("ValidateServiceAccountAccessReviewInput(cluster scoped) error = %v", err)
+	}
+
+	tests := []struct {
+		name      string
+		mutate    func(*KubernetesServiceAccountAccessReviewInput)
+		wantField string
+	}{
+		{name: "invalid service account namespace", mutate: func(input *KubernetesServiceAccountAccessReviewInput) {
+			input.ServiceAccount.Namespace = "bad/namespace"
+		}, wantField: "service_account.namespace"},
+		{name: "invalid service account name", mutate: func(input *KubernetesServiceAccountAccessReviewInput) {
+			input.ServiceAccount.Name = "Gateway"
+		}, wantField: "service_account.name"},
+		{name: "wildcard group", mutate: func(input *KubernetesServiceAccountAccessReviewInput) {
+			input.ResourceAttributes.Group = "*"
+		}, wantField: "resource_attributes.group"},
+		{name: "wildcard resource", mutate: func(input *KubernetesServiceAccountAccessReviewInput) {
+			input.ResourceAttributes.Resource = "*"
+		}, wantField: "resource_attributes.resource"},
+		{name: "invalid subresource", mutate: func(input *KubernetesServiceAccountAccessReviewInput) {
+			input.ResourceAttributes.Subresource = "pod/log"
+		}, wantField: "resource_attributes.subresource"},
+		{name: "unknown verb", mutate: func(input *KubernetesServiceAccountAccessReviewInput) {
+			input.ResourceAttributes.Verb = "admin"
+		}, wantField: "resource_attributes.verb"},
+		{name: "invalid target namespace", mutate: func(input *KubernetesServiceAccountAccessReviewInput) {
+			input.ResourceAttributes.Namespace = "Payments"
+		}, wantField: "resource_attributes.namespace"},
+		{name: "unsafe object name", mutate: func(input *KubernetesServiceAccountAccessReviewInput) {
+			input.ResourceAttributes.Name = "../secret"
+		}, wantField: "resource_attributes.name"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			input := valid
+			tt.mutate(&input)
+			err := ValidateServiceAccountAccessReviewInput(input)
+			var validationErr *ValidationError
+			if !errors.As(err, &validationErr) || validationErr.Field != tt.wantField {
+				t.Fatalf("ValidateServiceAccountAccessReviewInput() error = %v, want field %q", err, tt.wantField)
+			}
+		})
+	}
+}
+
 func TestValidateRepositoryInput(t *testing.T) {
 	t.Parallel()
 

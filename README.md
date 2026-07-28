@@ -9,7 +9,7 @@ K8s Panel 是一个独立实现的 Kubernetes 与 Helm 管理面板。后端使�
 - 集群概览、节点/命名空间资源清单与节点诊断详情
 - Deployment/StatefulSet/DaemonSet/Pod 工作负载查询
 - Service/Ingress 网络清单、ConfigMap/Secret 最小配置摘要，以及 PVC/PV/StorageClass 存储摘要
-- ServiceAccount、Role、RoleBinding、ClusterRole、ClusterRoleBinding 元数据清单与按需规则/主体详情
+- ServiceAccount、Role、RoleBinding、ClusterRole、ClusterRoleBinding 元数据清单与按需规则/主体详情，支持 ServiceAccount 单动作权限模拟
 - 按集群或命名空间查看事件，默认聚焦 Warning，支持本地搜索和分页
 - 工作负载详情、脱敏 YAML、关联事件与有界 Pod 日志快照
 - Deployment 受控扩缩容、滚动重启与容器镜像更新，带预检、资源版本冲突保护和生产确认
@@ -60,7 +60,7 @@ go run ./cmd/panel
 
 面板默认拒绝访问私网地址。若 Kubernetes API 或 Helm 仓库位于私网，应将其精确网段加入 `PANEL_ALLOWED_PRIVATE_CIDRS`，不要无条件放开全部内网。
 
-Kubernetes 单类资源清单最多读取 5,000 项、20 页和 32 MiB 原始数据，Web 表格每页只渲染 100 行；事件中心不自动轮询，默认在 API Server 侧过滤 Warning，单次最多串行读取 8 页、2,000 项和 16 MiB 原始事件并返回最近 200 条，用户可请求的返回上限为 500。配置与存储清单使用 Kubernetes Table 内容协商，只接收最小摘要且不回退读取完整对象；Secret 必须限定到单个命名空间，PV 卷源、CSI 标识、挂载选项和 StorageClass 参数不会进入面板响应。访问控制清单一次只读取一种资源并使用元数据内容协商，命名空间资源不允许全集群读取；清单最多 8 页、2,000 项和 16 MiB，单对象详情最多 2 MiB，规则和主体分别最多展示 128 项，ServiceAccount 详情不返回 Secret 名称。超过后端上限会停止读取并返回错误，避免大集群拖垮控制面。
+Kubernetes 单类资源清单最多读取 5,000 项、20 页和 32 MiB 原始数据，Web 表格每页只渲染 100 行；事件中心不自动轮询，默认在 API Server 侧过滤 Warning，单次最多串行读取 8 页、2,000 项和 16 MiB 原始事件并返回最近 200 条，用户可请求的返回上限为 500。配置与存储清单使用 Kubernetes Table 内容协商，只接收最小摘要且不回退读取完整对象；Secret 必须限定到单个命名空间，PV 卷源、CSI 标识、挂载选项和 StorageClass 参数不会进入面板响应。访问控制清单一次只读取一种资源并使用元数据内容协商，命名空间资源不允许全集群读取；清单最多 8 页、2,000 项和 16 MiB，单对象详情最多 2 MiB，规则和主体分别最多展示 128 项，ServiceAccount 详情不返回 Secret 名称。ServiceAccount 权限模拟每次只提交一个 64 KiB 上限的 SubjectAccessReview，不扫描 RBAC 图谱、不轮询、不缓存结果。超过后端上限会停止读取并返回错误，避免大集群拖垮控制面。
 
 自适应资源控制默认在内存或归一化系统负载达到 80% 时，将后台操作、Kubernetes 读取并发和客户端缓存容量分别减半；达到 95% 时暂停启动新任务、快速拒绝新的集群读取、显式连接测试、权限能力检测和凭据轮换，并将客户端缓存收缩到 1。权限能力检测固定顺序执行 10 次轻量授权检查，单批次只占用一个读取槽，不轮询、不缓存结果；重复检测同一集群和命名空间时快速拒绝。凭据轮换先使用独立客户端验证候选凭据，成功后再原子替换，失败时保留原凭据和缓存连接。客户端按集群与凭据版本复用，闲置超时、LRU 淘汰、禁用/删除集群或服务关闭时释放空闲连接，不缓存 Kubernetes 对象和日志。指标暂不可用时按配置上限运行。低配置主机建议设置 `PANEL_HELM_WORKERS=1`、`PANEL_KUBERNETES_READ_CONCURRENCY=2`、`PANEL_KUBERNETES_CLIENT_CACHE_SIZE=4`、较小的 `PANEL_OPERATION_QUEUE_SIZE`，并按实际流量下调 `PANEL_MAX_CONCURRENT_REQUESTS`。
 

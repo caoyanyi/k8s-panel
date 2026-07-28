@@ -61,6 +61,13 @@ func TestServerAuthenticationAndClusterLifecycle(t *testing.T) {
 	if unauthorizedAccess.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthorized access resources status = %d, want 401", unauthorizedAccess.Code)
 	}
+	unauthorizedAccessReview := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorizedAccessReview, httptest.NewRequest(
+		http.MethodPost, "/api/v1/clusters/clu_1/service-account-access-reviews", strings.NewReader(`{}`),
+	))
+	if unauthorizedAccessReview.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized service account access review status = %d, want 401", unauthorizedAccessReview.Code)
+	}
 
 	cookie := login(t, handler)
 	createBody := `{
@@ -221,6 +228,43 @@ func TestServerAuthenticationAndClusterLifecycle(t *testing.T) {
 		t.Fatalf("invalid access name status = %d, body = %s", invalidAccessName.Code, invalidAccessName.Body.String())
 	}
 	assertErrorField(t, invalidAccessName.Body.Bytes(), "name")
+	accessReviewPath := "/api/v1/clusters/" + created.Data.ID + "/service-account-access-reviews"
+	accessReviewBody := `{
+		"service_account":{"namespace":"payments","name":"gateway"},
+		"resource_attributes":{"group":"apps","resource":"deployments","subresource":"scale","verb":"patch","namespace":"payments","name":"gateway-api"}
+	}`
+	accessReview := authenticatedRequest(t, handler, cookie, http.MethodPost, accessReviewPath, accessReviewBody)
+	if accessReview.Code != http.StatusOK ||
+		!strings.Contains(accessReview.Body.String(), `"service_account":{"namespace":"payments","name":"gateway"}`) ||
+		!strings.Contains(accessReview.Body.String(), `"state":"denied"`) ||
+		!strings.Contains(accessReview.Body.String(), `"checked_at":"2026-07-24T08:00:00Z"`) ||
+		strings.Contains(accessReview.Body.String(), "authorizer") {
+		t.Fatalf("service account access review status = %d, body = %s", accessReview.Code, accessReview.Body.String())
+	}
+	invalidAccessReview := authenticatedRequest(t, handler, cookie, http.MethodPost, accessReviewPath, `{
+		"service_account":{"namespace":"payments","name":"gateway"},
+		"resource_attributes":{"resource":"*","verb":"get"}
+	}`)
+	if invalidAccessReview.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid service account access review status = %d, body = %s", invalidAccessReview.Code, invalidAccessReview.Body.String())
+	}
+	assertErrorField(t, invalidAccessReview.Body.Bytes(), "resource_attributes.resource")
+	unknownAccessReviewField := authenticatedRequest(t, handler, cookie, http.MethodPost, accessReviewPath, `{
+		"service_account":{"namespace":"payments","name":"gateway"},
+		"resource_attributes":{"resource":"pods","verb":"get"},"reason":"private"
+	}`)
+	if unknownAccessReviewField.Code != http.StatusBadRequest {
+		t.Fatalf("unknown service account access review field status = %d, body = %s", unknownAccessReviewField.Code, unknownAccessReviewField.Body.String())
+	}
+	crossOriginRequest := httptest.NewRequest(http.MethodPost, accessReviewPath, strings.NewReader(accessReviewBody))
+	crossOriginRequest.Header.Set("Content-Type", "application/json")
+	crossOriginRequest.Header.Set("Origin", "https://attacker.example")
+	crossOriginRequest.AddCookie(cookie)
+	crossOriginAccessReview := httptest.NewRecorder()
+	handler.ServeHTTP(crossOriginAccessReview, crossOriginRequest)
+	if crossOriginAccessReview.Code != http.StatusForbidden {
+		t.Fatalf("cross-origin service account access review status = %d, body = %s", crossOriginAccessReview.Code, crossOriginAccessReview.Body.String())
+	}
 	eventsPath := "/api/v1/clusters/" + created.Data.ID + "/events"
 	events := authenticatedRequest(t, handler, cookie, http.MethodGet, eventsPath+"?namespace=payments&type=Warning&limit=100", "")
 	if events.Code != http.StatusOK || !strings.Contains(events.Body.String(), `"name":"gateway-warning"`) ||
@@ -855,6 +899,9 @@ func (testKube) AccessResourceDetail(_ context.Context, reference domain.Kuberne
 		Subjects:     []domain.KubernetesAccessSubject{{Kind: "Group", Name: "payments-readers"}},
 		SubjectCount: 1,
 	}, nil
+}
+func (testKube) ReviewServiceAccountAccess(context.Context, domain.KubernetesServiceAccountAccessReviewInput) (domain.KubernetesCapabilityState, error) {
+	return domain.KubernetesCapabilityDenied, nil
 }
 func (testKube) WorkloadDetail(_ context.Context, reference domain.WorkloadReference) (domain.WorkloadDetail, error) {
 	return domain.WorkloadDetail{

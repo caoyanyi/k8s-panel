@@ -673,6 +673,77 @@ func (s *Service) AccessResourceDetail(
 	return gateway.AccessResourceDetail(ctx, reference)
 }
 
+func (s *Service) ReviewServiceAccountAccess(
+	ctx context.Context,
+	actor, requestID, clusterID string,
+	input domain.KubernetesServiceAccountAccessReviewInput,
+) (domain.KubernetesServiceAccountAccessReview, error) {
+	if err := domain.ValidateServiceAccountAccessReviewInput(input); err != nil {
+		return domain.KubernetesServiceAccountAccessReview{}, err
+	}
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return domain.KubernetesServiceAccountAccessReview{}, err
+	}
+	gateway, reviewErr := s.kubeGateway(ctx, clusterID)
+	var state domain.KubernetesCapabilityState
+	if reviewErr == nil {
+		state, reviewErr = gateway.ReviewServiceAccountAccess(ctx, input)
+	}
+	if reviewErr == nil && state != domain.KubernetesCapabilityAllowed && state != domain.KubernetesCapabilityDenied &&
+		state != domain.KubernetesCapabilityIndeterminate {
+		reviewErr = fmt.Errorf("invalid Kubernetes service account access review state: %w", domain.ErrUpstream)
+	}
+	checkedAt := s.now()
+	release()
+	result := "failed"
+	summary := "service account access review failed"
+	if reviewErr == nil {
+		result = "succeeded"
+		attributes := input.ResourceAttributes
+		summary = fmt.Sprintf(
+			"state=%s, verb=%s, group=%s, resource=%s, subresource=%s, target_namespace=%s",
+			state,
+			attributes.Verb,
+			accessReviewAuditValue(attributes.Group, "core"),
+			attributes.Resource,
+			accessReviewAuditValue(attributes.Subresource, "-"),
+			accessReviewAuditValue(attributes.Namespace, "cluster"),
+		)
+	}
+	serviceAccount := input.ServiceAccount
+	if err := s.audit(
+		ctx,
+		actor,
+		requestID,
+		"service_account.access_review",
+		result,
+		clusterID,
+		serviceAccount.Namespace,
+		serviceAccount.Namespace+"/"+serviceAccount.Name,
+		summary,
+		"",
+	); err != nil {
+		return domain.KubernetesServiceAccountAccessReview{}, fmt.Errorf("write service account access review audit: %w", err)
+	}
+	if reviewErr != nil {
+		return domain.KubernetesServiceAccountAccessReview{}, reviewErr
+	}
+	return domain.KubernetesServiceAccountAccessReview{
+		ServiceAccount:     serviceAccount,
+		ResourceAttributes: input.ResourceAttributes,
+		State:              state,
+		CheckedAt:          checkedAt,
+	}, nil
+}
+
+func accessReviewAuditValue(value, empty string) string {
+	if value == "" {
+		return empty
+	}
+	return value
+}
+
 func (s *Service) WorkloadDetail(ctx context.Context, clusterID string, reference domain.WorkloadReference) (domain.WorkloadDetail, error) {
 	if err := domain.ValidateWorkloadReference(reference); err != nil {
 		return domain.WorkloadDetail{}, err

@@ -356,6 +356,22 @@ func (s *Server) getAccessResourceDetail(w http.ResponseWriter, r *http.Request)
 	writeData(w, http.StatusOK, item)
 }
 
+func (s *Server) reviewServiceAccountAccess(w http.ResponseWriter, r *http.Request) {
+	var input domain.KubernetesServiceAccountAccessReviewInput
+	if err := decodeJSON(w, r, &input); err != nil {
+		writeInvalidJSON(w, r)
+		return
+	}
+	review, err := s.service.ReviewServiceAccountAccess(
+		r.Context(), principal(r).Username, requestID(r), r.PathValue("id"), input,
+	)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeData(w, http.StatusOK, review)
+}
+
 func (s *Server) getWorkloadDetail(w http.ResponseWriter, r *http.Request) {
 	item, err := s.service.WorkloadDetail(r.Context(), r.PathValue("id"), workloadReference(r))
 	if err != nil {

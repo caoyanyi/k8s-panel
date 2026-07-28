@@ -711,6 +711,12 @@ func TestServiceRejectsKubernetesReadsDuringCriticalResourcePressure(t *testing.
 			})
 			return err
 		}},
+		{name: "service account access review", call: func() error {
+			_, err := service.ReviewServiceAccountAccess(
+				context.Background(), "admin", "req_review", cluster.ID, validServiceAccountAccessReviewInput(),
+			)
+			return err
+		}},
 		{name: "workload detail", call: func() error {
 			_, err := service.WorkloadDetail(context.Background(), cluster.ID, reference)
 			return err
@@ -759,8 +765,8 @@ func TestServiceRejectsKubernetesReadsDuringCriticalResourcePressure(t *testing.
 	if calls := gateway.clusterEventCalls.Load(); calls != 0 {
 		t.Fatalf("event reads reached Kubernetes %d times under critical pressure", calls)
 	}
-	if listCalls, detailCalls := gateway.accessListCalls.Load(), gateway.accessDetailCalls.Load(); listCalls != 0 || detailCalls != 0 {
-		t.Fatalf("access reads reached Kubernetes under critical pressure: lists=%d details=%d", listCalls, detailCalls)
+	if listCalls, detailCalls, reviewCalls := gateway.accessListCalls.Load(), gateway.accessDetailCalls.Load(), gateway.accessReviewCalls.Load(); listCalls != 0 || detailCalls != 0 || reviewCalls != 0 {
+		t.Fatalf("access reads reached Kubernetes under critical pressure: lists=%d details=%d reviews=%d", listCalls, detailCalls, reviewCalls)
 	}
 	capacity := service.OperationCapacity().KubernetesReads
 	if !capacity.Adaptive || capacity.Pressure != resourceguard.PressureCritical || capacity.Limit != 0 || capacity.Maximum != 4 {
@@ -1013,6 +1019,69 @@ func TestServiceListsAccessResourcesAndValidatesScopeBeforeGateway(t *testing.T)
 	}
 	if gateway.accessListCalls.Load() != listCalls || gateway.accessDetailCalls.Load() != detailCalls {
 		t.Fatal("invalid access scope reached Kubernetes gateway")
+	}
+}
+
+func TestServiceReviewsServiceAccountAccessAndWritesBoundedAudit(t *testing.T) {
+	t.Parallel()
+
+	gateway := &fakeKubeGateway{
+		probe:             domain.ClusterProbe{Version: "v1.36.2"},
+		accessReviewState: domain.KubernetesCapabilityAllowed,
+	}
+	service, _, _ := newTestService(t, serviceFakes{kube: gateway})
+	cluster, err := service.CreateCluster(context.Background(), "admin", "req_cluster", domain.ClusterInput{
+		Name: "cluster", Environment: domain.EnvironmentDevelopment, Server: "https://api.example.com", BearerToken: "token",
+	})
+	if err != nil {
+		t.Fatalf("CreateCluster() error = %v", err)
+	}
+	input := validServiceAccountAccessReviewInput()
+
+	review, err := service.ReviewServiceAccountAccess(context.Background(), "admin", "req_review", cluster.ID, input)
+	if err != nil || review.State != domain.KubernetesCapabilityAllowed || review.ServiceAccount != input.ServiceAccount ||
+		review.ResourceAttributes != input.ResourceAttributes || review.CheckedAt.IsZero() {
+		t.Fatalf("ReviewServiceAccountAccess() = %#v, %v", review, err)
+	}
+	if gateway.accessReviewCalls.Load() != 1 || gateway.accessReviewInput != input {
+		t.Fatalf("access review gateway input = %#v, calls = %d", gateway.accessReviewInput, gateway.accessReviewCalls.Load())
+	}
+
+	invalid := input
+	invalid.ResourceAttributes.Resource = "*"
+	if _, err := service.ReviewServiceAccountAccess(context.Background(), "admin", "req_invalid", cluster.ID, invalid); err == nil {
+		t.Fatal("ReviewServiceAccountAccess() accepted a wildcard resource")
+	}
+	if gateway.accessReviewCalls.Load() != 1 {
+		t.Fatal("invalid access review reached Kubernetes gateway")
+	}
+
+	gateway.accessReviewErr = errors.New("private authorizer failure")
+	if _, err := service.ReviewServiceAccountAccess(context.Background(), "admin", "req_failed", cluster.ID, input); err == nil {
+		t.Fatal("ReviewServiceAccountAccess() succeeded after gateway failure")
+	}
+	audits, err := service.ListAuditEvents(context.Background(), 100)
+	if err != nil {
+		t.Fatalf("ListAuditEvents() error = %v", err)
+	}
+	foundSuccess := false
+	foundFailure := false
+	for _, event := range audits {
+		if event.Action != "service_account.access_review" {
+			continue
+		}
+		if event.Target != "payments/gateway" || event.Namespace != "payments" || strings.Contains(event.Summary, "private") {
+			t.Errorf("service account access review audit = %#v", event)
+		}
+		switch event.RequestID {
+		case "req_review":
+			foundSuccess = event.Result == "succeeded" && event.Summary == "state=allowed, verb=get, group=core, resource=pods, subresource=-, target_namespace=payments"
+		case "req_failed":
+			foundFailure = event.Result == "failed" && event.Summary == "service account access review failed"
+		}
+	}
+	if !foundSuccess || !foundFailure {
+		t.Fatalf("service account access review audits missing: success=%t failure=%t events=%#v", foundSuccess, foundFailure, audits)
 	}
 }
 
@@ -1810,6 +1879,8 @@ type fakeKubeGateway struct {
 	clusterEvents                  []domain.KubernetesEvent
 	accessResources                []domain.KubernetesAccessResource
 	accessDetail                   domain.KubernetesAccessResourceDetail
+	accessReviewState              domain.KubernetesCapabilityState
+	accessReviewErr                error
 	serviceCalls                   atomic.Int64
 	ingressCalls                   atomic.Int64
 	configMapCalls                 atomic.Int64
@@ -1820,6 +1891,7 @@ type fakeKubeGateway struct {
 	clusterEventCalls              atomic.Int64
 	accessListCalls                atomic.Int64
 	accessDetailCalls              atomic.Int64
+	accessReviewCalls              atomic.Int64
 	serviceNamespace               string
 	ingressNamespace               string
 	configMapNamespace             string
@@ -1831,6 +1903,7 @@ type fakeKubeGateway struct {
 	accessKind                     domain.KubernetesAccessResourceKind
 	accessNamespace                string
 	accessReference                domain.KubernetesAccessResourceReference
+	accessReviewInput              domain.KubernetesServiceAccountAccessReviewInput
 	mutationMu                     sync.Mutex
 	scaledVersion                  string
 	scaledReplicas                 int32
@@ -1981,6 +2054,13 @@ func (g *fakeKubeGateway) AccessResourceDetail(_ context.Context, reference doma
 	g.mutationMu.Unlock()
 	return g.accessDetail, nil
 }
+func (g *fakeKubeGateway) ReviewServiceAccountAccess(_ context.Context, input domain.KubernetesServiceAccountAccessReviewInput) (domain.KubernetesCapabilityState, error) {
+	g.accessReviewCalls.Add(1)
+	g.mutationMu.Lock()
+	g.accessReviewInput = input
+	g.mutationMu.Unlock()
+	return g.accessReviewState, g.accessReviewErr
+}
 func (g *fakeKubeGateway) WorkloadDetail(_ context.Context, reference domain.WorkloadReference) (domain.WorkloadDetail, error) {
 	g.detailReference = reference
 	return g.detail, nil
@@ -1993,6 +2073,15 @@ func (g *fakeKubeGateway) WorkloadEvents(_ context.Context, reference domain.Wor
 func (g *fakeKubeGateway) PodLogs(_ context.Context, request domain.PodLogRequest) (domain.PodLogs, error) {
 	g.logRequest = request
 	return g.logs, nil
+}
+
+func validServiceAccountAccessReviewInput() domain.KubernetesServiceAccountAccessReviewInput {
+	return domain.KubernetesServiceAccountAccessReviewInput{
+		ServiceAccount: domain.KubernetesServiceAccountReference{Namespace: "payments", Name: "gateway"},
+		ResourceAttributes: domain.KubernetesResourceAttributes{
+			Resource: "pods", Verb: "get", Namespace: "payments",
+		},
+	}
 }
 
 func (g *fakeKubeGateway) ScaleWorkload(_ context.Context, reference domain.WorkloadReference, resourceVersion string, replicas int32) (domain.Workload, error) {

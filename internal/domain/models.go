@@ -430,6 +430,32 @@ type KubernetesAccessResourceDetail struct {
 	ImagePullSecretCount         int                       `json:"image_pull_secret_count"`
 }
 
+type KubernetesServiceAccountReference struct {
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+}
+
+type KubernetesResourceAttributes struct {
+	Group       string `json:"group,omitempty"`
+	Resource    string `json:"resource"`
+	Subresource string `json:"subresource,omitempty"`
+	Verb        string `json:"verb"`
+	Namespace   string `json:"namespace,omitempty"`
+	Name        string `json:"name,omitempty"`
+}
+
+type KubernetesServiceAccountAccessReviewInput struct {
+	ServiceAccount     KubernetesServiceAccountReference `json:"service_account"`
+	ResourceAttributes KubernetesResourceAttributes      `json:"resource_attributes"`
+}
+
+type KubernetesServiceAccountAccessReview struct {
+	ServiceAccount     KubernetesServiceAccountReference `json:"service_account"`
+	ResourceAttributes KubernetesResourceAttributes      `json:"resource_attributes"`
+	State              KubernetesCapabilityState         `json:"state"`
+	CheckedAt          time.Time                         `json:"checked_at"`
+}
+
 type Workload struct {
 	Kind      string    `json:"kind"`
 	Namespace string    `json:"namespace"`

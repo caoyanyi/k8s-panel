@@ -90,6 +90,95 @@ describe('AccessPage', () => {
     ])
   })
 
+  it('reviews one ServiceAccount resource action only after explicit submission', async () => {
+    const reviewRequests: Array<{ method: string; body: unknown }> = []
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input)
+      if (path.endsWith('/namespaces')) return Promise.resolve(dataResponse([namespace]))
+      if (path.endsWith('/access-resources?kind=clusterroles')) return Promise.resolve(dataResponse([clusterRole]))
+      if (path.endsWith('/access-resources?kind=serviceaccounts&namespace=payments')) return Promise.resolve(dataResponse([serviceAccount]))
+      if (path.endsWith('/access-resources/serviceaccounts/gateway?namespace=payments')) return Promise.resolve(dataResponse(serviceAccountDetail))
+      if (path.endsWith('/service-account-access-reviews')) {
+        reviewRequests.push({ method: init?.method ?? 'GET', body: JSON.parse(String(init?.body)) })
+        return Promise.resolve(dataResponse({
+          service_account: { namespace: 'payments', name: 'gateway' },
+          resource_attributes: { resource: 'pods', verb: 'get', namespace: 'payments' },
+          state: 'allowed', checked_at: '2026-07-28T08:30:00Z',
+        }))
+      }
+      return Promise.resolve(errorResponse(404, 'not_found'))
+    }))
+    const user = userEvent.setup()
+
+    renderPage()
+    expect(await screen.findByText('view', { exact: true })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'ServiceAccount' }))
+    await user.selectOptions(screen.getByLabelText('命名空间'), 'payments')
+    expect(await screen.findByText('gateway', { exact: true })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '查看 gateway' }))
+    const dialog = await screen.findByRole('dialog', { name: 'ServiceAccount · gateway' })
+    await within(dialog).findByRole('heading', { name: '权限模拟' })
+    expect(reviewRequests).toEqual([])
+
+    await user.click(within(dialog).getByRole('button', { name: '检查权限' }))
+    await waitFor(() => expect(reviewRequests).toHaveLength(1))
+    expect(reviewRequests[0]).toEqual({
+      method: 'POST',
+      body: {
+        service_account: { namespace: 'payments', name: 'gateway' },
+        resource_attributes: { resource: 'pods', verb: 'get', namespace: 'payments' },
+      },
+    })
+    expect(await within(dialog).findByText('允许', { exact: true })).toBeInTheDocument()
+
+    await user.selectOptions(within(dialog).getByLabelText('目标资源'), 'nodes')
+    expect(within(dialog).getByLabelText('目标命名空间')).toBeDisabled()
+    expect(within(dialog).getByLabelText('目标命名空间')).toHaveValue('')
+    expect(within(dialog).queryByText('允许', { exact: true })).not.toBeInTheDocument()
+    await user.click(within(dialog).getByRole('button', { name: '检查权限' }))
+    await waitFor(() => expect(reviewRequests).toHaveLength(2))
+    expect(reviewRequests[1]).toEqual({
+      method: 'POST',
+      body: {
+        service_account: { namespace: 'payments', name: 'gateway' },
+        resource_attributes: { resource: 'nodes', verb: 'get' },
+      },
+    })
+  })
+
+  it('aborts an active ServiceAccount access review when the dialog closes', async () => {
+    let reviewSignal: AbortSignal | null = null
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input)
+      if (path.endsWith('/namespaces')) return Promise.resolve(dataResponse([namespace]))
+      if (path.endsWith('/access-resources?kind=clusterroles')) return Promise.resolve(dataResponse([clusterRole]))
+      if (path.endsWith('/access-resources?kind=serviceaccounts&namespace=payments')) return Promise.resolve(dataResponse([serviceAccount]))
+      if (path.endsWith('/access-resources/serviceaccounts/gateway?namespace=payments')) return Promise.resolve(dataResponse(serviceAccountDetail))
+      if (path.endsWith('/service-account-access-reviews')) {
+        reviewSignal = init?.signal ?? null
+        return new Promise<Response>((_resolve, reject) => {
+          reviewSignal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true })
+        })
+      }
+      return Promise.resolve(errorResponse(404, 'not_found'))
+    }))
+    const user = userEvent.setup()
+
+    renderPage()
+    expect(await screen.findByText('view', { exact: true })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'ServiceAccount' }))
+    await user.selectOptions(screen.getByLabelText('命名空间'), 'payments')
+    expect(await screen.findByText('gateway', { exact: true })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '查看 gateway' }))
+    const dialog = await screen.findByRole('dialog', { name: 'ServiceAccount · gateway' })
+    await user.click(within(dialog).getByRole('button', { name: '检查权限' }))
+    await waitFor(() => expect(reviewSignal).not.toBeNull())
+    await user.click(within(dialog).getByRole('button', { name: '关闭' }))
+
+    await waitFor(() => expect(reviewSignal?.aborted).toBe(true))
+    expect(screen.queryByRole('dialog', { name: 'ServiceAccount · gateway' })).not.toBeInTheDocument()
+  })
+
   it('aborts an active list refresh when the access kind changes', async () => {
     let clusterRoleRequests = 0
     let refreshSignal: AbortSignal | null = null
@@ -192,6 +281,17 @@ const role = {
 
 const clusterRoleBinding = {
   kind: 'ClusterRoleBinding', name: 'all-readers', created_at: '2026-07-25T08:00:00Z',
+}
+
+const serviceAccount = {
+  kind: 'ServiceAccount', namespace: 'payments', name: 'gateway', created_at: '2026-07-24T08:00:00Z',
+}
+
+const serviceAccountDetail = {
+  ...serviceAccount,
+  rules: [], rule_count: 0, rules_truncated: false,
+  subjects: [], subject_count: 0, subjects_truncated: false,
+  automount_service_account_token: true, secret_count: 0, image_pull_secret_count: 1,
 }
 
 const clusterRoleDetail = {

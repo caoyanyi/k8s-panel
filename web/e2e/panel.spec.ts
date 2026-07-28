@@ -445,6 +445,29 @@ test('access inventory loads metadata by kind and fetches details on demand', as
   await expect(page.getByText('gateway-reader', { exact: true })).toBeVisible()
   expect(requestedKinds).toContain('roles:payments')
 
+  await page.getByRole('button', { name: 'ServiceAccount' }).click()
+  await expect(page.getByText('gateway', { exact: true })).toBeVisible()
+  expect(requestedKinds).toContain('serviceaccounts:payments')
+  await page.getByRole('button', { name: '查看 gateway' }).click()
+  const serviceAccountDialog = page.getByRole('dialog', { name: 'ServiceAccount · gateway' })
+  await expect(serviceAccountDialog.getByRole('heading', { name: '权限模拟' })).toBeVisible()
+  expect(requestedKinds.some((request) => request.startsWith('review:'))).toBe(false)
+  await serviceAccountDialog.getByLabel('目标资源').selectOption('pod-logs')
+  await serviceAccountDialog.getByLabel('对象名称（可选）').fill('gateway-0')
+  const reviewRequestPromise = page.waitForRequest((request) => (
+    request.method() === 'POST' && request.url().endsWith('/service-account-access-reviews')
+  ))
+  await serviceAccountDialog.getByRole('button', { name: '检查权限' }).click()
+  const reviewRequest = await reviewRequestPromise
+  expect(reviewRequest.postDataJSON()).toEqual({
+    service_account: { namespace: 'payments', name: 'gateway' },
+    resource_attributes: { resource: 'pods', subresource: 'log', verb: 'get', namespace: 'payments', name: 'gateway-0' },
+  })
+  await expect(serviceAccountDialog.getByText('允许', { exact: true })).toBeVisible()
+  const reviewAccessibility = await new AxeBuilder({ page }).include('.modal').analyze()
+  expect(reviewAccessibility.violations.filter((violation) => ['serious', 'critical'].includes(violation.impact ?? ''))).toEqual([])
+  await page.screenshot({ path: `test-results/${testInfo.project.name}-service-account-access-review.png` })
+
   overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
   expect(overflow).toBeLessThanOrEqual(1)
   const result = await new AxeBuilder({ page }).analyze()
@@ -708,6 +731,8 @@ async function mockAccessResources(page: Page, requestedKinds: string[]) {
         data = [{ kind: 'ClusterRole', name: 'view', created_at: '2026-07-24T08:00:00Z' }]
       } else if (kind === 'roles') {
         data = [{ kind: 'Role', namespace: 'payments', name: 'gateway-reader', created_at: '2026-07-24T08:00:00Z' }]
+      } else if (kind === 'serviceaccounts') {
+        data = [{ kind: 'ServiceAccount', namespace: 'payments', name: 'gateway', created_at: '2026-07-24T08:00:00Z' }]
       } else {
         data = []
       }
@@ -722,6 +747,21 @@ async function mockAccessResources(page: Page, requestedKinds: string[]) {
         rule_count: 1, rules_truncated: false, subjects: [], subject_count: 0, subjects_truncated: false,
         secret_count: 0, image_pull_secret_count: 0,
       }
+    } else if (path === '/api/v1/clusters/clu_1/access-resources/serviceaccounts/gateway') {
+      requestedKinds.push('detail:serviceaccounts:gateway:payments')
+      data = {
+        kind: 'ServiceAccount', namespace: 'payments', name: 'gateway', created_at: '2026-07-24T08:00:00Z',
+        rules: [], rule_count: 0, rules_truncated: false,
+        subjects: [], subject_count: 0, subjects_truncated: false,
+        automount_service_account_token: true, secret_count: 0, image_pull_secret_count: 1,
+      }
+    } else if (path === '/api/v1/clusters/clu_1/service-account-access-reviews' && route.request().method() === 'POST') {
+      const input = route.request().postDataJSON() as {
+        service_account: { namespace: string; name: string }
+        resource_attributes: Record<string, string>
+      }
+      requestedKinds.push(`review:${input.service_account.namespace}:${input.service_account.name}`)
+      data = { ...input, state: 'allowed', checked_at: '2026-07-28T08:30:00Z' }
     } else {
       data = []
     }

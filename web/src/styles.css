@@ -394,6 +394,11 @@ select:disabled { cursor: not-allowed; background: #f3f5f4; color: #89938d; }
 .access-subject-table { min-width: 680px; }
 .access-list-cell { max-width: 320px; line-height: 1.45; overflow-wrap: anywhere; }
 .access-truncated { padding: 8px 10px; border-left: 3px solid var(--warning); background: #fff8ea; color: #80540f; font-size: 11px; }
+.service-account-access-review { padding-top: 2px; border-top: 1px solid var(--line); }
+.access-review-form { display: grid; gap: 14px; }
+.access-review-footer { min-height: 42px; padding-top: 12px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid var(--line); }
+.access-review-result { min-width: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; color: var(--muted); font-size: 11px; }
+.access-review-footer .button { min-width: 126px; }
 .node-resource-table { min-width: 520px; }
 .address-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-top: 1px solid var(--line); border-left: 1px solid var(--line); }
 .address-list > div { min-height: 48px; padding: 9px 12px; display: flex; flex-direction: column; gap: 5px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); overflow: hidden; }
@@ -502,6 +507,8 @@ select:disabled { cursor: not-allowed; background: #f3f5f4; color: #89938d; }
   .yaml-view, .log-view { min-height: 330px; }
   .form-grid { grid-template-columns: 1fr; gap: 13px; }
   .field-full { grid-column: auto; }
+  .access-review-footer { align-items: stretch; flex-direction: column; }
+  .access-review-footer .button { width: 100%; }
   .form-actions { flex-wrap: wrap; }
   .form-actions .button { flex: 1; }
   .capability-controls { grid-template-columns: 1fr; }

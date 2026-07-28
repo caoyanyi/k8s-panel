@@ -257,6 +257,30 @@ export interface KubernetesAccessResourceDetail extends KubernetesAccessResource
   image_pull_secret_count: number
 }
 
+export interface KubernetesServiceAccountReference {
+  namespace: string
+  name: string
+}
+
+export interface KubernetesResourceAttributes {
+  group?: string
+  resource: string
+  subresource?: string
+  verb: string
+  namespace?: string
+  name?: string
+}
+
+export interface KubernetesServiceAccountAccessReviewInput {
+  service_account: KubernetesServiceAccountReference
+  resource_attributes: KubernetesResourceAttributes
+}
+
+export interface KubernetesServiceAccountAccessReview extends KubernetesServiceAccountAccessReviewInput {
+  state: KubernetesCapabilityState
+  checked_at: string
+}
+
 export interface WorkloadContainer {
   name: string
   image: string
