@@ -239,6 +239,7 @@ td strong { color: var(--text); font-size: 12px; }
 .scheduling-disabled { color: var(--danger); font-size: 11px; font-weight: 650; white-space: nowrap; }
 .node-table { min-width: 1120px; }
 .network-table { min-width: 1180px; }
+.network-policy-table { min-width: 1320px; }
 .configuration-table { min-width: 760px; }
 .storage-table { min-width: 1180px; }
 .storage-class-table { min-width: 900px; }

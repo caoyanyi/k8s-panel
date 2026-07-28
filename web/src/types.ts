@@ -162,6 +162,23 @@ export interface KubernetesIngress {
   created_at: string
 }
 
+export interface KubernetesNetworkPolicy {
+  namespace: string
+  name: string
+  pod_selector_mode: KubernetesSelectorMode
+  pod_selector_label_count: number
+  pod_selector_expression_count: number
+  policy_types: Array<'Ingress' | 'Egress'>
+  policy_types_defaulted: boolean
+  ingress_rule_count: number
+  ingress_peer_count: number
+  ingress_port_count: number
+  egress_rule_count: number
+  egress_peer_count: number
+  egress_port_count: number
+  created_at: string
+}
+
 export interface KubernetesConfigMap {
   namespace: string
   name: string

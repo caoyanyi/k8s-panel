@@ -6,13 +6,14 @@ import { PageHeader } from '../components/PageHeader'
 import { TablePagination, TABLE_PAGE_SIZE } from '../components/TablePagination'
 import { usePanel } from '../context'
 import { useResource } from '../hooks'
-import type { KubernetesIngress, KubernetesService, Namespace, ServicePort } from '../types'
+import type { KubernetesIngress, KubernetesNetworkPolicy, KubernetesService, Namespace, ServicePort } from '../types'
 import { formatDateTime, truncate } from '../utils'
 
-type NetworkView = 'services' | 'ingresses'
+type NetworkView = 'services' | 'ingresses' | 'policies'
 type NetworkInventory =
   | { kind: 'services'; items: KubernetesService[] }
   | { kind: 'ingresses'; items: KubernetesIngress[] }
+  | { kind: 'policies'; items: KubernetesNetworkPolicy[] }
 
 export function NetworkPage() {
   const { clusters, selectedClusterId, selectedNamespace, setSelectedNamespace } = usePanel()
@@ -28,7 +29,9 @@ export function NetworkPage() {
   )
   const inventory = useResource<NetworkInventory>(async (signal) => {
     if (!selectedClusterId) {
-      return view === 'services' ? { kind: 'services', items: [] } : { kind: 'ingresses', items: [] }
+      if (view === 'services') return { kind: 'services', items: [] }
+      if (view === 'ingresses') return { kind: 'ingresses', items: [] }
+      return { kind: 'policies', items: [] }
     }
     const query = new URLSearchParams()
     if (selectedNamespace) query.set('namespace', selectedNamespace)
@@ -38,8 +41,12 @@ export function NetworkPage() {
       const items = await api.get<KubernetesService[]>(`/api/v1/clusters/${selectedClusterId}/services${suffix}`, signal)
       return { kind: 'services', items }
     }
-    const items = await api.get<KubernetesIngress[]>(`/api/v1/clusters/${selectedClusterId}/ingresses${suffix}`, signal)
-    return { kind: 'ingresses', items }
+    if (view === 'ingresses') {
+      const items = await api.get<KubernetesIngress[]>(`/api/v1/clusters/${selectedClusterId}/ingresses${suffix}`, signal)
+      return { kind: 'ingresses', items }
+    }
+    const items = await api.get<KubernetesNetworkPolicy[]>(`/api/v1/clusters/${selectedClusterId}/network-policies${suffix}`, signal)
+    return { kind: 'policies', items }
   }, [selectedClusterId, selectedNamespace, view])
 
   useEffect(() => {
@@ -51,22 +58,32 @@ export function NetworkPage() {
   const normalizedSearch = search.trim().toLowerCase()
   const services = inventory.data?.kind === 'services' ? inventory.data.items : []
   const ingresses = inventory.data?.kind === 'ingresses' ? inventory.data.items : []
+  const policies = inventory.data?.kind === 'policies' ? inventory.data.items : []
   const visibleServices = useMemo(() => services.filter((item) => (
     !normalizedSearch || serviceSearchText(item).includes(normalizedSearch)
   )), [normalizedSearch, services])
   const visibleIngresses = useMemo(() => ingresses.filter((item) => (
     !normalizedSearch || ingressSearchText(item).includes(normalizedSearch)
   )), [ingresses, normalizedSearch])
+  const visiblePolicies = useMemo(() => policies.filter((item) => (
+    !normalizedSearch || networkPolicySearchText(item).includes(normalizedSearch)
+  )), [normalizedSearch, policies])
   useEffect(() => setPage(0), [normalizedSearch, selectedClusterId, selectedNamespace, view])
 
-  const visibleCount = view === 'services' ? visibleServices.length : visibleIngresses.length
-  const activeCount = view === 'services' ? services.length : ingresses.length
+  const visibleCount = view === 'services'
+    ? visibleServices.length
+    : view === 'ingresses' ? visibleIngresses.length : visiblePolicies.length
+  const activeCount = view === 'services' ? services.length : view === 'ingresses' ? ingresses.length : policies.length
   const totalPages = Math.max(1, Math.ceil(visibleCount / TABLE_PAGE_SIZE))
   const currentPage = Math.min(page, totalPages - 1)
   const pageStart = currentPage * TABLE_PAGE_SIZE
   const pageServices = visibleServices.slice(pageStart, pageStart + TABLE_PAGE_SIZE)
   const pageIngresses = visibleIngresses.slice(pageStart, pageStart + TABLE_PAGE_SIZE)
-  const resourceLabel = view === 'services' ? 'Service' : 'Ingress'
+  const pagePolicies = visiblePolicies.slice(pageStart, pageStart + TABLE_PAGE_SIZE)
+  const resourceLabel = view === 'services' ? 'Service' : view === 'ingresses' ? 'Ingress' : 'NetworkPolicy'
+  const searchPlaceholder = view === 'services'
+    ? '搜索 Service、地址或端口'
+    : view === 'ingresses' ? '搜索 Ingress、域名或地址' : '搜索 NetworkPolicy、命名空间或方向'
 
   return (
     <div className="page">
@@ -79,18 +96,21 @@ export function NetworkPage() {
       {!selectedClusterId ? <EmptyState title="尚未选择集群" /> : (
         <>
           <div className="segmented-control" role="group" aria-label="网络资源类型">
-            <button type="button" className={view === 'services' ? 'active' : ''} onClick={() => setView('services')}>Service</button>
-            <button type="button" className={view === 'ingresses' ? 'active' : ''} onClick={() => setView('ingresses')}>Ingress</button>
+            <button type="button" aria-pressed={view === 'services'} className={view === 'services' ? 'active' : ''} onClick={() => setView('services')}>Service</button>
+            <button type="button" aria-pressed={view === 'ingresses'} className={view === 'ingresses' ? 'active' : ''} onClick={() => setView('ingresses')}>Ingress</button>
+            <button type="button" aria-pressed={view === 'policies'} className={view === 'policies' ? 'active' : ''} onClick={() => setView('policies')}>NetworkPolicy</button>
           </div>
           <section className="toolbar" aria-label="网络资源筛选">
             <div className="toolbar-field"><label htmlFor="network-namespace">命名空间</label><select id="network-namespace" value={selectedNamespace} onChange={(event) => setSelectedNamespace(event.target.value)} disabled={namespaces.loading}><option value="">全部命名空间</option>{namespaces.data?.map((item) => <option key={item.name} value={item.name}>{item.name}</option>)}</select></div>
-            <div className="search-field"><Search size={16} aria-hidden="true" /><label className="sr-only" htmlFor="network-search">搜索网络资源</label><input id="network-search" type="search" placeholder={view === 'services' ? '搜索 Service、地址或端口' : '搜索 Ingress、域名或地址'} value={search} onChange={(event) => setSearch(event.target.value)} /></div>
+            <div className="search-field"><Search size={16} aria-hidden="true" /><label className="sr-only" htmlFor="network-search">搜索网络资源</label><input id="network-search" type="search" placeholder={searchPlaceholder} value={search} onChange={(event) => setSearch(event.target.value)} /></div>
           </section>
           <section className="section-block table-section">
             {namespaces.error ? <ErrorState error={namespaces.error} onRetry={() => void namespaces.refresh()} /> : inventory.loading ? <LoadingState label={`正在读取 ${resourceLabel}`} /> : inventory.error ? <ErrorState error={inventory.error} onRetry={() => void inventory.refresh()} /> : visibleCount === 0 ? <EmptyState title={normalizedSearch ? `没有匹配的 ${resourceLabel}` : `当前范围没有 ${resourceLabel}`} /> : view === 'services' ? (
               <><ServiceTable services={pageServices} /><TablePagination page={currentPage} totalItems={visibleServices.length} onPage={setPage} /></>
-            ) : (
+            ) : view === 'ingresses' ? (
               <><IngressTable ingresses={pageIngresses} /><TablePagination page={currentPage} totalItems={visibleIngresses.length} onPage={setPage} /></>
+            ) : (
+              <><NetworkPolicyTable policies={pagePolicies} /><TablePagination page={currentPage} totalItems={visiblePolicies.length} onPage={setPage} /></>
             )}
           </section>
         </>
@@ -134,6 +154,31 @@ function IngressTable({ ingresses }: { ingresses: KubernetesIngress[] }) {
   )
 }
 
+function NetworkPolicyTable({ policies }: { policies: KubernetesNetworkPolicy[] }) {
+  return (
+    <div className="table-wrap" role="region" aria-label="NetworkPolicy 清单" tabIndex={0}><table className="network-policy-table">
+      <thead><tr><th>名称</th><th>命名空间</th><th>Pod 选择范围</th><th>隔离方向</th><th>允许规则</th><th>对端 / 端口</th><th>无允许规则</th><th>创建时间</th></tr></thead>
+      <tbody>{policies.map((policy) => <tr key={`${policy.namespace}:${policy.name}`}>
+        <td><strong>{policy.name}</strong></td>
+        <td className="mono">{policy.namespace}</td>
+        <td><div className="network-value-list"><span>{policy.pod_selector_mode === 'all' ? '全部 Pod' : '带筛选条件'}</span><span className="detail-muted">{policy.pod_selector_label_count} 个标签 / {policy.pod_selector_expression_count} 个表达式</span></div></td>
+        <td><div className="inline-labels">{policy.policy_types.map((policyType) => <span className="kind-label" key={policyType}>{policyType}</span>)}{policy.policy_types_defaulted && <span className="detail-muted">按 API 默认</span>}</div></td>
+        <td className="network-count">入站 {policy.ingress_rule_count} / 出站 {policy.egress_rule_count}</td>
+        <td><div className="network-value-list"><span>入站：{policy.ingress_peer_count} 个对端 / {policy.ingress_port_count} 个端口</span><span>出站：{policy.egress_peer_count} 个对端 / {policy.egress_port_count} 个端口</span></div></td>
+        <td><PolicyEmptyDirections policy={policy} /></td>
+        <td>{formatDateTime(policy.created_at)}</td>
+      </tr>)}</tbody>
+    </table></div>
+  )
+}
+
+function PolicyEmptyDirections({ policy }: { policy: KubernetesNetworkPolicy }) {
+  const ingressEmpty = policy.policy_types.includes('Ingress') && policy.ingress_rule_count === 0
+  const egressEmpty = policy.policy_types.includes('Egress') && policy.egress_rule_count === 0
+  if (!ingressEmpty && !egressEmpty) return <>-</>
+  return <div className="network-value-list">{ingressEmpty && <span className="replica-warning">本策略无入站规则</span>}{egressEmpty && <span className="replica-warning">本策略无出站规则</span>}</div>
+}
+
 function ServiceAddresses({ service }: { service: KubernetesService }) {
   if (!service.external_name && service.external_addresses.length === 0) return <>-</>
   return <div className="network-value-list">{service.external_name && <span className="mono" title={service.external_name}>{truncate(service.external_name, 48)}</span>}{service.external_addresses.length > 0 && <BoundedValues values={service.external_addresses} total={service.address_count} nested />}</div>
@@ -161,4 +206,8 @@ function serviceSearchText(service: KubernetesService) {
 
 function ingressSearchText(ingress: KubernetesIngress) {
   return [ingress.name, ingress.namespace, ingress.class_name ?? '', ...ingress.hosts, ...ingress.addresses].join(' ').toLowerCase()
+}
+
+function networkPolicySearchText(policy: KubernetesNetworkPolicy) {
+  return [policy.name, policy.namespace, policy.pod_selector_mode, ...policy.policy_types].join(' ').toLowerCase()
 }

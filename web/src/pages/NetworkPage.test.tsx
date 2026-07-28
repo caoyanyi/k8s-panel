@@ -29,6 +29,7 @@ describe('NetworkPage', () => {
       if (path.endsWith('/namespaces')) return Promise.resolve(dataResponse([namespace]))
       if (path.includes('/services')) return Promise.resolve(dataResponse([service]))
       if (path.includes('/ingresses')) return Promise.resolve(dataResponse([ingress]))
+      if (path.includes('/network-policies')) return Promise.resolve(dataResponse([networkPolicy]))
       return Promise.resolve(errorResponse(404, 'not_found'))
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -38,6 +39,7 @@ describe('NetworkPage', () => {
 
     expect(await screen.findByText('gateway-service')).toBeInTheDocument()
     expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/ingresses'))).toBe(false)
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/network-policies'))).toBe(false)
     expect(screen.getByText('10.96.0.20')).toBeInTheDocument()
     expect(screen.getAllByText('+1')).toHaveLength(2)
 
@@ -51,6 +53,13 @@ describe('NetworkPage', () => {
     expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/ingresses?namespace=payments'))).toBe(true)
     expect(screen.getByText('gateway.example.com')).toBeInTheDocument()
     expect(screen.getByText('已启用')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'NetworkPolicy' }))
+    expect(await screen.findByText('gateway-policy')).toBeInTheDocument()
+    expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/network-policies?namespace=payments'))).toBe(true)
+    expect(screen.getByText('带筛选条件')).toBeInTheDocument()
+    expect(screen.getByText('本策略无出站规则')).toBeInTheDocument()
+    expect(screen.getByText('按 API 默认')).toBeInTheDocument()
   })
 
   it('aborts a manual refresh when the active resource kind changes', async () => {
@@ -137,6 +146,15 @@ const ingress = {
   addresses: ['203.0.113.30'], address_count: 1,
   tls: true, rule_count: 1, path_count: 2,
   created_at: '2026-07-24T08:00:00Z',
+}
+
+const networkPolicy = {
+  namespace: 'payments', name: 'gateway-policy', pod_selector_mode: 'filtered',
+  pod_selector_label_count: 1, pod_selector_expression_count: 1,
+  policy_types: ['Ingress', 'Egress'], policy_types_defaulted: true,
+  ingress_rule_count: 1, ingress_peer_count: 2, ingress_port_count: 1,
+  egress_rule_count: 0, egress_peer_count: 0, egress_port_count: 0,
+  created_at: '2026-07-28T04:00:00Z',
 }
 
 function renderPage(overrides: Partial<PanelContextValue> = {}) {

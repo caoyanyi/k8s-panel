@@ -325,6 +325,23 @@ type KubernetesIngress struct {
 	CreatedAt    time.Time `json:"created_at"`
 }
 
+type KubernetesNetworkPolicy struct {
+	Namespace                  string                 `json:"namespace"`
+	Name                       string                 `json:"name"`
+	PodSelectorMode            KubernetesSelectorMode `json:"pod_selector_mode"`
+	PodSelectorLabelCount      int                    `json:"pod_selector_label_count"`
+	PodSelectorExpressionCount int                    `json:"pod_selector_expression_count"`
+	PolicyTypes                []string               `json:"policy_types"`
+	PolicyTypesDefaulted       bool                   `json:"policy_types_defaulted"`
+	IngressRuleCount           int                    `json:"ingress_rule_count"`
+	IngressPeerCount           int                    `json:"ingress_peer_count"`
+	IngressPortCount           int                    `json:"ingress_port_count"`
+	EgressRuleCount            int                    `json:"egress_rule_count"`
+	EgressPeerCount            int                    `json:"egress_peer_count"`
+	EgressPortCount            int                    `json:"egress_port_count"`
+	CreatedAt                  time.Time              `json:"created_at"`
+}
+
 type KubernetesConfigMap struct {
 	Namespace string    `json:"namespace"`
 	Name      string    `json:"name"`

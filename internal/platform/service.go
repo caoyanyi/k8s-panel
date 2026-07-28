@@ -541,6 +541,24 @@ func (s *Service) Ingresses(ctx context.Context, clusterID, namespace string) ([
 	return gateway.Ingresses(ctx, namespace)
 }
 
+func (s *Service) NetworkPolicies(ctx context.Context, clusterID, namespace string) ([]domain.KubernetesNetworkPolicy, error) {
+	if namespace != "" {
+		if err := domain.ValidateNamespace(namespace); err != nil {
+			return nil, err
+		}
+	}
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	gateway, err := s.kubeGateway(ctx, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	return gateway.NetworkPolicies(ctx, namespace)
+}
+
 func (s *Service) ConfigMaps(ctx context.Context, clusterID, namespace string) ([]domain.KubernetesConfigMap, error) {
 	if namespace != "" {
 		if err := domain.ValidateNamespace(namespace); err != nil {

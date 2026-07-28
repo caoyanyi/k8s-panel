@@ -360,6 +360,7 @@ test('network inventory loads one bounded resource kind at a time', async ({ pag
   await expect(page.getByText('gateway-service', { exact: true })).toBeVisible()
   expect(requestedKinds).toContain('services:all')
   expect(requestedKinds.some((request) => request.startsWith('ingresses:'))).toBe(false)
+  expect(requestedKinds.some((request) => request.startsWith('network-policies:'))).toBe(false)
   await expect(page.getByText('10.96.0.20')).toBeVisible()
   await expect(page.getByText('203.0.113.20')).toBeVisible()
 
@@ -371,6 +372,12 @@ test('network inventory loads one bounded resource kind at a time', async ({ pag
   expect(requestedKinds).toContain('ingresses:payments')
   await expect(page.getByText('gateway.example.com')).toBeVisible()
   await expect(page.getByText('已启用')).toBeVisible()
+
+  await page.getByRole('button', { name: 'NetworkPolicy' }).click()
+  await expect(page.getByText('gateway-policy', { exact: true })).toBeVisible()
+  expect(requestedKinds).toContain('network-policies:payments')
+  await expect(page.getByText('带筛选条件')).toBeVisible()
+  await expect(page.getByText('本策略无出站规则')).toBeVisible()
 
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
   expect(overflow).toBeLessThanOrEqual(1)
@@ -669,6 +676,16 @@ async function mockNetworkResources(page: Page, requestedKinds: string[]) {
         namespace: 'payments', name: 'gateway-ingress', class_name: 'nginx',
         hosts: ['gateway.example.com'], host_count: 1, addresses: ['203.0.113.30'], address_count: 1,
         tls: true, rule_count: 1, path_count: 2, created_at: '2026-07-24T08:00:00Z',
+      }]
+    } else if (path === '/api/v1/clusters/clu_1/network-policies') {
+      requestedKinds.push(`network-policies:${url.searchParams.get('namespace') ?? 'all'}`)
+      data = [{
+        namespace: 'payments', name: 'gateway-policy', pod_selector_mode: 'filtered',
+        pod_selector_label_count: 1, pod_selector_expression_count: 1,
+        policy_types: ['Ingress', 'Egress'], policy_types_defaulted: true,
+        ingress_rule_count: 1, ingress_peer_count: 2, ingress_port_count: 1,
+        egress_rule_count: 0, egress_peer_count: 0, egress_port_count: 0,
+        created_at: '2026-07-28T04:00:00Z',
       }]
     } else {
       data = []

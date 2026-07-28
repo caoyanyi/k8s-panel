@@ -41,6 +41,11 @@ func TestServerAuthenticationAndClusterLifecycle(t *testing.T) {
 	if unauthorizedNetwork.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthorized network status = %d, want 401", unauthorizedNetwork.Code)
 	}
+	unauthorizedNetworkPolicy := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorizedNetworkPolicy, httptest.NewRequest(http.MethodGet, "/api/v1/clusters/clu_1/network-policies", nil))
+	if unauthorizedNetworkPolicy.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized network policy status = %d, want 401", unauthorizedNetworkPolicy.Code)
+	}
 	unauthorizedConfiguration := httptest.NewRecorder()
 	handler.ServeHTTP(unauthorizedConfiguration, httptest.NewRequest(http.MethodGet, "/api/v1/clusters/clu_1/configmaps", nil))
 	if unauthorizedConfiguration.Code != http.StatusUnauthorized {
@@ -138,11 +143,23 @@ func TestServerAuthenticationAndClusterLifecycle(t *testing.T) {
 		!strings.Contains(ingresses.Body.String(), `"host_count":1`) {
 		t.Fatalf("ingresses status = %d, body = %s", ingresses.Code, ingresses.Body.String())
 	}
+	networkPoliciesPath := "/api/v1/clusters/" + created.Data.ID + "/network-policies"
+	networkPolicies := authenticatedRequest(t, handler, cookie, http.MethodGet, networkPoliciesPath+"?namespace=payments", "")
+	if networkPolicies.Code != http.StatusOK || !strings.Contains(networkPolicies.Body.String(), `"name":"gateway-policy"`) ||
+		!strings.Contains(networkPolicies.Body.String(), `"policy_types":["Ingress","Egress"]`) ||
+		strings.Contains(networkPolicies.Body.String(), "private-selector-value") {
+		t.Fatalf("network policies status = %d, body = %s", networkPolicies.Code, networkPolicies.Body.String())
+	}
 	invalidNetworkNamespace := authenticatedRequest(t, handler, cookie, http.MethodGet, servicesPath+"?namespace=bad%2Fnamespace", "")
 	if invalidNetworkNamespace.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("invalid network namespace status = %d, body = %s", invalidNetworkNamespace.Code, invalidNetworkNamespace.Body.String())
 	}
 	assertErrorField(t, invalidNetworkNamespace.Body.Bytes(), "namespace")
+	invalidNetworkPolicyNamespace := authenticatedRequest(t, handler, cookie, http.MethodGet, networkPoliciesPath+"?namespace=bad%2Fnamespace", "")
+	if invalidNetworkPolicyNamespace.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid network policy namespace status = %d, body = %s", invalidNetworkPolicyNamespace.Code, invalidNetworkPolicyNamespace.Body.String())
+	}
+	assertErrorField(t, invalidNetworkPolicyNamespace.Body.Bytes(), "namespace")
 	configMapsPath := "/api/v1/clusters/" + created.Data.ID + "/configmaps"
 	configMaps := authenticatedRequest(t, handler, cookie, http.MethodGet, configMapsPath, "")
 	if configMaps.Code != http.StatusOK || !strings.Contains(configMaps.Body.String(), `"name":"settings"`) ||
@@ -904,6 +921,13 @@ func (testKube) Services(_ context.Context, namespace string) ([]domain.Kubernet
 func (testKube) Ingresses(context.Context, string) ([]domain.KubernetesIngress, error) {
 	return []domain.KubernetesIngress{{
 		Namespace: "payments", Name: "gateway", ClassName: "nginx", Hosts: []string{"gateway.example.com"}, HostCount: 1,
+	}}, nil
+}
+func (testKube) NetworkPolicies(_ context.Context, namespace string) ([]domain.KubernetesNetworkPolicy, error) {
+	return []domain.KubernetesNetworkPolicy{{
+		Namespace: namespace, Name: "gateway-policy", PodSelectorMode: domain.KubernetesSelectorFiltered,
+		PodSelectorLabelCount: 1, PolicyTypes: []string{"Ingress", "Egress"},
+		IngressRuleCount: 1, IngressPeerCount: 1, IngressPortCount: 1,
 	}}, nil
 }
 func (testKube) ConfigMaps(context.Context, string) ([]domain.KubernetesConfigMap, error) {
