@@ -211,6 +211,45 @@ export interface KubernetesStorageClass {
   created_at: string
 }
 
+export interface KubernetesQuotaResource {
+  name: string
+  hard?: string
+  used?: string
+  observed: boolean
+}
+
+export interface KubernetesResourceQuota {
+  namespace: string
+  name: string
+  scopes: string[]
+  scope_count: number
+  scopes_truncated: boolean
+  scope_selector_count: number
+  resources: KubernetesQuotaResource[]
+  resource_count: number
+  resources_truncated: boolean
+  created_at: string
+}
+
+export interface KubernetesLimitRangeConstraint {
+  type: string
+  resource: string
+  default_request?: string
+  default?: string
+  min?: string
+  max?: string
+  max_limit_request_ratio?: string
+}
+
+export interface KubernetesLimitRange {
+  namespace: string
+  name: string
+  constraints: KubernetesLimitRangeConstraint[]
+  constraint_count: number
+  constraints_truncated: boolean
+  created_at: string
+}
+
 export type KubernetesAccessResourceKind =
   | 'serviceaccounts'
   | 'roles'

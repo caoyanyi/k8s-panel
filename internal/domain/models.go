@@ -374,6 +374,45 @@ type KubernetesStorageClass struct {
 	CreatedAt            time.Time `json:"created_at"`
 }
 
+type KubernetesQuotaResource struct {
+	Name     string `json:"name"`
+	Hard     string `json:"hard,omitempty"`
+	Used     string `json:"used,omitempty"`
+	Observed bool   `json:"observed"`
+}
+
+type KubernetesResourceQuota struct {
+	Namespace          string                    `json:"namespace"`
+	Name               string                    `json:"name"`
+	Scopes             []string                  `json:"scopes"`
+	ScopeCount         int                       `json:"scope_count"`
+	ScopesTruncated    bool                      `json:"scopes_truncated"`
+	ScopeSelectorCount int                       `json:"scope_selector_count"`
+	Resources          []KubernetesQuotaResource `json:"resources"`
+	ResourceCount      int                       `json:"resource_count"`
+	ResourcesTruncated bool                      `json:"resources_truncated"`
+	CreatedAt          time.Time                 `json:"created_at"`
+}
+
+type KubernetesLimitRangeConstraint struct {
+	Type                 string `json:"type"`
+	Resource             string `json:"resource"`
+	DefaultRequest       string `json:"default_request,omitempty"`
+	Default              string `json:"default,omitempty"`
+	Min                  string `json:"min,omitempty"`
+	Max                  string `json:"max,omitempty"`
+	MaxLimitRequestRatio string `json:"max_limit_request_ratio,omitempty"`
+}
+
+type KubernetesLimitRange struct {
+	Namespace            string                           `json:"namespace"`
+	Name                 string                           `json:"name"`
+	Constraints          []KubernetesLimitRangeConstraint `json:"constraints"`
+	ConstraintCount      int                              `json:"constraint_count"`
+	ConstraintsTruncated bool                             `json:"constraints_truncated"`
+	CreatedAt            time.Time                        `json:"created_at"`
+}
+
 type KubernetesAccessResourceKind string
 
 const (

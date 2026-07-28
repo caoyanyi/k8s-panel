@@ -920,6 +920,58 @@ func TestServiceListsStorageResourcesAndValidatesClaimScopeBeforeGateway(t *test
 	}
 }
 
+func TestServiceListsNamespaceGovernanceAndValidatesScopeBeforeGateway(t *testing.T) {
+	t.Parallel()
+
+	gateway := &fakeKubeGateway{
+		probe: domain.ClusterProbe{Version: "v1.36.2"},
+		resourceQuotas: []domain.KubernetesResourceQuota{{
+			Namespace: "payments", Name: "compute-quota",
+			Resources: []domain.KubernetesQuotaResource{{Name: "requests.cpu", Hard: "4", Used: "2", Observed: true}},
+		}},
+		limitRanges: []domain.KubernetesLimitRange{{
+			Namespace: "payments", Name: "namespace-defaults",
+			Constraints: []domain.KubernetesLimitRangeConstraint{{Type: "Container", Resource: "cpu", Default: "500m"}},
+		}},
+	}
+	service, _, _ := newTestService(t, serviceFakes{kube: gateway})
+	cluster, err := service.CreateCluster(context.Background(), "admin", "req_cluster", domain.ClusterInput{
+		Name: "cluster", Environment: domain.EnvironmentDevelopment, Server: "https://api.example.com", BearerToken: "token",
+	})
+	if err != nil {
+		t.Fatalf("CreateCluster() error = %v", err)
+	}
+
+	quotas, err := service.ResourceQuotas(context.Background(), cluster.ID, "payments")
+	if err != nil || len(quotas) != 1 || quotas[0].Name != "compute-quota" {
+		t.Fatalf("ResourceQuotas() = %#v, %v", quotas, err)
+	}
+	limitRanges, err := service.LimitRanges(context.Background(), cluster.ID, "payments")
+	if err != nil || len(limitRanges) != 1 || limitRanges[0].Name != "namespace-defaults" {
+		t.Fatalf("LimitRanges() = %#v, %v", limitRanges, err)
+	}
+	if gateway.resourceQuotaNamespace != "payments" || gateway.limitRangeNamespace != "payments" ||
+		gateway.resourceQuotaCalls.Load() != 1 || gateway.limitRangeCalls.Load() != 1 {
+		t.Fatalf("governance gateway inputs = quota %q/%d, limit %q/%d",
+			gateway.resourceQuotaNamespace, gateway.resourceQuotaCalls.Load(),
+			gateway.limitRangeNamespace, gateway.limitRangeCalls.Load())
+	}
+
+	quotaCalls := gateway.resourceQuotaCalls.Load()
+	limitCalls := gateway.limitRangeCalls.Load()
+	for _, namespace := range []string{"", "bad/namespace"} {
+		if _, err := service.ResourceQuotas(context.Background(), cluster.ID, namespace); err == nil {
+			t.Errorf("ResourceQuotas(%q) succeeded", namespace)
+		}
+		if _, err := service.LimitRanges(context.Background(), cluster.ID, namespace); err == nil {
+			t.Errorf("LimitRanges(%q) succeeded", namespace)
+		}
+	}
+	if gateway.resourceQuotaCalls.Load() != quotaCalls || gateway.limitRangeCalls.Load() != limitCalls {
+		t.Fatal("invalid governance namespace reached Kubernetes gateway")
+	}
+}
+
 func TestServiceListsEventsAndValidatesFiltersBeforeGateway(t *testing.T) {
 	t.Parallel()
 
@@ -1876,6 +1928,8 @@ type fakeKubeGateway struct {
 	persistentVolumeClaims         []domain.KubernetesPersistentVolumeClaim
 	persistentVolumes              []domain.KubernetesPersistentVolume
 	storageClasses                 []domain.KubernetesStorageClass
+	resourceQuotas                 []domain.KubernetesResourceQuota
+	limitRanges                    []domain.KubernetesLimitRange
 	clusterEvents                  []domain.KubernetesEvent
 	accessResources                []domain.KubernetesAccessResource
 	accessDetail                   domain.KubernetesAccessResourceDetail
@@ -1888,6 +1942,8 @@ type fakeKubeGateway struct {
 	persistentVolumeClaimCalls     atomic.Int64
 	persistentVolumeCalls          atomic.Int64
 	storageClassCalls              atomic.Int64
+	resourceQuotaCalls             atomic.Int64
+	limitRangeCalls                atomic.Int64
 	clusterEventCalls              atomic.Int64
 	accessListCalls                atomic.Int64
 	accessDetailCalls              atomic.Int64
@@ -1897,6 +1953,8 @@ type fakeKubeGateway struct {
 	configMapNamespace             string
 	secretNamespace                string
 	persistentVolumeClaimNamespace string
+	resourceQuotaNamespace         string
+	limitRangeNamespace            string
 	clusterEventNamespace          string
 	clusterEventType               string
 	clusterEventLimit              int
@@ -2029,6 +2087,20 @@ func (g *fakeKubeGateway) PersistentVolumes(context.Context) ([]domain.Kubernete
 func (g *fakeKubeGateway) StorageClasses(context.Context) ([]domain.KubernetesStorageClass, error) {
 	g.storageClassCalls.Add(1)
 	return append([]domain.KubernetesStorageClass(nil), g.storageClasses...), nil
+}
+func (g *fakeKubeGateway) ResourceQuotas(_ context.Context, namespace string) ([]domain.KubernetesResourceQuota, error) {
+	g.resourceQuotaCalls.Add(1)
+	g.mutationMu.Lock()
+	g.resourceQuotaNamespace = namespace
+	g.mutationMu.Unlock()
+	return append([]domain.KubernetesResourceQuota(nil), g.resourceQuotas...), nil
+}
+func (g *fakeKubeGateway) LimitRanges(_ context.Context, namespace string) ([]domain.KubernetesLimitRange, error) {
+	g.limitRangeCalls.Add(1)
+	g.mutationMu.Lock()
+	g.limitRangeNamespace = namespace
+	g.mutationMu.Unlock()
+	return append([]domain.KubernetesLimitRange(nil), g.limitRanges...), nil
 }
 func (g *fakeKubeGateway) Events(_ context.Context, namespace, eventType string, limit int) ([]domain.KubernetesEvent, error) {
 	g.clusterEventCalls.Add(1)

@@ -242,6 +242,8 @@ td strong { color: var(--text); font-size: 12px; }
 .configuration-table { min-width: 760px; }
 .storage-table { min-width: 1180px; }
 .storage-class-table { min-width: 900px; }
+.governance-quota-table { min-width: 1080px; }
+.governance-limit-table { min-width: 1320px; }
 .event-table { min-width: 1320px; }
 .access-table { min-width: 820px; }
 .event-message-cell { min-width: 300px; max-width: 520px; }
@@ -255,6 +257,7 @@ td strong { color: var(--text); font-size: 12px; }
 .image-list { display: flex; flex-direction: column; gap: 3px; max-width: 360px; }
 .image-list span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .error-code { color: var(--danger); font-family: "SFMono-Regular", Consolas, monospace; font-size: 11px; }
+.inventory-alert { min-height: 36px; margin-bottom: 12px; padding: 8px 12px; display: flex; align-items: center; border: 1px solid #efd9aa; border-left: 3px solid var(--warning); border-radius: 4px; background: #fff8ea; color: #785b16; font-size: 12px; }
 
 .status-badge { min-height: 24px; padding: 0 8px; display: inline-flex; align-items: center; gap: 6px; border: 1px solid #d9dfdb; border-radius: 999px; background: #f6f8f7; color: #536159; font-size: 11px; font-weight: 630; white-space: nowrap; }
 .status-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }

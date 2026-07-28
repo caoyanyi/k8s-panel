@@ -38,6 +38,9 @@ test('login, navigation, validation and logout', async ({ page }, testInfo) => {
   await navigate(page, testInfo.project.name, '存储')
   await expect(page.getByRole('heading', { name: '存储资源' })).toBeVisible()
   await expect(page.getByText('尚未选择集群')).toBeVisible()
+  await navigate(page, testInfo.project.name, '资源治理')
+  await expect(page.getByRole('heading', { name: '资源治理' })).toBeVisible()
+  await expect(page.getByText('尚未选择集群')).toBeVisible()
   await navigate(page, testInfo.project.name, '访问控制')
   await expect(page.getByRole('heading', { name: '访问控制' })).toBeVisible()
   await expect(page.getByText('尚未选择集群')).toBeVisible()
@@ -445,6 +448,40 @@ test('storage inventory keeps cluster resources namespace independent', async ({
   expect(consoleErrors).toEqual([])
 })
 
+test('namespace governance reads one bounded policy kind at a time', async ({ page }, testInfo) => {
+  const consoleErrors: string[] = []
+  const requestedKinds: string[] = []
+  page.on('console', (message) => {
+    if (message.type() === 'error') consoleErrors.push(message.text())
+  })
+  page.on('pageerror', (error) => consoleErrors.push(error.message))
+  await mockGovernanceResources(page, requestedKinds)
+
+  await page.goto('/#governance')
+  await expect(page.getByRole('heading', { name: '资源治理' })).toBeVisible()
+  await expect(page.getByText('请选择命名空间')).toBeVisible()
+  expect(requestedKinds).toEqual([])
+
+  await page.getByLabel('命名空间').selectOption('payments')
+  await expect(page.getByText('compute-quota', { exact: true }).first()).toBeVisible()
+  expect(requestedKinds).toEqual(['resourcequotas:payments'])
+  await expect(page.getByText('2 / 4')).toBeVisible()
+  await expect(page.getByText('已同步').first()).toBeVisible()
+
+  await page.getByRole('button', { name: 'LimitRange' }).click()
+  await expect(page.getByText('namespace-defaults', { exact: true })).toBeVisible()
+  expect(requestedKinds).toEqual(['resourcequotas:payments', 'limitranges:payments'])
+  await expect(page.getByText('250m')).toBeVisible()
+  await expect(page.getByText('500m')).toBeVisible()
+
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
+  expect(overflow).toBeLessThanOrEqual(1)
+  const result = await new AxeBuilder({ page }).analyze()
+  expect(result.violations.filter((violation) => ['serious', 'critical'].includes(violation.impact ?? ''))).toEqual([])
+  await page.screenshot({ path: `test-results/${testInfo.project.name}-namespace-governance.png`, fullPage: true })
+  expect(consoleErrors).toEqual([])
+})
+
 test('access inventory loads metadata by kind and fetches details on demand', async ({ page }, testInfo) => {
   const consoleErrors: string[] = []
   const requestedKinds: string[] = []
@@ -692,6 +729,49 @@ async function mockStorageResources(page: Page, requestedKinds: string[]) {
         name: 'standard', provisioner: 'csi.example.com', reclaim_policy: 'Delete',
         volume_binding_mode: 'WaitForFirstConsumer', allow_volume_expansion: true, default: true,
         created_at: '2026-07-22T08:00:00Z',
+      }]
+    } else {
+      data = []
+    }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data }) })
+  })
+}
+
+async function mockGovernanceResources(page: Page, requestedKinds: string[]) {
+  await page.route('**/api/v1/**', async (route) => {
+    const url = new URL(route.request().url())
+    const path = url.pathname
+    let data: unknown
+    if (path === '/api/v1/session') {
+      data = { username: 'governance-admin', role: 'admin', expires_at: '2026-07-29T16:00:00Z' }
+    } else if (path === '/api/v1/clusters') {
+      data = [{
+        id: 'clu_1', name: 'production-cn', environment: 'production', server: 'https://api.example.com',
+        status: 'connected', version: 'v1.36.2', credentials_configured: true,
+        created_at: '2026-07-20T08:00:00Z', updated_at: '2026-07-28T08:00:00Z',
+      }]
+    } else if (path === '/api/v1/clusters/clu_1/namespaces') {
+      data = [{ name: 'payments', status: 'Active', labels: {}, finalizers: [], created_at: '2026-07-20T08:00:00Z' }]
+    } else if (path === '/api/v1/clusters/clu_1/resource-quotas') {
+      requestedKinds.push(`resourcequotas:${url.searchParams.get('namespace') ?? 'missing'}`)
+      data = [{
+        namespace: 'payments', name: 'compute-quota', scopes: ['NotTerminating'], scope_count: 1,
+        scopes_truncated: false, scope_selector_count: 1,
+        resources: [
+          { name: 'requests.cpu', hard: '4', used: '2', observed: true },
+          { name: 'requests.memory', hard: '8Gi', used: '6Gi', observed: true },
+        ],
+        resource_count: 2, resources_truncated: false, created_at: '2026-07-28T02:00:00Z',
+      }]
+    } else if (path === '/api/v1/clusters/clu_1/limit-ranges') {
+      requestedKinds.push(`limitranges:${url.searchParams.get('namespace') ?? 'missing'}`)
+      data = [{
+        namespace: 'payments', name: 'namespace-defaults',
+        constraints: [{
+          type: 'Container', resource: 'cpu', default_request: '250m', default: '500m',
+          min: '100m', max: '2', max_limit_request_ratio: '4',
+        }],
+        constraint_count: 1, constraints_truncated: false, created_at: '2026-07-28T02:05:00Z',
       }]
     } else {
       data = []

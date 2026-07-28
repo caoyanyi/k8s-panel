@@ -635,6 +635,44 @@ func (s *Service) StorageClasses(ctx context.Context, clusterID string) ([]domai
 	return gateway.StorageClasses(ctx)
 }
 
+func (s *Service) ResourceQuotas(
+	ctx context.Context,
+	clusterID, namespace string,
+) ([]domain.KubernetesResourceQuota, error) {
+	if err := domain.ValidateNamespace(namespace); err != nil {
+		return nil, err
+	}
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	gateway, err := s.kubeGateway(ctx, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	return gateway.ResourceQuotas(ctx, namespace)
+}
+
+func (s *Service) LimitRanges(
+	ctx context.Context,
+	clusterID, namespace string,
+) ([]domain.KubernetesLimitRange, error) {
+	if err := domain.ValidateNamespace(namespace); err != nil {
+		return nil, err
+	}
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	gateway, err := s.kubeGateway(ctx, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	return gateway.LimitRanges(ctx, namespace)
+}
+
 func (s *Service) AccessResources(
 	ctx context.Context,
 	clusterID string,

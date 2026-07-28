@@ -59,6 +59,8 @@ type KubeGateway interface {
 	PersistentVolumeClaims(context.Context, string) ([]domain.KubernetesPersistentVolumeClaim, error)
 	PersistentVolumes(context.Context) ([]domain.KubernetesPersistentVolume, error)
 	StorageClasses(context.Context) ([]domain.KubernetesStorageClass, error)
+	ResourceQuotas(context.Context, string) ([]domain.KubernetesResourceQuota, error)
+	LimitRanges(context.Context, string) ([]domain.KubernetesLimitRange, error)
 	AccessResources(context.Context, domain.KubernetesAccessResourceKind, string) ([]domain.KubernetesAccessResource, error)
 	AccessResourceDetail(context.Context, domain.KubernetesAccessResourceReference) (domain.KubernetesAccessResourceDetail, error)
 	ReviewServiceAccountAccess(context.Context, domain.KubernetesServiceAccountAccessReviewInput) (domain.KubernetesCapabilityState, error)

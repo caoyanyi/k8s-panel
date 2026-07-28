@@ -531,6 +531,21 @@ func TestServerExposesAuthenticatedClusterResources(t *testing.T) {
 	if namespaces.Code != http.StatusOK || !strings.Contains(namespaces.Body.String(), `"name":"payments"`) {
 		t.Fatalf("namespaces status = %d, body = %s", namespaces.Code, namespaces.Body.String())
 	}
+	quotas := authenticatedRequest(t, handler, cookie, http.MethodGet, base+"/resource-quotas?namespace=payments", "")
+	if quotas.Code != http.StatusOK || !strings.Contains(quotas.Body.String(), `"name":"compute-quota"`) ||
+		!strings.Contains(quotas.Body.String(), `"hard":"4"`) {
+		t.Fatalf("resource quotas status = %d, body = %s", quotas.Code, quotas.Body.String())
+	}
+	limitRanges := authenticatedRequest(t, handler, cookie, http.MethodGet, base+"/limit-ranges?namespace=payments", "")
+	if limitRanges.Code != http.StatusOK || !strings.Contains(limitRanges.Body.String(), `"name":"namespace-defaults"`) ||
+		!strings.Contains(limitRanges.Body.String(), `"default":"500m"`) {
+		t.Fatalf("limit ranges status = %d, body = %s", limitRanges.Code, limitRanges.Body.String())
+	}
+	missingNamespace := authenticatedRequest(t, handler, cookie, http.MethodGet, base+"/resource-quotas", "")
+	if missingNamespace.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("missing governance namespace status = %d, body = %s", missingNamespace.Code, missingNamespace.Body.String())
+	}
+	assertErrorField(t, missingNamespace.Body.Bytes(), "namespace")
 	nodes := authenticatedRequest(t, handler, cookie, http.MethodGet, base+"/nodes", "")
 	if nodes.Code != http.StatusOK || !strings.Contains(nodes.Body.String(), `"name":"worker-01"`) {
 		t.Fatalf("nodes status = %d, body = %s", nodes.Code, nodes.Body.String())
@@ -898,6 +913,18 @@ func (testKube) StorageClasses(context.Context) ([]domain.KubernetesStorageClass
 	return []domain.KubernetesStorageClass{{
 		Name: "standard", Provisioner: "csi.example.com", ReclaimPolicy: "Delete",
 		VolumeBindingMode: "WaitForFirstConsumer", AllowVolumeExpansion: true, Default: true,
+	}}, nil
+}
+func (testKube) ResourceQuotas(_ context.Context, namespace string) ([]domain.KubernetesResourceQuota, error) {
+	return []domain.KubernetesResourceQuota{{
+		Namespace: namespace, Name: "compute-quota", ResourceCount: 1,
+		Resources: []domain.KubernetesQuotaResource{{Name: "requests.cpu", Hard: "4", Used: "2", Observed: true}},
+	}}, nil
+}
+func (testKube) LimitRanges(_ context.Context, namespace string) ([]domain.KubernetesLimitRange, error) {
+	return []domain.KubernetesLimitRange{{
+		Namespace: namespace, Name: "namespace-defaults", ConstraintCount: 1,
+		Constraints: []domain.KubernetesLimitRangeConstraint{{Type: "Container", Resource: "cpu", Default: "500m"}},
 	}}, nil
 }
 func (testKube) AccessResources(_ context.Context, kind domain.KubernetesAccessResourceKind, namespace string) ([]domain.KubernetesAccessResource, error) {
