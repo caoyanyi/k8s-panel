@@ -61,6 +61,13 @@ func TestServerAuthenticationAndClusterLifecycle(t *testing.T) {
 	if unauthorizedAPIServices.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthorized APIService status = %d, want 401", unauthorizedAPIServices.Code)
 	}
+	unauthorizedAdmissionWebhooks := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorizedAdmissionWebhooks, httptest.NewRequest(
+		http.MethodGet, "/api/v1/clusters/clu_1/admission-webhook-configurations?kind=validating", nil,
+	))
+	if unauthorizedAdmissionWebhooks.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized admission webhook status = %d, want 401", unauthorizedAdmissionWebhooks.Code)
+	}
 	unauthorizedConfiguration := httptest.NewRecorder()
 	handler.ServeHTTP(unauthorizedConfiguration, httptest.NewRequest(http.MethodGet, "/api/v1/clusters/clu_1/configmaps", nil))
 	if unauthorizedConfiguration.Code != http.StatusUnauthorized {
@@ -193,6 +200,38 @@ func TestServerAuthenticationAndClusterLifecycle(t *testing.T) {
 		strings.Contains(apiServices.Body.String(), "private availability message") {
 		t.Fatalf("API services status = %d, body = %s", apiServices.Code, apiServices.Body.String())
 	}
+	admissionWebhooksPath := "/api/v1/clusters/" + created.Data.ID + "/admission-webhook-configurations"
+	admissionWebhooks := authenticatedRequest(t, handler, cookie, http.MethodGet, admissionWebhooksPath+"?kind=validating", "")
+	if admissionWebhooks.Code != http.StatusOK ||
+		!strings.Contains(admissionWebhooks.Body.String(), `"name":"policy.platform.example.com"`) ||
+		!strings.Contains(admissionWebhooks.Body.String(), `"kind":"validating"`) {
+		t.Fatalf("admission webhooks status = %d, body = %s", admissionWebhooks.Code, admissionWebhooks.Body.String())
+	}
+	admissionWebhookDetail := authenticatedRequest(
+		t, handler, cookie, http.MethodGet,
+		admissionWebhooksPath+"/policy.platform.example.com?kind=validating", "",
+	)
+	if admissionWebhookDetail.Code != http.StatusOK ||
+		!strings.Contains(admissionWebhookDetail.Body.String(), `"target_type":"service"`) ||
+		!strings.Contains(admissionWebhookDetail.Body.String(), `"failure_policy":"Fail"`) ||
+		!strings.Contains(admissionWebhookDetail.Body.String(), `"webhook_count":1`) ||
+		strings.Contains(admissionWebhookDetail.Body.String(), "private-webhook-path") ||
+		strings.Contains(admissionWebhookDetail.Body.String(), "private-ca-bundle") {
+		t.Fatalf("admission webhook detail status = %d, body = %s", admissionWebhookDetail.Code, admissionWebhookDetail.Body.String())
+	}
+	invalidAdmissionWebhookKind := authenticatedRequest(t, handler, cookie, http.MethodGet, admissionWebhooksPath+"?kind=Validating", "")
+	if invalidAdmissionWebhookKind.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid admission webhook kind status = %d, body = %s", invalidAdmissionWebhookKind.Code, invalidAdmissionWebhookKind.Body.String())
+	}
+	assertErrorField(t, invalidAdmissionWebhookKind.Body.Bytes(), "kind")
+	invalidAdmissionWebhookName := authenticatedRequest(
+		t, handler, cookie, http.MethodGet,
+		admissionWebhooksPath+"/..%2Fvalidatingwebhookconfigurations?kind=validating", "",
+	)
+	if invalidAdmissionWebhookName.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid admission webhook name status = %d, body = %s", invalidAdmissionWebhookName.Code, invalidAdmissionWebhookName.Body.String())
+	}
+	assertErrorField(t, invalidAdmissionWebhookName.Body.Bytes(), "name")
 	networkPoliciesPath := "/api/v1/clusters/" + created.Data.ID + "/network-policies"
 	networkPolicies := authenticatedRequest(t, handler, cookie, http.MethodGet, networkPoliciesPath+"?namespace=payments", "")
 	if networkPolicies.Code != http.StatusOK || !strings.Contains(networkPolicies.Body.String(), `"name":"gateway-policy"`) ||
@@ -975,6 +1014,29 @@ func (testKube) APIServices(context.Context) ([]domain.KubernetesAPIService, err
 		AvailabilityObserved: true, AvailabilityStatus: "False", AvailabilityReason: "FailedDiscoveryCheck",
 		ConditionCount: 1, GroupPriorityMinimum: 100, VersionPriority: 100,
 	}}, nil
+}
+func (testKube) AdmissionWebhookConfigurations(
+	_ context.Context,
+	kind domain.KubernetesAdmissionWebhookConfigurationKind,
+) ([]domain.KubernetesAdmissionWebhookConfiguration, error) {
+	return []domain.KubernetesAdmissionWebhookConfiguration{{Kind: kind, Name: "policy.platform.example.com"}}, nil
+}
+func (testKube) AdmissionWebhookConfiguration(
+	_ context.Context,
+	kind domain.KubernetesAdmissionWebhookConfigurationKind,
+	name string,
+) (domain.KubernetesAdmissionWebhookConfigurationDetail, error) {
+	return domain.KubernetesAdmissionWebhookConfigurationDetail{
+		KubernetesAdmissionWebhookConfiguration: domain.KubernetesAdmissionWebhookConfiguration{Kind: kind, Name: name},
+		Generation:                              1,
+		Webhooks: []domain.KubernetesAdmissionWebhook{{
+			Name: "validate.policy.platform.example.com", TargetType: "service",
+			ServiceNamespace: "policy-system", ServiceName: "policy-webhook", ServicePort: 443,
+			FailurePolicy: "Fail", MatchPolicy: "Equivalent", SideEffects: "None", TimeoutSeconds: 10,
+			AdmissionReviewVersions: []string{"v1"},
+		}},
+		WebhookCount: 1,
+	}, nil
 }
 func (testKube) Events(_ context.Context, namespace, eventType string, _ int) ([]domain.KubernetesEvent, error) {
 	return []domain.KubernetesEvent{{

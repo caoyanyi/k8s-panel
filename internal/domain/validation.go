@@ -342,6 +342,20 @@ func ValidateAPIServiceName(name string) error {
 	return nil
 }
 
+func ValidateAdmissionWebhookConfigurationKind(kind KubernetesAdmissionWebhookConfigurationKind) error {
+	if kind != AdmissionWebhookConfigurationValidating && kind != AdmissionWebhookConfigurationMutating {
+		return Invalid("kind", "must be validating or mutating")
+	}
+	return nil
+}
+
+func ValidateAdmissionWebhookConfigurationName(name string) error {
+	if !validDNSSubdomain(name) {
+		return Invalid("name", "must be a valid Kubernetes admission webhook configuration name")
+	}
+	return nil
+}
+
 func validateHTTPSURL(raw string, allowPath bool) (*url.URL, error) {
 	parsed, err := url.ParseRequestURI(strings.TrimSpace(raw))
 	if err != nil {

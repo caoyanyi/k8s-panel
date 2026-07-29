@@ -143,6 +143,50 @@ export interface KubernetesAPIService {
   created_at: string
 }
 
+export type KubernetesAdmissionWebhookConfigurationKind = 'validating' | 'mutating'
+
+export interface KubernetesAdmissionWebhookConfiguration {
+  kind: KubernetesAdmissionWebhookConfigurationKind
+  name: string
+  created_at: string
+}
+
+export interface KubernetesAdmissionWebhook {
+  name: string
+  target_type: 'service' | 'url'
+  service_namespace?: string
+  service_name?: string
+  service_port?: number
+  service_port_defaulted: boolean
+  ca_bundle_configured: boolean
+  failure_policy: 'Fail' | 'Ignore'
+  failure_policy_defaulted: boolean
+  match_policy: 'Equivalent' | 'Exact'
+  match_policy_defaulted: boolean
+  side_effects: 'None' | 'NoneOnDryRun' | 'Some' | 'Unknown'
+  timeout_seconds: number
+  timeout_seconds_defaulted: boolean
+  reinvocation_policy?: 'Never' | 'IfNeeded'
+  reinvocation_policy_defaulted: boolean
+  admission_review_versions: string[]
+  rule_count: number
+  operation_count: number
+  api_group_count: number
+  api_version_count: number
+  resource_count: number
+  namespace_selector_label_count: number
+  namespace_selector_expression_count: number
+  object_selector_label_count: number
+  object_selector_expression_count: number
+  match_condition_count: number
+}
+
+export interface KubernetesAdmissionWebhookConfigurationDetail extends KubernetesAdmissionWebhookConfiguration {
+  generation: number
+  webhooks: KubernetesAdmissionWebhook[]
+  webhook_count: number
+}
+
 export interface KubernetesCustomResourceDefinitionVersion {
   name: string
   served: boolean

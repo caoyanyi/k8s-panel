@@ -310,7 +310,7 @@ test('production deployment image update requires a fresh dry-run preview', asyn
   expect(consoleErrors).toEqual([])
 })
 
-test('cluster resources show node diagnostics, namespaces, bounded CRDs and aggregated APIs', async ({ page }, testInfo) => {
+test('cluster resources show node diagnostics, bounded extensions and admission webhooks', async ({ page }, testInfo) => {
   const consoleErrors: string[] = []
   const requestedResources: string[] = []
   page.on('console', (message) => {
@@ -377,6 +377,30 @@ test('cluster resources show node diagnostics, namespaces, bounded CRDs and aggr
   result = await new AxeBuilder({ page }).analyze()
   expect(result.violations.filter((violation) => ['serious', 'critical'].includes(violation.impact ?? ''))).toEqual([])
   await page.screenshot({ path: `test-results/${testInfo.project.name}-api-services.png`, fullPage: true })
+
+  expect(requestedResources).not.toContain('admission-validating')
+  await page.getByRole('button', { name: '准入' }).click()
+  await expect(page.getByText('policy.platform.example.com', { exact: true })).toBeVisible()
+  expect(requestedResources).toContain('admission-validating')
+  expect(requestedResources).not.toContain('admission-detail')
+  await page.getByRole('button', { name: '查看 policy.platform.example.com' }).click()
+  const admissionDialog = page.getByRole('dialog', { name: '准入 Webhook · policy.platform.example.com' })
+  await expect(admissionDialog.getByText('policy-system/policy-webhook:443（默认）')).toBeVisible()
+  await expect(admissionDialog.getByText('Fail（默认）')).toBeVisible()
+  await expect(admissionDialog.getByText('1 条规则 · 2 个操作 · 2 个资源')).toBeVisible()
+  await expect(admissionDialog.getByText('private-webhook-path')).toHaveCount(0)
+  await expect(admissionDialog.getByText('private-ca-bundle')).toHaveCount(0)
+  expect(requestedResources).toContain('admission-detail')
+  overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
+  expect(overflow).toBeLessThanOrEqual(1)
+  result = await new AxeBuilder({ page }).analyze()
+  expect(result.violations.filter((violation) => ['serious', 'critical'].includes(violation.impact ?? ''))).toEqual([])
+  await page.screenshot({ path: `test-results/${testInfo.project.name}-admission-webhook-detail.png` })
+
+  await admissionDialog.getByRole('button', { name: '关闭' }).click()
+  await page.getByRole('button', { name: 'Mutating' }).click()
+  await expect(page.getByText('mutate.platform.example.com', { exact: true })).toBeVisible()
+  expect(requestedResources).toContain('admission-mutating')
   expect(consoleErrors).toEqual([])
 })
 
@@ -1231,6 +1255,30 @@ async function mockClusterResources(page: Page, requestedResources: string[]) {
         availability_reason: 'FailedDiscoveryCheck', availability_transition_time: '2026-07-26T08:02:00Z',
         condition_count: 1, insecure_skip_tls_verify: true, group_priority_minimum: 100,
         version_priority: 100, created_at: '2026-07-26T08:00:00Z',
+      }]
+    } else if (path === '/api/v1/clusters/clu_1/admission-webhook-configurations/policy.platform.example.com') {
+      requestedResources.push('admission-detail')
+      data = {
+        kind: 'validating', name: 'policy.platform.example.com', webhook_count: 1, generation: 3,
+        created_at: '2026-07-28T08:00:00Z',
+        webhooks: [{
+          name: 'validate.policy.platform.example.com', target_type: 'service',
+          service_namespace: 'policy-system', service_name: 'policy-webhook', service_port: 443,
+          service_port_defaulted: true, ca_bundle_configured: true,
+          failure_policy: 'Fail', failure_policy_defaulted: true,
+          match_policy: 'Equivalent', match_policy_defaulted: true, side_effects: 'None',
+          timeout_seconds: 10, timeout_seconds_defaulted: true, admission_review_versions: ['v1'],
+          rule_count: 1, operation_count: 2, api_group_count: 1, api_version_count: 1, resource_count: 2,
+          namespace_selector_label_count: 1, namespace_selector_expression_count: 0,
+          object_selector_label_count: 0, object_selector_expression_count: 0, match_condition_count: 1,
+        }],
+      }
+    } else if (path === '/api/v1/clusters/clu_1/admission-webhook-configurations') {
+      const kind = url.searchParams.get('kind')
+      requestedResources.push(kind === 'mutating' ? 'admission-mutating' : 'admission-validating')
+      data = [{
+        kind, name: kind === 'mutating' ? 'mutate.platform.example.com' : 'policy.platform.example.com',
+        created_at: '2026-07-28T08:00:00Z',
       }]
     } else {
       await route.fulfill({

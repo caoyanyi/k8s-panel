@@ -529,6 +529,56 @@ type KubernetesAPIService struct {
 	CreatedAt                  time.Time  `json:"created_at"`
 }
 
+type KubernetesAdmissionWebhookConfigurationKind string
+
+const (
+	AdmissionWebhookConfigurationValidating KubernetesAdmissionWebhookConfigurationKind = "validating"
+	AdmissionWebhookConfigurationMutating   KubernetesAdmissionWebhookConfigurationKind = "mutating"
+)
+
+type KubernetesAdmissionWebhookConfiguration struct {
+	Kind      KubernetesAdmissionWebhookConfigurationKind `json:"kind"`
+	Name      string                                      `json:"name"`
+	CreatedAt time.Time                                   `json:"created_at"`
+}
+
+type KubernetesAdmissionWebhook struct {
+	Name                             string   `json:"name"`
+	TargetType                       string   `json:"target_type"`
+	ServiceNamespace                 string   `json:"service_namespace,omitempty"`
+	ServiceName                      string   `json:"service_name,omitempty"`
+	ServicePort                      int32    `json:"service_port,omitempty"`
+	ServicePortDefaulted             bool     `json:"service_port_defaulted"`
+	CABundleConfigured               bool     `json:"ca_bundle_configured"`
+	FailurePolicy                    string   `json:"failure_policy"`
+	FailurePolicyDefaulted           bool     `json:"failure_policy_defaulted"`
+	MatchPolicy                      string   `json:"match_policy"`
+	MatchPolicyDefaulted             bool     `json:"match_policy_defaulted"`
+	SideEffects                      string   `json:"side_effects"`
+	TimeoutSeconds                   int32    `json:"timeout_seconds"`
+	TimeoutSecondsDefaulted          bool     `json:"timeout_seconds_defaulted"`
+	ReinvocationPolicy               string   `json:"reinvocation_policy,omitempty"`
+	ReinvocationPolicyDefaulted      bool     `json:"reinvocation_policy_defaulted"`
+	AdmissionReviewVersions          []string `json:"admission_review_versions"`
+	RuleCount                        int      `json:"rule_count"`
+	OperationCount                   int      `json:"operation_count"`
+	APIGroupCount                    int      `json:"api_group_count"`
+	APIVersionCount                  int      `json:"api_version_count"`
+	ResourceCount                    int      `json:"resource_count"`
+	NamespaceSelectorLabelCount      int      `json:"namespace_selector_label_count"`
+	NamespaceSelectorExpressionCount int      `json:"namespace_selector_expression_count"`
+	ObjectSelectorLabelCount         int      `json:"object_selector_label_count"`
+	ObjectSelectorExpressionCount    int      `json:"object_selector_expression_count"`
+	MatchConditionCount              int      `json:"match_condition_count"`
+}
+
+type KubernetesAdmissionWebhookConfigurationDetail struct {
+	KubernetesAdmissionWebhookConfiguration
+	Generation   int64                        `json:"generation"`
+	Webhooks     []KubernetesAdmissionWebhook `json:"webhooks"`
+	WebhookCount int                          `json:"webhook_count"`
+}
+
 type KubernetesCustomResourceDefinitionVersion struct {
 	Name       string `json:"name"`
 	Served     bool   `json:"served"`

@@ -517,6 +517,50 @@ func (s *Service) APIServices(ctx context.Context, clusterID string) ([]domain.K
 	return gateway.APIServices(ctx)
 }
 
+func (s *Service) AdmissionWebhookConfigurations(
+	ctx context.Context,
+	clusterID string,
+	kind domain.KubernetesAdmissionWebhookConfigurationKind,
+) ([]domain.KubernetesAdmissionWebhookConfiguration, error) {
+	if err := domain.ValidateAdmissionWebhookConfigurationKind(kind); err != nil {
+		return nil, err
+	}
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	gateway, err := s.kubeGateway(ctx, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	return gateway.AdmissionWebhookConfigurations(ctx, kind)
+}
+
+func (s *Service) AdmissionWebhookConfiguration(
+	ctx context.Context,
+	clusterID string,
+	kind domain.KubernetesAdmissionWebhookConfigurationKind,
+	name string,
+) (domain.KubernetesAdmissionWebhookConfigurationDetail, error) {
+	if err := domain.ValidateAdmissionWebhookConfigurationKind(kind); err != nil {
+		return domain.KubernetesAdmissionWebhookConfigurationDetail{}, err
+	}
+	if err := domain.ValidateAdmissionWebhookConfigurationName(name); err != nil {
+		return domain.KubernetesAdmissionWebhookConfigurationDetail{}, err
+	}
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return domain.KubernetesAdmissionWebhookConfigurationDetail{}, err
+	}
+	defer release()
+	gateway, err := s.kubeGateway(ctx, clusterID)
+	if err != nil {
+		return domain.KubernetesAdmissionWebhookConfigurationDetail{}, err
+	}
+	return gateway.AdmissionWebhookConfiguration(ctx, kind, name)
+}
+
 func (s *Service) Events(
 	ctx context.Context,
 	clusterID, namespace, eventType string,

@@ -672,6 +672,18 @@ func TestServiceRejectsKubernetesReadsDuringCriticalResourcePressure(t *testing.
 			_, err := service.APIServices(context.Background(), cluster.ID)
 			return err
 		}},
+		{name: "admission webhook configurations", call: func() error {
+			_, err := service.AdmissionWebhookConfigurations(
+				context.Background(), cluster.ID, domain.AdmissionWebhookConfigurationValidating,
+			)
+			return err
+		}},
+		{name: "admission webhook configuration detail", call: func() error {
+			_, err := service.AdmissionWebhookConfiguration(
+				context.Background(), cluster.ID, domain.AdmissionWebhookConfigurationValidating, "policy.platform.example.com",
+			)
+			return err
+		}},
 		{name: "node detail", call: func() error { _, err := service.NodeDetail(context.Background(), cluster.ID, "worker-01"); return err }},
 		{name: "node events", call: func() error {
 			_, err := service.NodeEvents(context.Background(), cluster.ID, "worker-01", 20)
@@ -783,6 +795,9 @@ func TestServiceRejectsKubernetesReadsDuringCriticalResourcePressure(t *testing.
 	}
 	if listCalls, detailCalls, reviewCalls := gateway.accessListCalls.Load(), gateway.accessDetailCalls.Load(), gateway.accessReviewCalls.Load(); listCalls != 0 || detailCalls != 0 || reviewCalls != 0 {
 		t.Fatalf("access reads reached Kubernetes under critical pressure: lists=%d details=%d reviews=%d", listCalls, detailCalls, reviewCalls)
+	}
+	if listCalls, detailCalls := gateway.admissionWebhookListCalls.Load(), gateway.admissionWebhookDetailCalls.Load(); listCalls != 0 || detailCalls != 0 {
+		t.Fatalf("admission webhook reads reached Kubernetes under critical pressure: lists=%d details=%d", listCalls, detailCalls)
 	}
 	capacity := service.OperationCapacity().KubernetesReads
 	if !capacity.Adaptive || capacity.Pressure != resourceguard.PressureCritical || capacity.Limit != 0 || capacity.Maximum != 4 {
@@ -1228,6 +1243,64 @@ func TestServiceListsAPIServices(t *testing.T) {
 	}
 	if gateway.apiServiceCalls.Load() != 1 {
 		t.Fatalf("APIService gateway calls = %d, want 1", gateway.apiServiceCalls.Load())
+	}
+}
+
+func TestServiceListsAdmissionWebhookConfigurationsAndValidatesInputsBeforeGateway(t *testing.T) {
+	t.Parallel()
+
+	const name = "policy.platform.example.com"
+	gateway := &fakeKubeGateway{
+		probe: domain.ClusterProbe{Version: "v1.36.2"},
+		admissionWebhooks: []domain.KubernetesAdmissionWebhookConfiguration{{
+			Kind: domain.AdmissionWebhookConfigurationValidating, Name: name,
+		}},
+		admissionWebhookDetail: domain.KubernetesAdmissionWebhookConfigurationDetail{
+			KubernetesAdmissionWebhookConfiguration: domain.KubernetesAdmissionWebhookConfiguration{
+				Kind: domain.AdmissionWebhookConfigurationValidating, Name: name,
+			},
+			WebhookCount: 1,
+			Webhooks:     []domain.KubernetesAdmissionWebhook{{Name: "validate.policy.platform.example.com", TargetType: "service"}},
+		},
+	}
+	service, _, _ := newTestService(t, serviceFakes{kube: gateway})
+	cluster, err := service.CreateCluster(context.Background(), "admin", "req_cluster", domain.ClusterInput{
+		Name: "cluster", Environment: domain.EnvironmentDevelopment, Server: "https://api.example.com", BearerToken: "token",
+	})
+	if err != nil {
+		t.Fatalf("CreateCluster() error = %v", err)
+	}
+
+	items, err := service.AdmissionWebhookConfigurations(
+		context.Background(), cluster.ID, domain.AdmissionWebhookConfigurationValidating,
+	)
+	if err != nil || len(items) != 1 || items[0].Name != name {
+		t.Fatalf("AdmissionWebhookConfigurations() = %#v, %v", items, err)
+	}
+	detail, err := service.AdmissionWebhookConfiguration(
+		context.Background(), cluster.ID, domain.AdmissionWebhookConfigurationValidating, name,
+	)
+	if err != nil || detail.Name != name || detail.WebhookCount != 1 {
+		t.Fatalf("AdmissionWebhookConfiguration() = %#v, %v", detail, err)
+	}
+	if gateway.admissionWebhookKind != domain.AdmissionWebhookConfigurationValidating ||
+		gateway.admissionWebhookName != name || gateway.admissionWebhookListCalls.Load() != 1 ||
+		gateway.admissionWebhookDetailCalls.Load() != 1 {
+		t.Fatalf("admission webhook gateway inputs = kind %q, name %q, lists %d, details %d",
+			gateway.admissionWebhookKind, gateway.admissionWebhookName, gateway.admissionWebhookListCalls.Load(),
+			gateway.admissionWebhookDetailCalls.Load())
+	}
+
+	if _, err := service.AdmissionWebhookConfigurations(context.Background(), cluster.ID, "Validating"); err == nil {
+		t.Fatal("AdmissionWebhookConfigurations() accepted an invalid kind")
+	}
+	if _, err := service.AdmissionWebhookConfiguration(
+		context.Background(), cluster.ID, domain.AdmissionWebhookConfigurationValidating, "../validatingwebhookconfigurations",
+	); err == nil {
+		t.Fatal("AdmissionWebhookConfiguration() accepted an invalid name")
+	}
+	if gateway.admissionWebhookListCalls.Load() != 1 || gateway.admissionWebhookDetailCalls.Load() != 1 {
+		t.Fatal("invalid admission webhook inputs reached Kubernetes gateway")
 	}
 }
 
@@ -2085,6 +2158,12 @@ type fakeKubeGateway struct {
 	crdDetailCalls                   atomic.Int64
 	apiServices                      []domain.KubernetesAPIService
 	apiServiceCalls                  atomic.Int64
+	admissionWebhooks                []domain.KubernetesAdmissionWebhookConfiguration
+	admissionWebhookDetail           domain.KubernetesAdmissionWebhookConfigurationDetail
+	admissionWebhookKind             domain.KubernetesAdmissionWebhookConfigurationKind
+	admissionWebhookName             string
+	admissionWebhookListCalls        atomic.Int64
+	admissionWebhookDetailCalls      atomic.Int64
 	services                         []domain.KubernetesService
 	ingresses                        []domain.KubernetesIngress
 	endpointSlices                   []domain.KubernetesEndpointSlice
@@ -2232,6 +2311,28 @@ func (g *fakeKubeGateway) CustomResourceDefinition(_ context.Context, name strin
 func (g *fakeKubeGateway) APIServices(context.Context) ([]domain.KubernetesAPIService, error) {
 	g.apiServiceCalls.Add(1)
 	return append([]domain.KubernetesAPIService(nil), g.apiServices...), nil
+}
+func (g *fakeKubeGateway) AdmissionWebhookConfigurations(
+	_ context.Context,
+	kind domain.KubernetesAdmissionWebhookConfigurationKind,
+) ([]domain.KubernetesAdmissionWebhookConfiguration, error) {
+	g.admissionWebhookListCalls.Add(1)
+	g.mutationMu.Lock()
+	g.admissionWebhookKind = kind
+	g.mutationMu.Unlock()
+	return append([]domain.KubernetesAdmissionWebhookConfiguration(nil), g.admissionWebhooks...), nil
+}
+func (g *fakeKubeGateway) AdmissionWebhookConfiguration(
+	_ context.Context,
+	kind domain.KubernetesAdmissionWebhookConfigurationKind,
+	name string,
+) (domain.KubernetesAdmissionWebhookConfigurationDetail, error) {
+	g.admissionWebhookDetailCalls.Add(1)
+	g.mutationMu.Lock()
+	g.admissionWebhookKind = kind
+	g.admissionWebhookName = name
+	g.mutationMu.Unlock()
+	return g.admissionWebhookDetail, nil
 }
 func (g *fakeKubeGateway) Workloads(context.Context, string, string) ([]domain.Workload, error) {
 	return nil, nil

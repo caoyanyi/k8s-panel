@@ -641,6 +641,71 @@ func TestValidateAPIServiceName(t *testing.T) {
 	}
 }
 
+func TestValidateAdmissionWebhookConfigurationKind(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		value     KubernetesAdmissionWebhookConfigurationKind
+		wantField string
+	}{
+		{name: "validating", value: AdmissionWebhookConfigurationValidating},
+		{name: "mutating", value: AdmissionWebhookConfigurationMutating},
+		{name: "empty", wantField: "kind"},
+		{name: "uppercase", value: "Validating", wantField: "kind"},
+		{name: "unknown", value: "policy", wantField: "kind"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := ValidateAdmissionWebhookConfigurationKind(tt.value)
+			if tt.wantField == "" {
+				if err != nil {
+					t.Fatalf("ValidateAdmissionWebhookConfigurationKind() error = %v", err)
+				}
+				return
+			}
+			var validationErr *ValidationError
+			if !errors.As(err, &validationErr) || validationErr.Field != tt.wantField {
+				t.Fatalf("ValidateAdmissionWebhookConfigurationKind() error = %v, want field %q", err, tt.wantField)
+			}
+		})
+	}
+}
+
+func TestValidateAdmissionWebhookConfigurationName(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		value     string
+		wantField string
+	}{
+		{name: "valid", value: "policy.platform.example.com"},
+		{name: "single label", value: "policy"},
+		{name: "empty", wantField: "name"},
+		{name: "uppercase", value: "Policy.platform.example.com", wantField: "name"},
+		{name: "path traversal", value: "../validatingwebhookconfigurations", wantField: "name"},
+		{name: "too long", value: strings.Repeat("a", 254), wantField: "name"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := ValidateAdmissionWebhookConfigurationName(tt.value)
+			if tt.wantField == "" {
+				if err != nil {
+					t.Fatalf("ValidateAdmissionWebhookConfigurationName() error = %v", err)
+				}
+				return
+			}
+			var validationErr *ValidationError
+			if !errors.As(err, &validationErr) || validationErr.Field != tt.wantField {
+				t.Fatalf("ValidateAdmissionWebhookConfigurationName() error = %v, want field %q", err, tt.wantField)
+			}
+		})
+	}
+}
+
 func TestValidateWorkloadOperationInput(t *testing.T) {
 	t.Parallel()
 

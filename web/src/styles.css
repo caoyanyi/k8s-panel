@@ -296,6 +296,9 @@ td strong { color: var(--text); font-size: 12px; }
 .segmented-control { width: fit-content; margin-bottom: 14px; padding: 3px; display: flex; background: #e8ece9; border-radius: 6px; }
 .segmented-control button { min-width: 110px; height: 34px; padding: 0 13px; border-radius: 4px; background: transparent; color: #58665e; font-size: 12px; font-weight: 620; }
 .segmented-control button.active { background: #fff; color: var(--text); box-shadow: 0 1px 3px rgba(23, 33, 29, 0.12); }
+.cluster-resource-control { max-width: 100%; overflow-x: auto; }
+.toolbar .admission-kind-control { flex: 0 0 auto; margin: 0; }
+.admission-kind-control button { min-width: 104px; }
 .access-kind-control { max-width: 100%; overflow-x: auto; }
 .access-kind-control button { min-width: 142px; }
 .governance-kind-control { max-width: 100%; overflow-x: auto; }
@@ -409,6 +412,8 @@ select:disabled { cursor: not-allowed; background: #f3f5f4; color: #89938d; }
 .access-subject-table { min-width: 680px; }
 .crd-version-table { min-width: 760px; }
 .crd-condition-table { min-width: 820px; }
+.admission-webhook-detail-table { min-width: 1480px; }
+.admission-webhook-detail-table td { max-width: 260px; overflow-wrap: anywhere; }
 .access-list-cell { max-width: 320px; line-height: 1.45; overflow-wrap: anywhere; }
 .access-truncated { padding: 8px 10px; border-left: 3px solid var(--warning); background: #fff8ea; color: #80540f; font-size: 11px; }
 .service-account-access-review { padding-top: 2px; border-top: 1px solid var(--line); }
@@ -497,6 +502,10 @@ select:disabled { cursor: not-allowed; background: #f3f5f4; color: #89938d; }
   .toolbar-field select { min-width: 0; }
   .segmented-control { width: 100%; }
   .segmented-control button { min-width: 0; flex: 1; }
+  .cluster-resource-control { justify-content: flex-start; }
+  .cluster-resource-control button { min-width: 92px; flex: 0 0 92px; }
+  .toolbar .admission-kind-control { width: auto; }
+  .admission-kind-control button { min-width: 104px; flex: 0 0 104px; }
   .access-kind-control { justify-content: flex-start; }
   .access-kind-control button { min-width: 142px; flex: 0 0 142px; }
   .governance-kind-control { justify-content: flex-start; }

@@ -1,6 +1,7 @@
 import { Eye, RefreshCw, Search } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '../api'
+import { AdmissionWebhookConfigurationDetailModal } from '../components/AdmissionWebhookConfigurationDetailModal'
 import { EmptyState, ErrorState, LoadingState } from '../components/DataState'
 import { CustomResourceDefinitionDetailModal } from '../components/CustomResourceDefinitionDetailModal'
 import { NodeDetailModal } from '../components/NodeDetailModal'
@@ -9,10 +10,17 @@ import { StatusBadge } from '../components/StatusBadge'
 import { TablePagination, TABLE_PAGE_SIZE } from '../components/TablePagination'
 import { usePanel } from '../context'
 import { useResource } from '../hooks'
-import type { ClusterNode, KubernetesAPIService, KubernetesCustomResourceDefinition, Namespace } from '../types'
+import type {
+  ClusterNode,
+  KubernetesAdmissionWebhookConfiguration,
+  KubernetesAdmissionWebhookConfigurationKind,
+  KubernetesAPIService,
+  KubernetesCustomResourceDefinition,
+  Namespace,
+} from '../types'
 import { formatDateTime } from '../utils'
 
-type ResourceView = 'nodes' | 'namespaces' | 'crds' | 'api-services'
+type ResourceView = 'nodes' | 'namespaces' | 'crds' | 'api-services' | 'admission-webhooks'
 
 export function ClusterResourcesPage() {
   const { clusters, selectedClusterId } = usePanel()
@@ -21,6 +29,8 @@ export function ClusterResourcesPage() {
   const [page, setPage] = useState(0)
   const [selectedNode, setSelectedNode] = useState('')
   const [selectedCRD, setSelectedCRD] = useState<KubernetesCustomResourceDefinition | null>(null)
+  const [admissionWebhookKind, setAdmissionWebhookKind] = useState<KubernetesAdmissionWebhookConfigurationKind>('validating')
+  const [selectedAdmissionWebhook, setSelectedAdmissionWebhook] = useState<KubernetesAdmissionWebhookConfiguration | null>(null)
   const selectedCluster = clusters.find((cluster) => cluster.id === selectedClusterId)
   const nodes = useResource(
     (signal) => selectedClusterId && view === 'nodes' ? api.get<ClusterNode[]>(`/api/v1/clusters/${selectedClusterId}/nodes`, signal) : Promise.resolve([]),
@@ -42,11 +52,22 @@ export function ClusterResourcesPage() {
       : Promise.resolve([]),
     [selectedClusterId, view],
   )
+  const admissionWebhooks = useResource(
+    (signal) => selectedClusterId && view === 'admission-webhooks'
+      ? api.get<KubernetesAdmissionWebhookConfiguration[]>(
+        `/api/v1/clusters/${selectedClusterId}/admission-webhook-configurations?${new URLSearchParams({ kind: admissionWebhookKind })}`,
+        signal,
+      )
+      : Promise.resolve([]),
+    [selectedClusterId, view, admissionWebhookKind],
+  )
 
   useEffect(() => {
     setSelectedNode('')
     setSelectedCRD(null)
+    setSelectedAdmissionWebhook(null)
   }, [selectedClusterId, view])
+  useEffect(() => setSelectedAdmissionWebhook(null), [admissionWebhookKind])
   const normalizedSearch = search.trim().toLowerCase()
   useEffect(() => setPage(0), [normalizedSearch, selectedClusterId, view])
   const visibleNodes = useMemo(() => (nodes.data ?? []).filter((node) => (
@@ -61,13 +82,17 @@ export function ClusterResourcesPage() {
   const visibleAPIServices = useMemo(() => (apiServices.data ?? []).filter((resource) => (
     !normalizedSearch || `${resource.name} ${resource.group} ${resource.version} ${resource.service_namespace ?? ''} ${resource.service_name ?? ''} ${resource.availability_reason ?? ''}`.toLowerCase().includes(normalizedSearch)
   )), [apiServices.data, normalizedSearch])
-  const active = { nodes, namespaces, crds: customResourceDefinitions, 'api-services': apiServices }[view]
+  const visibleAdmissionWebhooks = useMemo(() => (admissionWebhooks.data ?? []).filter((resource) => (
+    !normalizedSearch || `${resource.name} ${resource.kind}`.toLowerCase().includes(normalizedSearch)
+  )), [admissionWebhooks.data, normalizedSearch])
+  const active = { nodes, namespaces, crds: customResourceDefinitions, 'api-services': apiServices, 'admission-webhooks': admissionWebhooks }[view]
   const activeCount = active.data?.length ?? 0
   const visibleCount = {
     nodes: visibleNodes.length,
     namespaces: visibleNamespaces.length,
     crds: visibleCustomResourceDefinitions.length,
     'api-services': visibleAPIServices.length,
+    'admission-webhooks': visibleAdmissionWebhooks.length,
   }[view]
   const totalPages = Math.max(1, Math.ceil(visibleCount / TABLE_PAGE_SIZE))
   const currentPage = Math.min(page, totalPages - 1)
@@ -76,12 +101,14 @@ export function ClusterResourcesPage() {
   const pageNamespaces = visibleNamespaces.slice(pageStart, pageStart + TABLE_PAGE_SIZE)
   const pageCustomResourceDefinitions = visibleCustomResourceDefinitions.slice(pageStart, pageStart + TABLE_PAGE_SIZE)
   const pageAPIServices = visibleAPIServices.slice(pageStart, pageStart + TABLE_PAGE_SIZE)
-  const resourceLabel = { nodes: '节点', namespaces: '命名空间', crds: 'CRD', 'api-services': '聚合 API' }[view]
+  const pageAdmissionWebhooks = visibleAdmissionWebhooks.slice(pageStart, pageStart + TABLE_PAGE_SIZE)
+  const resourceLabel = { nodes: '节点', namespaces: '命名空间', crds: 'CRD', 'api-services': '聚合 API', 'admission-webhooks': '准入配置' }[view]
   const searchPlaceholder = {
     nodes: '搜索节点、IP 或角色',
     namespaces: '搜索命名空间或标签',
     crds: '搜索资源或 API 组',
     'api-services': '搜索 API、Service 或状态原因',
+    'admission-webhooks': '搜索准入 Webhook 配置',
   }[view]
 
   return (
@@ -94,13 +121,20 @@ export function ClusterResourcesPage() {
       {selectedCluster?.environment === 'production' && <div className="production-banner"><strong>生产环境</strong><span>{selectedCluster.name}</span></div>}
       {!selectedClusterId ? <EmptyState title="尚未选择集群" /> : (
         <>
-          <div className="segmented-control" role="group" aria-label="集群资源类型">
+          <div className="segmented-control cluster-resource-control" role="group" aria-label="集群资源类型">
             <button type="button" className={view === 'nodes' ? 'active' : ''} onClick={() => setView('nodes')}>节点</button>
             <button type="button" className={view === 'namespaces' ? 'active' : ''} onClick={() => setView('namespaces')}>命名空间</button>
             <button type="button" className={view === 'crds' ? 'active' : ''} onClick={() => setView('crds')}>CRD</button>
             <button type="button" className={view === 'api-services' ? 'active' : ''} onClick={() => setView('api-services')}>聚合 API</button>
+            <button type="button" className={view === 'admission-webhooks' ? 'active' : ''} onClick={() => setView('admission-webhooks')}>准入</button>
           </div>
           <section className="toolbar" aria-label="集群资源筛选">
+            {view === 'admission-webhooks' && (
+              <div className="segmented-control admission-kind-control" role="group" aria-label="准入 Webhook 类型">
+                <button type="button" className={admissionWebhookKind === 'validating' ? 'active' : ''} onClick={() => setAdmissionWebhookKind('validating')}>Validating</button>
+                <button type="button" className={admissionWebhookKind === 'mutating' ? 'active' : ''} onClick={() => setAdmissionWebhookKind('mutating')}>Mutating</button>
+              </div>
+            )}
             <div className="search-field search-field-wide"><Search size={16} aria-hidden="true" /><label className="sr-only" htmlFor="cluster-resource-search">搜索集群资源</label><input id="cluster-resource-search" type="search" placeholder={searchPlaceholder} value={search} onChange={(event) => setSearch(event.target.value)} /></div>
           </section>
           <section className="section-block table-section">
@@ -122,11 +156,42 @@ export function ClusterResourcesPage() {
                   : visibleAPIServices.length === 0 ? <EmptyState title={normalizedSearch ? '没有匹配的聚合 API' : '当前集群没有聚合 API'} />
                     : <><APIServiceTable resources={pageAPIServices} /><TablePagination page={currentPage} totalItems={visibleAPIServices.length} onPage={setPage} /></>
             )}
+            {view === 'admission-webhooks' && (
+              admissionWebhooks.loading ? <LoadingState label="正在读取准入 Webhook 元数据" />
+                : admissionWebhooks.error ? <ErrorState error={admissionWebhooks.error} onRetry={() => void admissionWebhooks.refresh()} />
+                  : visibleAdmissionWebhooks.length === 0 ? <EmptyState title={normalizedSearch ? '没有匹配的准入 Webhook 配置' : '当前集群没有准入 Webhook 配置'} />
+                    : <><AdmissionWebhookConfigurationTable resources={pageAdmissionWebhooks} onSelect={setSelectedAdmissionWebhook} /><TablePagination page={currentPage} totalItems={visibleAdmissionWebhooks.length} onPage={setPage} /></>
+            )}
           </section>
         </>
       )}
       {selectedNode && <NodeDetailModal clusterId={selectedClusterId} nodeName={selectedNode} open onClose={() => setSelectedNode('')} />}
       {selectedCRD && <CustomResourceDefinitionDetailModal clusterId={selectedClusterId} resource={selectedCRD} onClose={() => setSelectedCRD(null)} />}
+      {selectedAdmissionWebhook && <AdmissionWebhookConfigurationDetailModal clusterId={selectedClusterId} resource={selectedAdmissionWebhook} onClose={() => setSelectedAdmissionWebhook(null)} />}
+    </div>
+  )
+}
+
+function AdmissionWebhookConfigurationTable({
+  resources,
+  onSelect,
+}: {
+  resources: KubernetesAdmissionWebhookConfiguration[]
+  onSelect: (resource: KubernetesAdmissionWebhookConfiguration) => void
+}) {
+  return (
+    <div className="table-wrap" role="region" aria-label="准入 Webhook 配置清单" tabIndex={0}>
+      <table className="admission-webhook-table">
+        <thead><tr><th>配置</th><th>类型</th><th>创建时间</th><th className="actions-column">操作</th></tr></thead>
+        <tbody>{resources.map((resource) => (
+          <tr key={`${resource.kind}/${resource.name}`}>
+            <td className="mono"><strong>{resource.name}</strong></td>
+            <td><span className="kind-label">{resource.kind === 'validating' ? 'Validating' : 'Mutating'}</span></td>
+            <td>{formatDateTime(resource.created_at)}</td>
+            <td className="actions-column"><button type="button" className="icon-button" aria-label={`查看 ${resource.name}`} title="查看准入 Webhook 详情" onClick={() => onSelect(resource)}><Eye size={16} /></button></td>
+          </tr>
+        ))}</tbody>
+      </table>
     </div>
   )
 }

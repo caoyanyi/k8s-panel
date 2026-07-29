@@ -181,6 +181,53 @@ describe('ClusterResourcesPage', () => {
     expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/custom-resource-definitions'))).toBe(false)
   })
 
+  it('loads one admission webhook kind and one redacted detail on demand', async () => {
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const path = String(input)
+      if (path.endsWith('/admission-webhook-configurations/policy.platform.example.com?kind=validating')) {
+        return Promise.resolve(dataResponse(admissionWebhookDetail))
+      }
+      if (path.endsWith('/admission-webhook-configurations?kind=validating')) {
+        return Promise.resolve(dataResponse([admissionWebhook]))
+      }
+      if (path.endsWith('/admission-webhook-configurations?kind=mutating')) {
+        return Promise.resolve(dataResponse([{ ...admissionWebhook, kind: 'mutating', name: 'mutate.platform.example.com' }]))
+      }
+      if (path.endsWith('/nodes')) return Promise.resolve(dataResponse([node]))
+      return Promise.resolve(errorResponse(404, 'not_found'))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const user = userEvent.setup()
+
+    renderPage(context)
+    await screen.findByText(node.name)
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/admission-webhook-configurations'))).toBe(false)
+    await user.click(screen.getByRole('button', { name: '准入' }))
+
+    expect(await screen.findByText(admissionWebhook.name)).toBeInTheDocument()
+    expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('?kind=mutating'))).toBe(false)
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes(`${admissionWebhook.name}?`))).toBe(false)
+    await user.click(screen.getByRole('button', { name: `查看 ${admissionWebhook.name}` }))
+
+    const dialog = await screen.findByRole('dialog', { name: `准入 Webhook · ${admissionWebhook.name}` })
+    expect(within(dialog).getByText('policy-system/policy-webhook:443（默认）')).toBeInTheDocument()
+    expect(within(dialog).getByText('Fail（默认）')).toBeInTheDocument()
+    expect(within(dialog).getByText('Equivalent（默认）')).toBeInTheDocument()
+    expect(within(dialog).getByText('None')).toBeInTheDocument()
+    expect(within(dialog).getByText('10 秒（默认）')).toBeInTheDocument()
+    expect(within(dialog).getByText('已配置')).toBeInTheDocument()
+    expect(within(dialog).getByText('v1')).toBeInTheDocument()
+    expect(within(dialog).getByText('1 条规则 · 2 个操作 · 2 个资源')).toBeInTheDocument()
+    expect(within(dialog).queryByText('private-webhook-path')).not.toBeInTheDocument()
+    expect(within(dialog).queryByText('private-ca-bundle')).not.toBeInTheDocument()
+    expect(within(dialog).queryByText('private CEL expression')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Mutating' }))
+    expect(await screen.findByText('mutate.platform.example.com')).toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: `准入 Webhook · ${admissionWebhook.name}` })).not.toBeInTheDocument()
+    expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('?kind=mutating'))).toBe(true)
+  })
+
   it('shows an empty state without a selected cluster', () => {
     vi.stubGlobal('fetch', vi.fn())
     renderPage({ ...context, clusters: [], selectedClusterId: '' })
@@ -237,6 +284,29 @@ const apiService = {
   availability_reason: 'FailedDiscoveryCheck', availability_transition_time: '2026-07-26T08:02:00Z',
   condition_count: 1, insecure_skip_tls_verify: true, group_priority_minimum: 100,
   version_priority: 100, created_at: '2026-07-26T08:00:00Z',
+}
+
+const admissionWebhook = {
+  kind: 'validating', name: 'policy.platform.example.com',
+  created_at: '2026-07-28T08:00:00Z',
+}
+
+const admissionWebhookDetail = {
+  ...admissionWebhook,
+  generation: 3,
+  webhooks: [{
+    name: 'validate.policy.platform.example.com', target_type: 'service',
+    service_namespace: 'policy-system', service_name: 'policy-webhook', service_port: 443,
+    service_port_defaulted: true, ca_bundle_configured: true,
+    failure_policy: 'Fail', failure_policy_defaulted: true,
+    match_policy: 'Equivalent', match_policy_defaulted: true,
+    side_effects: 'None', timeout_seconds: 10, timeout_seconds_defaulted: true,
+    admission_review_versions: ['v1'], rule_count: 1, operation_count: 2,
+    api_group_count: 1, api_version_count: 1, resource_count: 2,
+    namespace_selector_label_count: 1, namespace_selector_expression_count: 0,
+    object_selector_label_count: 0, object_selector_expression_count: 0,
+    match_condition_count: 1,
+  }],
 }
 
 function renderPage(value: PanelContextValue) {

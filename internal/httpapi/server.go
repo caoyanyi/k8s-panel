@@ -130,6 +130,8 @@ func (s *Server) routes() {
 	s.mux.Handle("GET /api/v1/clusters/{id}/custom-resource-definitions", s.protected(http.HandlerFunc(s.listCustomResourceDefinitions)))
 	s.mux.Handle("GET /api/v1/clusters/{id}/custom-resource-definitions/{name}", s.protected(http.HandlerFunc(s.getCustomResourceDefinition)))
 	s.mux.Handle("GET /api/v1/clusters/{id}/api-services", s.protected(http.HandlerFunc(s.listAPIServices)))
+	s.mux.Handle("GET /api/v1/clusters/{id}/admission-webhook-configurations", s.protected(http.HandlerFunc(s.listAdmissionWebhookConfigurations)))
+	s.mux.Handle("GET /api/v1/clusters/{id}/admission-webhook-configurations/{name}", s.protected(http.HandlerFunc(s.getAdmissionWebhookConfiguration)))
 	s.mux.Handle("GET /api/v1/clusters/{id}/events", s.protected(http.HandlerFunc(s.listEvents)))
 	s.mux.Handle("GET /api/v1/clusters/{id}/workloads", s.protected(http.HandlerFunc(s.listWorkloads)))
 	s.mux.Handle("GET /api/v1/clusters/{id}/services", s.protected(http.HandlerFunc(s.listServices)))

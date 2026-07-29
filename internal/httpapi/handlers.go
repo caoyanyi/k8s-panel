@@ -266,6 +266,28 @@ func (s *Server) listAPIServices(w http.ResponseWriter, r *http.Request) {
 	writeData(w, http.StatusOK, items)
 }
 
+func (s *Server) listAdmissionWebhookConfigurations(w http.ResponseWriter, r *http.Request) {
+	kind := domain.KubernetesAdmissionWebhookConfigurationKind(r.URL.Query().Get("kind"))
+	items, err := s.service.AdmissionWebhookConfigurations(r.Context(), r.PathValue("id"), kind)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeData(w, http.StatusOK, items)
+}
+
+func (s *Server) getAdmissionWebhookConfiguration(w http.ResponseWriter, r *http.Request) {
+	kind := domain.KubernetesAdmissionWebhookConfigurationKind(r.URL.Query().Get("kind"))
+	item, err := s.service.AdmissionWebhookConfiguration(
+		r.Context(), r.PathValue("id"), kind, r.PathValue("name"),
+	)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeData(w, http.StatusOK, item)
+}
+
 func (s *Server) listEvents(w http.ResponseWriter, r *http.Request) {
 	limit, err := parseBoundedInt(r.URL.Query().Get("limit"), 200, 1, domain.MaxClusterEventLimit, "limit")
 	if err != nil {
