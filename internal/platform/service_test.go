@@ -659,6 +659,10 @@ func TestServiceRejectsKubernetesReadsDuringCriticalResourcePressure(t *testing.
 	}{
 		{name: "summary", call: func() error { _, err := service.Summary(context.Background(), cluster.ID); return err }},
 		{name: "namespaces", call: func() error { _, err := service.Namespaces(context.Background(), cluster.ID); return err }},
+		{name: "pod security admission posture", call: func() error {
+			_, err := service.PodSecurityAdmissionNamespaces(context.Background(), cluster.ID)
+			return err
+		}},
 		{name: "nodes", call: func() error { _, err := service.Nodes(context.Background(), cluster.ID); return err }},
 		{name: "custom resource definitions", call: func() error {
 			_, err := service.CustomResourceDefinitions(context.Background(), cluster.ID)
@@ -796,6 +800,9 @@ func TestServiceRejectsKubernetesReadsDuringCriticalResourcePressure(t *testing.
 	}
 	if calls := gateway.summaryCalls.Load(); calls != 0 {
 		t.Fatalf("Summary() reached Kubernetes %d times under critical pressure", calls)
+	}
+	if calls := gateway.podSecurityAdmissionCalls.Load(); calls != 0 {
+		t.Fatalf("PodSecurityAdmissionNamespaces() reached Kubernetes %d times under critical pressure", calls)
 	}
 	if serviceCalls, ingressCalls, endpointSliceCalls, policyCalls := gateway.serviceCalls.Load(), gateway.ingressCalls.Load(), gateway.endpointSliceCalls.Load(), gateway.networkPolicyCalls.Load(); serviceCalls != 0 || ingressCalls != 0 || endpointSliceCalls != 0 || policyCalls != 0 {
 		t.Fatalf("network reads reached Kubernetes under critical pressure: services=%d ingresses=%d endpointSlices=%d policies=%d", serviceCalls, ingressCalls, endpointSliceCalls, policyCalls)
@@ -1035,6 +1042,36 @@ func TestServiceListsNamespaceGovernanceAndValidatesScopeBeforeGateway(t *testin
 	}
 	if gateway.resourceQuotaCalls.Load() != quotaCalls || gateway.limitRangeCalls.Load() != limitCalls {
 		t.Fatal("invalid governance namespace reached Kubernetes gateway")
+	}
+}
+
+func TestServiceListsPodSecurityAdmissionPostureThroughReadGovernor(t *testing.T) {
+	t.Parallel()
+
+	gateway := &fakeKubeGateway{
+		probe: domain.ClusterProbe{Version: "v1.36.2"},
+		podSecurityAdmissionNamespaces: []domain.KubernetesPodSecurityAdmissionNamespace{{
+			Name: "payments",
+			Enforce: domain.KubernetesPodSecurityAdmissionMode{
+				Status: domain.PodSecurityAdmissionModeConfigured, Level: "restricted", Version: "latest",
+			},
+		}},
+	}
+	service, _, _ := newTestService(t, serviceFakes{kube: gateway})
+	cluster, err := service.CreateCluster(context.Background(), "admin", "req_cluster", domain.ClusterInput{
+		Name: "cluster", Environment: domain.EnvironmentDevelopment, Server: "https://api.example.com", BearerToken: "token",
+	})
+	if err != nil {
+		t.Fatalf("CreateCluster() error = %v", err)
+	}
+
+	items, err := service.PodSecurityAdmissionNamespaces(context.Background(), cluster.ID)
+	if err != nil || len(items) != 1 || items[0].Name != "payments" ||
+		items[0].Enforce.Status != domain.PodSecurityAdmissionModeConfigured {
+		t.Fatalf("PodSecurityAdmissionNamespaces() = %#v, %v", items, err)
+	}
+	if calls := gateway.podSecurityAdmissionCalls.Load(); calls != 1 {
+		t.Fatalf("gateway calls = %d, want 1", calls)
 	}
 }
 
@@ -2226,6 +2263,8 @@ type fakeKubeGateway struct {
 	summaryStarted                   chan struct{}
 	summaryRelease                   <-chan struct{}
 	namespaces                       []domain.Namespace
+	podSecurityAdmissionNamespaces   []domain.KubernetesPodSecurityAdmissionNamespace
+	podSecurityAdmissionCalls        atomic.Int64
 	detail                           domain.WorkloadDetail
 	events                           []domain.KubernetesEvent
 	logs                             domain.PodLogs
@@ -2380,6 +2419,10 @@ func (g *fakeKubeGateway) Summary(ctx context.Context) (domain.ClusterSummary, e
 }
 func (g *fakeKubeGateway) Namespaces(context.Context) ([]domain.Namespace, error) {
 	return append([]domain.Namespace(nil), g.namespaces...), nil
+}
+func (g *fakeKubeGateway) PodSecurityAdmissionNamespaces(context.Context) ([]domain.KubernetesPodSecurityAdmissionNamespace, error) {
+	g.podSecurityAdmissionCalls.Add(1)
+	return append([]domain.KubernetesPodSecurityAdmissionNamespace(nil), g.podSecurityAdmissionNamespaces...), nil
 }
 func (g *fakeKubeGateway) Nodes(context.Context) ([]domain.Node, error) {
 	return append([]domain.Node(nil), g.nodes...), nil

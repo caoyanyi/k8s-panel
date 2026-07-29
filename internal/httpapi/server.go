@@ -124,6 +124,7 @@ func (s *Server) routes() {
 	s.mux.Handle("GET /api/v1/clusters/{id}/capabilities", s.protected(http.HandlerFunc(s.clusterCapabilities)))
 	s.mux.Handle("GET /api/v1/clusters/{id}/summary", s.protected(http.HandlerFunc(s.clusterSummary)))
 	s.mux.Handle("GET /api/v1/clusters/{id}/namespaces", s.protected(http.HandlerFunc(s.listNamespaces)))
+	s.mux.Handle("GET /api/v1/clusters/{id}/pod-security-admission/namespaces", s.protected(http.HandlerFunc(s.listPodSecurityAdmissionNamespaces)))
 	s.mux.Handle("GET /api/v1/clusters/{id}/nodes", s.protected(http.HandlerFunc(s.listNodes)))
 	s.mux.Handle("GET /api/v1/clusters/{id}/nodes/{name}", s.protected(http.HandlerFunc(s.getNodeDetail)))
 	s.mux.Handle("GET /api/v1/clusters/{id}/nodes/{name}/events", s.protected(http.HandlerFunc(s.listNodeEvents)))

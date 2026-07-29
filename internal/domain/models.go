@@ -221,6 +221,30 @@ type Namespace struct {
 	CreatedAt  time.Time         `json:"created_at"`
 }
 
+type KubernetesPodSecurityAdmissionModeStatus string
+
+const (
+	PodSecurityAdmissionModeInherited  KubernetesPodSecurityAdmissionModeStatus = "inherited"
+	PodSecurityAdmissionModeConfigured KubernetesPodSecurityAdmissionModeStatus = "configured"
+	PodSecurityAdmissionModeInvalid    KubernetesPodSecurityAdmissionModeStatus = "invalid"
+)
+
+type KubernetesPodSecurityAdmissionMode struct {
+	Status           KubernetesPodSecurityAdmissionModeStatus `json:"status"`
+	Level            string                                   `json:"level,omitempty"`
+	Version          string                                   `json:"version,omitempty"`
+	VersionDefaulted bool                                     `json:"version_defaulted"`
+}
+
+type KubernetesPodSecurityAdmissionNamespace struct {
+	Name             string                             `json:"name"`
+	Enforce          KubernetesPodSecurityAdmissionMode `json:"enforce"`
+	Audit            KubernetesPodSecurityAdmissionMode `json:"audit"`
+	Warn             KubernetesPodSecurityAdmissionMode `json:"warn"`
+	InvalidModeCount int                                `json:"invalid_mode_count"`
+	CreatedAt        time.Time                          `json:"created_at"`
+}
+
 type NodeResources struct {
 	CPU              string `json:"cpu,omitempty"`
 	Memory           string `json:"memory,omitempty"`

@@ -852,6 +852,22 @@ func (s *Service) ResourceQuotas(
 	return gateway.ResourceQuotas(ctx, namespace)
 }
 
+func (s *Service) PodSecurityAdmissionNamespaces(
+	ctx context.Context,
+	clusterID string,
+) ([]domain.KubernetesPodSecurityAdmissionNamespace, error) {
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	gateway, err := s.kubeGateway(ctx, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	return gateway.PodSecurityAdmissionNamespaces(ctx)
+}
+
 func (s *Service) LimitRanges(
 	ctx context.Context,
 	clusterID, namespace string,

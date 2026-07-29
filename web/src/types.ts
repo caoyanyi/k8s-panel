@@ -54,6 +54,24 @@ export interface Namespace {
   created_at: string
 }
 
+export type KubernetesPodSecurityAdmissionModeStatus = 'inherited' | 'configured' | 'invalid'
+
+export interface KubernetesPodSecurityAdmissionMode {
+  status: KubernetesPodSecurityAdmissionModeStatus
+  level?: 'privileged' | 'baseline' | 'restricted'
+  version?: string
+  version_defaulted: boolean
+}
+
+export interface KubernetesPodSecurityAdmissionNamespace {
+  name: string
+  enforce: KubernetesPodSecurityAdmissionMode
+  audit: KubernetesPodSecurityAdmissionMode
+  warn: KubernetesPodSecurityAdmissionMode
+  invalid_mode_count: number
+  created_at: string
+}
+
 export interface NodeResources {
   cpu?: string
   memory?: string

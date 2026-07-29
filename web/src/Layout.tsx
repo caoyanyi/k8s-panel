@@ -16,13 +16,14 @@ import {
   Server,
   Settings2,
   ShieldCheck,
+  ShieldAlert,
   X,
 } from 'lucide-react'
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import type { Principal } from './types'
 import { usePanel } from './context'
 
-export type RouteName = 'dashboard' | 'clusters' | 'resources' | 'workloads' | 'network' | 'configuration' | 'storage' | 'governance' | 'access' | 'events' | 'helm' | 'operations' | 'audit'
+export type RouteName = 'dashboard' | 'clusters' | 'resources' | 'workloads' | 'network' | 'configuration' | 'storage' | 'governance' | 'security' | 'access' | 'events' | 'helm' | 'operations' | 'audit'
 
 const navigation: Array<{ route: RouteName; label: string; icon: typeof Gauge }> = [
   { route: 'dashboard', label: '总览', icon: Gauge },
@@ -33,6 +34,7 @@ const navigation: Array<{ route: RouteName; label: string; icon: typeof Gauge }>
   { route: 'configuration', label: '配置', icon: Settings2 },
   { route: 'storage', label: '存储', icon: HardDrive },
   { route: 'governance', label: '资源治理', icon: Scale },
+  { route: 'security', label: '安全态势', icon: ShieldAlert },
   { route: 'access', label: '访问控制', icon: ShieldCheck },
   { route: 'events', label: '事件', icon: BellRing },
   { route: 'helm', label: 'Helm', icon: PackageOpen },

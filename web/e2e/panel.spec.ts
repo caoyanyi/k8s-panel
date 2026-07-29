@@ -41,6 +41,9 @@ test('login, navigation, validation and logout', async ({ page }, testInfo) => {
   await navigate(page, testInfo.project.name, '资源治理')
   await expect(page.getByRole('heading', { name: '资源治理' })).toBeVisible()
   await expect(page.getByText('尚未选择集群')).toBeVisible()
+  await navigate(page, testInfo.project.name, '安全态势')
+  await expect(page.getByRole('heading', { name: '安全态势' })).toBeVisible()
+  await expect(page.getByText('尚未选择集群')).toBeVisible()
   await navigate(page, testInfo.project.name, '访问控制')
   await expect(page.getByRole('heading', { name: '访问控制' })).toBeVisible()
   await expect(page.getByText('尚未选择集群')).toBeVisible()
@@ -604,6 +607,36 @@ test('namespace governance reads one bounded policy kind at a time', async ({ pa
   expect(consoleErrors).toEqual([])
 })
 
+test('security posture reads only the bounded Pod Security Admission projection', async ({ page }, testInfo) => {
+  const consoleErrors: string[] = []
+  const requestedResources: string[] = []
+  page.on('console', (message) => {
+    if (message.type() === 'error') consoleErrors.push(message.text())
+  })
+  page.on('pageerror', (error) => consoleErrors.push(error.message))
+  await mockSecurityPosture(page, requestedResources)
+
+  await page.goto('/#security')
+  await expect(page.getByRole('heading', { name: '安全态势' })).toBeVisible()
+  await expect(page.getByText('payments', { exact: true })).toBeVisible()
+  await expect(page.getByText('restricted', { exact: true })).toBeVisible()
+  await expect(page.getByText('v1.30（固定）')).toBeVisible()
+  await expect(page.getByText('存在无效标签')).toBeVisible()
+  expect(requestedResources).toEqual(['/api/v1/clusters/clu_1/pod-security-admission/namespaces'])
+  expect(requestedResources).not.toContain('/api/v1/clusters/clu_1/namespaces')
+
+  await page.getByLabel('搜索 Pod 安全态势').fill('legacy')
+  await expect(page.getByText('legacy', { exact: true })).toBeVisible()
+  await expect(page.getByText('payments', { exact: true })).toHaveCount(0)
+
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
+  expect(overflow).toBeLessThanOrEqual(1)
+  const result = await new AxeBuilder({ page }).analyze()
+  expect(result.violations.filter((violation) => ['serious', 'critical'].includes(violation.impact ?? ''))).toEqual([])
+  await page.screenshot({ path: `test-results/${testInfo.project.name}-security-posture.png`, fullPage: true })
+  expect(consoleErrors).toEqual([])
+})
+
 test('access inventory loads metadata by kind and fetches details on demand', async ({ page }, testInfo) => {
   const consoleErrors: string[] = []
   const requestedKinds: string[] = []
@@ -937,6 +970,49 @@ async function mockGovernanceResources(page: Page, requestedKinds: string[]) {
       }]
     } else {
       data = []
+    }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data }) })
+  })
+}
+
+async function mockSecurityPosture(page: Page, requestedResources: string[]) {
+  await page.route('**/api/v1/**', async (route) => {
+    const path = new URL(route.request().url()).pathname
+    let data: unknown
+    if (path === '/api/v1/session') {
+      data = { username: 'security-admin', role: 'admin', expires_at: '2026-07-29T16:00:00Z' }
+    } else if (path === '/api/v1/clusters') {
+      data = [{
+        id: 'clu_1', name: 'production-cn', environment: 'production', server: 'https://api.example.com',
+        status: 'connected', version: 'v1.36.2', credentials_configured: true,
+        created_at: '2026-07-20T08:00:00Z', updated_at: '2026-07-28T08:00:00Z',
+      }]
+    } else if (path === '/api/v1/clusters/clu_1/pod-security-admission/namespaces') {
+      requestedResources.push(path)
+      data = [
+        {
+          name: 'payments',
+          enforce: { status: 'configured', level: 'restricted', version: 'v1.30', version_defaulted: false },
+          audit: { status: 'configured', level: 'baseline', version: 'latest', version_defaulted: true },
+          warn: { status: 'inherited', version_defaulted: false },
+          invalid_mode_count: 0, created_at: '2026-07-20T08:00:00Z',
+        },
+        {
+          name: 'legacy',
+          enforce: { status: 'invalid', version_defaulted: false },
+          audit: { status: 'inherited', version_defaulted: false },
+          warn: { status: 'inherited', version_defaulted: false },
+          invalid_mode_count: 1, created_at: '2026-07-19T08:00:00Z',
+        },
+      ]
+    } else {
+      requestedResources.push(path)
+      await route.fulfill({
+        status: 404,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: { code: 'not_found', message: `No mock for ${path}` } }),
+      })
+      return
     }
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data }) })
   })

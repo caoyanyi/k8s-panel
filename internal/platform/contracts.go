@@ -47,6 +47,7 @@ type KubeGateway interface {
 	Capabilities(context.Context, string) ([]domain.KubernetesCapability, error)
 	Summary(context.Context) (domain.ClusterSummary, error)
 	Namespaces(context.Context) ([]domain.Namespace, error)
+	PodSecurityAdmissionNamespaces(context.Context) ([]domain.KubernetesPodSecurityAdmissionNamespace, error)
 	Nodes(context.Context) ([]domain.Node, error)
 	NodeDetail(context.Context, string) (domain.NodeDetail, error)
 	NodeEvents(context.Context, string, int) ([]domain.KubernetesEvent, error)

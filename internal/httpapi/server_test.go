@@ -82,6 +82,13 @@ func TestServerAuthenticationAndClusterLifecycle(t *testing.T) {
 	if unauthorizedAdmissionPolicyBindings.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthorized admission policy binding status = %d, want 401", unauthorizedAdmissionPolicyBindings.Code)
 	}
+	unauthorizedPodSecurityAdmission := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorizedPodSecurityAdmission, httptest.NewRequest(
+		http.MethodGet, "/api/v1/clusters/clu_1/pod-security-admission/namespaces", nil,
+	))
+	if unauthorizedPodSecurityAdmission.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized pod security admission status = %d, want 401", unauthorizedPodSecurityAdmission.Code)
+	}
 	unauthorizedConfiguration := httptest.NewRecorder()
 	handler.ServeHTTP(unauthorizedConfiguration, httptest.NewRequest(http.MethodGet, "/api/v1/clusters/clu_1/configmaps", nil))
 	if unauthorizedConfiguration.Code != http.StatusUnauthorized {
@@ -724,6 +731,13 @@ func TestServerExposesAuthenticatedClusterResources(t *testing.T) {
 		!strings.Contains(budgets.Body.String(), `"disruptions_allowed":1`) {
 		t.Fatalf("pod disruption budgets status = %d, body = %s", budgets.Code, budgets.Body.String())
 	}
+	podSecurityAdmission := authenticatedRequest(t, handler, cookie, http.MethodGet, base+"/pod-security-admission/namespaces", "")
+	if podSecurityAdmission.Code != http.StatusOK ||
+		!strings.Contains(podSecurityAdmission.Body.String(), `"name":"payments"`) ||
+		!strings.Contains(podSecurityAdmission.Body.String(), `"status":"configured"`) ||
+		!strings.Contains(podSecurityAdmission.Body.String(), `"level":"restricted"`) {
+		t.Fatalf("pod security admission status = %d, body = %s", podSecurityAdmission.Code, podSecurityAdmission.Body.String())
+	}
 	missingNamespace := authenticatedRequest(t, handler, cookie, http.MethodGet, base+"/resource-quotas", "")
 	if missingNamespace.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("missing governance namespace status = %d, body = %s", missingNamespace.Code, missingNamespace.Body.String())
@@ -1042,6 +1056,16 @@ func (testKube) Summary(context.Context) (domain.ClusterSummary, error) {
 }
 func (testKube) Namespaces(context.Context) ([]domain.Namespace, error) {
 	return []domain.Namespace{{Name: "payments", Status: "Active", Labels: map[string]string{"team": "payments"}}}, nil
+}
+func (testKube) PodSecurityAdmissionNamespaces(context.Context) ([]domain.KubernetesPodSecurityAdmissionNamespace, error) {
+	return []domain.KubernetesPodSecurityAdmissionNamespace{{
+		Name: "payments",
+		Enforce: domain.KubernetesPodSecurityAdmissionMode{
+			Status: domain.PodSecurityAdmissionModeConfigured, Level: "restricted", Version: "latest", VersionDefaulted: true,
+		},
+		Audit: domain.KubernetesPodSecurityAdmissionMode{Status: domain.PodSecurityAdmissionModeInherited},
+		Warn:  domain.KubernetesPodSecurityAdmissionMode{Status: domain.PodSecurityAdmissionModeInherited},
+	}}, nil
 }
 func (testKube) Nodes(context.Context) ([]domain.Node, error) {
 	return []domain.Node{{Name: "worker-01", Status: "Ready"}}, nil

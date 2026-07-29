@@ -252,6 +252,8 @@ td strong { color: var(--text); font-size: 12px; }
 .governance-hpa-table { min-width: 1340px; }
 .governance-pdb-table { min-width: 1540px; }
 .governance-conditions { min-width: 150px; max-width: 300px; }
+.security-posture-table { min-width: 1040px; }
+.security-mode-value { min-width: 132px; }
 .event-table { min-width: 1320px; }
 .access-table { min-width: 820px; }
 .event-message-cell { min-width: 300px; max-width: 520px; }
