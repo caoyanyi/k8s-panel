@@ -9,6 +9,8 @@ import { usePanel } from '../context'
 import { useResource } from '../hooks'
 import type {
   KubernetesDeprecatedAPIRequest,
+  KubernetesEndpointCertificate,
+  KubernetesEndpointCertificateStatus,
   KubernetesNodeVersionSkew,
   KubernetesNodeVersionSkewReport,
   KubernetesNodeVersionSkewStatus,
@@ -17,11 +19,12 @@ import type {
 } from '../types'
 import { formatDateTime } from '../utils'
 
-type SecurityView = 'pod-security' | 'version-skew' | 'deprecated-api'
+type SecurityView = 'pod-security' | 'version-skew' | 'deprecated-api' | 'endpoint-certificate'
 type SecurityInventory =
   | { kind: 'pod-security'; items: KubernetesPodSecurityAdmissionNamespace[] }
   | { kind: 'version-skew'; report: KubernetesNodeVersionSkewReport }
   | { kind: 'deprecated-api'; items: KubernetesDeprecatedAPIRequest[] }
+  | { kind: 'endpoint-certificate'; evidence: KubernetesEndpointCertificate | null }
 
 const emptyNodeVersionReport: KubernetesNodeVersionSkewReport = { api_server_version: '', nodes: [] }
 const attentionStatuses = new Set<KubernetesNodeVersionSkewStatus>([
@@ -31,11 +34,11 @@ const attentionStatuses = new Set<KubernetesNodeVersionSkewStatus>([
   'major-mismatch',
 ])
 const securityViewCopy: Record<SecurityView, {
-  filterLabel: string
+  filterLabel?: string
   loadingLabel: string
-  placeholder: string
+  placeholder?: string
   resourceLabel: string
-  searchLabel: string
+  searchLabel?: string
 }> = {
   'pod-security': {
     filterLabel: 'Pod 安全态势筛选',
@@ -58,6 +61,10 @@ const securityViewCopy: Record<SecurityView, {
     resourceLabel: '项证据',
     searchLabel: '搜索废弃 API 请求证据',
   },
+  'endpoint-certificate': {
+    loadingLabel: '正在读取当前连接端点 TLS 证书',
+    resourceLabel: '项证书证据',
+  },
 }
 
 export function SecurityPage() {
@@ -70,7 +77,8 @@ export function SecurityPage() {
     if (!selectedClusterId) {
       if (view === 'pod-security') return { kind: 'pod-security', items: [] }
       if (view === 'version-skew') return { kind: 'version-skew', report: emptyNodeVersionReport }
-      return { kind: 'deprecated-api', items: [] }
+      if (view === 'deprecated-api') return { kind: 'deprecated-api', items: [] }
+      return { kind: 'endpoint-certificate', evidence: null }
     }
     if (view === 'pod-security') {
       const items = await api.get<KubernetesPodSecurityAdmissionNamespace[]>(
@@ -86,15 +94,23 @@ export function SecurityPage() {
       )
       return { kind: 'version-skew', report }
     }
-    const items = await api.get<KubernetesDeprecatedAPIRequest[]>(
-      `/api/v1/clusters/${selectedClusterId}/upgrade-readiness/deprecated-apis`,
+    if (view === 'deprecated-api') {
+      const items = await api.get<KubernetesDeprecatedAPIRequest[]>(
+        `/api/v1/clusters/${selectedClusterId}/upgrade-readiness/deprecated-apis`,
+        signal,
+      )
+      return { kind: 'deprecated-api', items }
+    }
+    const evidence = await api.get<KubernetesEndpointCertificate>(
+      `/api/v1/clusters/${selectedClusterId}/upgrade-readiness/endpoint-certificate`,
       signal,
     )
-    return { kind: 'deprecated-api', items }
+    return { kind: 'endpoint-certificate', evidence }
   }, [selectedClusterId, view])
   const postureItems = inventory.data?.kind === 'pod-security' ? inventory.data.items : []
   const nodeVersionReport = inventory.data?.kind === 'version-skew' ? inventory.data.report : emptyNodeVersionReport
   const deprecatedAPIRequests = inventory.data?.kind === 'deprecated-api' ? inventory.data.items : []
+  const endpointCertificate = inventory.data?.kind === 'endpoint-certificate' ? inventory.data.evidence : null
   const normalizedSearch = search.trim().toLowerCase()
   const visiblePostureItems = useMemo(() => postureItems.filter((item) => (
     !normalizedSearch || podSecurityAdmissionSearchText(item).includes(normalizedSearch)
@@ -109,10 +125,14 @@ export function SecurityPage() {
 
   const visibleCount = view === 'pod-security'
     ? visiblePostureItems.length
-    : view === 'version-skew' ? visibleNodeVersions.length : visibleDeprecatedAPIRequests.length
+    : view === 'version-skew'
+      ? visibleNodeVersions.length
+      : view === 'deprecated-api' ? visibleDeprecatedAPIRequests.length : endpointCertificate ? 1 : 0
   const activeCount = view === 'pod-security'
     ? postureItems.length
-    : view === 'version-skew' ? nodeVersionReport.nodes.length : deprecatedAPIRequests.length
+    : view === 'version-skew'
+      ? nodeVersionReport.nodes.length
+      : view === 'deprecated-api' ? deprecatedAPIRequests.length : endpointCertificate ? 1 : 0
 
   const totalPages = Math.max(1, Math.ceil(visibleCount / TABLE_PAGE_SIZE))
   const currentPage = Math.min(page, totalPages - 1)
@@ -167,22 +187,30 @@ export function SecurityPage() {
               aria-pressed={view === 'deprecated-api'}
               onClick={() => selectView('deprecated-api')}
             >废弃 API</button>
+            <button
+              type="button"
+              className={view === 'endpoint-certificate' ? 'active' : ''}
+              aria-pressed={view === 'endpoint-certificate'}
+              onClick={() => selectView('endpoint-certificate')}
+            >TLS 证书</button>
           </div>
-          <section className="toolbar" aria-label={securityViewCopy[view].filterLabel}>
-            <div className="search-field search-field-wide">
-              <Search size={16} aria-hidden="true" />
-              <label className="sr-only" htmlFor="security-posture-search">
-                {securityViewCopy[view].searchLabel}
-              </label>
-              <input
-                id="security-posture-search"
-                type="search"
-                placeholder={securityViewCopy[view].placeholder}
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-              />
-            </div>
-          </section>
+          {securityViewCopy[view].filterLabel && (
+            <section className="toolbar" aria-label={securityViewCopy[view].filterLabel}>
+              <div className="search-field search-field-wide">
+                <Search size={16} aria-hidden="true" />
+                <label className="sr-only" htmlFor="security-posture-search">
+                  {securityViewCopy[view].searchLabel}
+                </label>
+                <input
+                  id="security-posture-search"
+                  type="search"
+                  placeholder={securityViewCopy[view].placeholder}
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                />
+              </div>
+            </section>
+          )}
           <section className="section-block table-section">
             {inventory.loading ? <LoadingState label={securityViewCopy[view].loadingLabel} />
               : inventory.error ? <ErrorState error={inventory.error} onRetry={() => void inventory.refresh()} />
@@ -205,7 +233,7 @@ export function SecurityPage() {
                       page={currentPage}
                       onPage={setPage}
                     />
-                  ) : (
+                  ) : view === 'deprecated-api' ? (
                     <DeprecatedAPIView
                       items={pageDeprecatedAPIRequests}
                       totalItems={visibleDeprecatedAPIRequests.length}
@@ -214,12 +242,79 @@ export function SecurityPage() {
                       page={currentPage}
                       onPage={setPage}
                     />
+                  ) : endpointCertificate ? (
+                    <EndpointCertificateView evidence={endpointCertificate} />
+                  ) : (
+                    <EmptyState title="当前连接端点未返回 TLS 证书证据" />
                   )}
           </section>
         </>
       )}
     </div>
   )
+}
+
+function EndpointCertificateView({ evidence }: { evidence: KubernetesEndpointCertificate }) {
+  return (
+    <>
+      <div className="security-evidence-summary">
+        <div><span>证据来源</span><strong>当前连接端点</strong></div>
+        {evidence.status !== 'valid' && (
+          <div className="inventory-alert" role="status">证书有效期需要关注</div>
+        )}
+      </div>
+      <div className="security-certificate-scope">
+        <div><span>证据类型</span><strong>TLS 握手叶证书</strong></div>
+        <span className="detail-muted">可能由负载均衡器或代理终止</span>
+      </div>
+      <div className="table-wrap" role="region" aria-label="当前连接端点 TLS 证书有效期" tabIndex={0}>
+        <table className="security-certificate-table">
+          <thead><tr><th>状态</th><th>生效时间</th><th>到期时间</th><th>剩余时间</th><th>观测时间</th></tr></thead>
+          <tbody><tr>
+            <td><EndpointCertificateStatus status={evidence.status} /></td>
+            <td><time dateTime={evidence.not_before}>{formatUTCDateTime(evidence.not_before)}</time></td>
+            <td><time dateTime={evidence.not_after}>{formatUTCDateTime(evidence.not_after)}</time></td>
+            <td><strong>{formatRemainingSeconds(evidence.remaining_seconds)}</strong></td>
+            <td><time dateTime={evidence.observed_at}>{formatUTCDateTime(evidence.observed_at)}</time></td>
+          </tr></tbody>
+        </table>
+      </div>
+    </>
+  )
+}
+
+const endpointCertificateStatusLabels: Record<KubernetesEndpointCertificateStatus, string> = {
+  valid: '有效',
+  expiring: '30 天内到期',
+  critical: '7 天内到期',
+  expired: '已过期',
+}
+
+function EndpointCertificateStatus({ status }: { status: KubernetesEndpointCertificateStatus }) {
+  return (
+    <span className={`status-badge status-${status}`}>
+      <span className="status-dot" aria-hidden="true" />
+      {endpointCertificateStatusLabels[status]}
+    </span>
+  )
+}
+
+function formatUTCDateTime(value: string): string {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '-'
+  const iso = date.toISOString()
+  return `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC`
+}
+
+function formatRemainingSeconds(seconds: number): string {
+  if (seconds <= 0) return '已到期'
+  const days = Math.floor(seconds / 86400)
+  const hours = Math.floor((seconds % 86400) / 3600)
+  if (days > 0) return hours > 0 ? `${days} 天 ${hours} 小时` : `${days} 天`
+  const minutes = Math.floor((seconds % 3600) / 60)
+  if (hours > 0) return minutes > 0 ? `${hours} 小时 ${minutes} 分钟` : `${hours} 小时`
+  if (minutes > 0) return `${minutes} 分钟`
+  return `${seconds} 秒`
 }
 
 interface NodeVersionSkewViewProps {

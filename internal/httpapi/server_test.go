@@ -103,6 +103,13 @@ func TestServerAuthenticationAndClusterLifecycle(t *testing.T) {
 	if unauthorizedDeprecatedAPIs.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthorized deprecated API status = %d, want 401", unauthorizedDeprecatedAPIs.Code)
 	}
+	unauthorizedEndpointCertificate := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorizedEndpointCertificate, httptest.NewRequest(
+		http.MethodGet, "/api/v1/clusters/clu_1/upgrade-readiness/endpoint-certificate", nil,
+	))
+	if unauthorizedEndpointCertificate.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized endpoint certificate status = %d, want 401", unauthorizedEndpointCertificate.Code)
+	}
 	unauthorizedConfiguration := httptest.NewRecorder()
 	handler.ServeHTTP(unauthorizedConfiguration, httptest.NewRequest(http.MethodGet, "/api/v1/clusters/clu_1/configmaps", nil))
 	if unauthorizedConfiguration.Code != http.StatusUnauthorized {
@@ -766,6 +773,18 @@ func TestServerExposesAuthenticatedClusterResources(t *testing.T) {
 		!strings.Contains(deprecatedAPIs.Body.String(), `"removed_release":"1.22"`) {
 		t.Fatalf("deprecated API status = %d, body = %s", deprecatedAPIs.Code, deprecatedAPIs.Body.String())
 	}
+	endpointCertificate := authenticatedRequest(t, handler, cookie, http.MethodGet, base+"/upgrade-readiness/endpoint-certificate", "")
+	if endpointCertificate.Code != http.StatusOK ||
+		!strings.Contains(endpointCertificate.Body.String(), `"observed_at":"2026-07-29T08:00:00Z"`) ||
+		!strings.Contains(endpointCertificate.Body.String(), `"not_after":"2026-08-28T08:00:00Z"`) ||
+		!strings.Contains(endpointCertificate.Body.String(), `"remaining_seconds":2592000`) ||
+		!strings.Contains(endpointCertificate.Body.String(), `"status":"expiring"`) {
+		t.Fatalf("endpoint certificate status = %d, body = %s", endpointCertificate.Code, endpointCertificate.Body.String())
+	}
+	if strings.Contains(strings.ToLower(endpointCertificate.Body.String()), "subject") ||
+		strings.Contains(strings.ToLower(endpointCertificate.Body.String()), "issuer") {
+		t.Fatalf("endpoint certificate response exposed identity fields: %s", endpointCertificate.Body.String())
+	}
 	missingNamespace := authenticatedRequest(t, handler, cookie, http.MethodGet, base+"/resource-quotas", "")
 	if missingNamespace.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("missing governance namespace status = %d, body = %s", missingNamespace.Code, missingNamespace.Body.String())
@@ -1108,6 +1127,13 @@ func (testKube) DeprecatedAPIRequests(context.Context) ([]domain.KubernetesDepre
 	return []domain.KubernetesDeprecatedAPIRequest{{
 		Group: "extensions", Version: "v1beta1", Resource: "ingresses", RemovedRelease: "1.22",
 	}}, nil
+}
+func (testKube) EndpointCertificate(context.Context) (domain.KubernetesEndpointCertificate, error) {
+	observedAt := time.Date(2026, 7, 29, 8, 0, 0, 0, time.UTC)
+	return domain.KubernetesEndpointCertificate{
+		ObservedAt: observedAt, NotBefore: observedAt.Add(-24 * time.Hour), NotAfter: observedAt.Add(30 * 24 * time.Hour),
+		RemainingSeconds: 2592000, Status: domain.EndpointCertificateExpiring,
+	}, nil
 }
 func (testKube) Nodes(context.Context) ([]domain.Node, error) {
 	return []domain.Node{{Name: "worker-01", Status: "Ready"}}, nil

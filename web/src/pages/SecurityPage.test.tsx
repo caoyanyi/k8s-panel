@@ -135,6 +135,40 @@ describe('SecurityPage', () => {
     expect(screen.queryByText('整个集群未使用废弃 API')).not.toBeInTheDocument()
   })
 
+  it('loads only the verified endpoint certificate after its view is selected', async () => {
+    const requests: string[] = []
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const path = String(input)
+      requests.push(path)
+      if (path.endsWith('/upgrade-readiness/endpoint-certificate')) {
+        return Promise.resolve(dataResponse(endpointCertificate))
+      }
+      return Promise.resolve(dataResponse(postures))
+    }))
+    const user = userEvent.setup()
+
+    renderPage()
+
+    expect(await screen.findByText('payments')).toBeInTheDocument()
+    expect(requests).toEqual(['/api/v1/clusters/clu_1/pod-security-admission/namespaces'])
+
+    await user.click(screen.getByRole('button', { name: 'TLS 证书' }))
+
+    expect(await screen.findByText('30 天内到期')).toBeInTheDocument()
+    expect(screen.getByText('当前连接端点')).toBeInTheDocument()
+    expect(screen.getByText('TLS 握手叶证书')).toBeInTheDocument()
+    expect(screen.getByText('2026-08-28 08:00 UTC')).toBeInTheDocument()
+    expect(screen.getByText('30 天')).toBeInTheDocument()
+    expect(screen.getByText('可能由负载均衡器或代理终止')).toBeInTheDocument()
+    expect(screen.queryByRole('searchbox')).not.toBeInTheDocument()
+    expect(screen.queryByRole('navigation', { name: '资源清单分页' })).not.toBeInTheDocument()
+    expect(requests).toEqual([
+      '/api/v1/clusters/clu_1/pod-security-admission/namespaces',
+      '/api/v1/clusters/clu_1/upgrade-readiness/endpoint-certificate',
+    ])
+    expect(requests.some((path) => path.endsWith('/metrics') || path.endsWith('/nodes') || path.endsWith('/api') || path.endsWith('/apis'))).toBe(false)
+  })
+
   it('searches and paginates the projected namespace rows locally', async () => {
     const items = Array.from({ length: 101 }, (_, index) => ({
       ...postures[0],
@@ -228,6 +262,14 @@ const deprecatedAPIRequests = [
   { group: 'extensions', version: 'v1beta1', resource: 'ingresses', subresource: '', removed_release: '1.22' },
   { group: 'apps', version: 'v1beta1', resource: 'deployments', subresource: 'scale', removed_release: '1.16' },
 ]
+
+const endpointCertificate = {
+  observed_at: '2026-07-29T08:00:00Z',
+  not_before: '2026-06-29T08:00:00Z',
+  not_after: '2026-08-28T08:00:00Z',
+  remaining_seconds: 30 * 24 * 60 * 60,
+  status: 'expiring' as const,
+}
 
 function renderPage(overrides: Partial<PanelContextValue> = {}) {
   return render(

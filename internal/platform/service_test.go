@@ -671,6 +671,10 @@ func TestServiceRejectsKubernetesReadsDuringCriticalResourcePressure(t *testing.
 			_, err := service.DeprecatedAPIRequests(context.Background(), cluster.ID)
 			return err
 		}},
+		{name: "endpoint certificate", call: func() error {
+			_, err := service.EndpointCertificate(context.Background(), cluster.ID)
+			return err
+		}},
 		{name: "nodes", call: func() error { _, err := service.Nodes(context.Background(), cluster.ID); return err }},
 		{name: "custom resource definitions", call: func() error {
 			_, err := service.CustomResourceDefinitions(context.Background(), cluster.ID)
@@ -817,6 +821,9 @@ func TestServiceRejectsKubernetesReadsDuringCriticalResourcePressure(t *testing.
 	}
 	if calls := gateway.deprecatedAPIRequestCalls.Load(); calls != 0 {
 		t.Fatalf("DeprecatedAPIRequests() reached Kubernetes %d times under critical pressure", calls)
+	}
+	if calls := gateway.endpointCertificateCalls.Load(); calls != 0 {
+		t.Fatalf("EndpointCertificate() reached Kubernetes %d times under critical pressure", calls)
 	}
 	if serviceCalls, ingressCalls, endpointSliceCalls, policyCalls := gateway.serviceCalls.Load(), gateway.ingressCalls.Load(), gateway.endpointSliceCalls.Load(), gateway.networkPolicyCalls.Load(); serviceCalls != 0 || ingressCalls != 0 || endpointSliceCalls != 0 || policyCalls != 0 {
 		t.Fatalf("network reads reached Kubernetes under critical pressure: services=%d ingresses=%d endpointSlices=%d policies=%d", serviceCalls, ingressCalls, endpointSliceCalls, policyCalls)
@@ -1141,6 +1148,35 @@ func TestServiceListsDeprecatedAPIRequestsThroughReadGovernor(t *testing.T) {
 		t.Fatalf("DeprecatedAPIRequests() = %#v, %v", items, err)
 	}
 	if calls := gateway.deprecatedAPIRequestCalls.Load(); calls != 1 {
+		t.Fatalf("gateway calls = %d, want 1", calls)
+	}
+}
+
+func TestServiceReadsEndpointCertificateThroughReadGovernor(t *testing.T) {
+	t.Parallel()
+
+	observedAt := time.Date(2026, 7, 29, 8, 0, 0, 0, time.UTC)
+	gateway := &fakeKubeGateway{
+		probe: domain.ClusterProbe{Version: "v1.36.2"},
+		endpointCertificate: domain.KubernetesEndpointCertificate{
+			ObservedAt: observedAt, NotBefore: observedAt.Add(-24 * time.Hour), NotAfter: observedAt.Add(30 * 24 * time.Hour),
+			RemainingSeconds: 2592000, Status: domain.EndpointCertificateExpiring,
+		},
+	}
+	service, _, _ := newTestService(t, serviceFakes{kube: gateway})
+	cluster, err := service.CreateCluster(context.Background(), "admin", "req_cluster", domain.ClusterInput{
+		Name: "cluster", Environment: domain.EnvironmentDevelopment, Server: "https://api.example.com", BearerToken: "token",
+	})
+	if err != nil {
+		t.Fatalf("CreateCluster() error = %v", err)
+	}
+
+	evidence, err := service.EndpointCertificate(context.Background(), cluster.ID)
+	if err != nil || evidence.Status != domain.EndpointCertificateExpiring || evidence.RemainingSeconds != 2592000 ||
+		!evidence.ObservedAt.Equal(observedAt) {
+		t.Fatalf("EndpointCertificate() = %#v, %v", evidence, err)
+	}
+	if calls := gateway.endpointCertificateCalls.Load(); calls != 1 {
 		t.Fatalf("gateway calls = %d, want 1", calls)
 	}
 }
@@ -2339,6 +2375,8 @@ type fakeKubeGateway struct {
 	nodeVersionSkewCalls             atomic.Int64
 	deprecatedAPIRequests            []domain.KubernetesDeprecatedAPIRequest
 	deprecatedAPIRequestCalls        atomic.Int64
+	endpointCertificate              domain.KubernetesEndpointCertificate
+	endpointCertificateCalls         atomic.Int64
 	detail                           domain.WorkloadDetail
 	events                           []domain.KubernetesEvent
 	logs                             domain.PodLogs
@@ -2507,6 +2545,10 @@ func (g *fakeKubeGateway) NodeVersionSkew(context.Context) (domain.KubernetesNod
 func (g *fakeKubeGateway) DeprecatedAPIRequests(context.Context) ([]domain.KubernetesDeprecatedAPIRequest, error) {
 	g.deprecatedAPIRequestCalls.Add(1)
 	return append([]domain.KubernetesDeprecatedAPIRequest(nil), g.deprecatedAPIRequests...), nil
+}
+func (g *fakeKubeGateway) EndpointCertificate(context.Context) (domain.KubernetesEndpointCertificate, error) {
+	g.endpointCertificateCalls.Add(1)
+	return g.endpointCertificate, nil
 }
 func (g *fakeKubeGateway) Nodes(context.Context) ([]domain.Node, error) {
 	return append([]domain.Node(nil), g.nodes...), nil

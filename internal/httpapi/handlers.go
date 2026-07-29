@@ -234,6 +234,15 @@ func (s *Server) listDeprecatedAPIRequests(w http.ResponseWriter, r *http.Reques
 	writeData(w, http.StatusOK, items)
 }
 
+func (s *Server) endpointCertificate(w http.ResponseWriter, r *http.Request) {
+	evidence, err := s.service.EndpointCertificate(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeData(w, http.StatusOK, evidence)
+}
+
 func (s *Server) listNodes(w http.ResponseWriter, r *http.Request) {
 	items, err := s.service.Nodes(r.Context(), r.PathValue("id"))
 	if err != nil {

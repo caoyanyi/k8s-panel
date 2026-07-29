@@ -666,6 +666,22 @@ test('security posture loads each bounded projection only when selected', async 
   await expect(page.getByText('apps/v1beta1', { exact: true })).toBeVisible()
   await expect(page.getByText('extensions/v1beta1', { exact: true })).toHaveCount(0)
 
+  await page.getByRole('button', { name: 'TLS 证书' }).click()
+  await expect(page.getByText('当前连接端点', { exact: true })).toBeVisible()
+  await expect(page.getByText('TLS 握手叶证书', { exact: true })).toBeVisible()
+  await expect(page.getByText('30 天内到期', { exact: true })).toBeVisible()
+  await expect(page.getByText('2026-08-28 08:00 UTC', { exact: true })).toBeVisible()
+  await expect(page.getByRole('searchbox')).toHaveCount(0)
+  expect(requestedResources).toEqual([
+    '/api/v1/clusters/clu_1/pod-security-admission/namespaces',
+    '/api/v1/clusters/clu_1/upgrade-readiness/node-versions',
+    '/api/v1/clusters/clu_1/upgrade-readiness/deprecated-apis',
+    '/api/v1/clusters/clu_1/upgrade-readiness/endpoint-certificate',
+  ])
+  expect(browserPaths).not.toContain('/metrics')
+  expect(browserPaths).not.toContain('/api')
+  expect(browserPaths).not.toContain('/apis')
+
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
   expect(overflow).toBeLessThanOrEqual(1)
   const result = await new AxeBuilder({ page }).analyze()
@@ -1073,6 +1089,15 @@ async function mockSecurityPosture(page: Page, requestedResources: string[]) {
           removed_release: '1.22',
         },
       ]
+    } else if (path === '/api/v1/clusters/clu_1/upgrade-readiness/endpoint-certificate') {
+      requestedResources.push(path)
+      data = {
+        observed_at: '2026-07-29T08:00:00Z',
+        not_before: '2026-06-29T08:00:00Z',
+        not_after: '2026-08-28T08:00:00Z',
+        remaining_seconds: 2592000,
+        status: 'expiring',
+      }
     } else {
       requestedResources.push(path)
       await route.fulfill({

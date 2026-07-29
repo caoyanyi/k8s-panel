@@ -102,6 +102,16 @@ export interface KubernetesDeprecatedAPIRequest {
   removed_release: string
 }
 
+export type KubernetesEndpointCertificateStatus = 'valid' | 'expiring' | 'critical' | 'expired'
+
+export interface KubernetesEndpointCertificate {
+  observed_at: string
+  not_before: string
+  not_after: string
+  remaining_seconds: number
+  status: KubernetesEndpointCertificateStatus
+}
+
 export interface NodeResources {
   cpu?: string
   memory?: string

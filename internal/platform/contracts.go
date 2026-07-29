@@ -50,6 +50,7 @@ type KubeGateway interface {
 	PodSecurityAdmissionNamespaces(context.Context) ([]domain.KubernetesPodSecurityAdmissionNamespace, error)
 	NodeVersionSkew(context.Context) (domain.KubernetesNodeVersionSkewReport, error)
 	DeprecatedAPIRequests(context.Context) ([]domain.KubernetesDeprecatedAPIRequest, error)
+	EndpointCertificate(context.Context) (domain.KubernetesEndpointCertificate, error)
 	Nodes(context.Context) ([]domain.Node, error)
 	NodeDetail(context.Context, string) (domain.NodeDetail, error)
 	NodeEvents(context.Context, string, int) ([]domain.KubernetesEvent, error)

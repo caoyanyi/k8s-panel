@@ -278,6 +278,23 @@ type KubernetesDeprecatedAPIRequest struct {
 	RemovedRelease string `json:"removed_release"`
 }
 
+type KubernetesEndpointCertificateStatus string
+
+const (
+	EndpointCertificateValid    KubernetesEndpointCertificateStatus = "valid"
+	EndpointCertificateExpiring KubernetesEndpointCertificateStatus = "expiring"
+	EndpointCertificateCritical KubernetesEndpointCertificateStatus = "critical"
+	EndpointCertificateExpired  KubernetesEndpointCertificateStatus = "expired"
+)
+
+type KubernetesEndpointCertificate struct {
+	ObservedAt       time.Time                           `json:"observed_at"`
+	NotBefore        time.Time                           `json:"not_before"`
+	NotAfter         time.Time                           `json:"not_after"`
+	RemainingSeconds int64                               `json:"remaining_seconds"`
+	Status           KubernetesEndpointCertificateStatus `json:"status"`
+}
+
 type NodeResources struct {
 	CPU              string `json:"cpu,omitempty"`
 	Memory           string `json:"memory,omitempty"`

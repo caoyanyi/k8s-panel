@@ -900,6 +900,22 @@ func (s *Service) DeprecatedAPIRequests(
 	return gateway.DeprecatedAPIRequests(ctx)
 }
 
+func (s *Service) EndpointCertificate(
+	ctx context.Context,
+	clusterID string,
+) (domain.KubernetesEndpointCertificate, error) {
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return domain.KubernetesEndpointCertificate{}, err
+	}
+	defer release()
+	gateway, err := s.kubeGateway(ctx, clusterID)
+	if err != nil {
+		return domain.KubernetesEndpointCertificate{}, err
+	}
+	return gateway.EndpointCertificate(ctx)
+}
+
 func (s *Service) LimitRanges(
 	ctx context.Context,
 	clusterID, namespace string,
