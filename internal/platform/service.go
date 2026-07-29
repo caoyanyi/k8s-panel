@@ -884,6 +884,22 @@ func (s *Service) NodeVersionSkew(
 	return gateway.NodeVersionSkew(ctx)
 }
 
+func (s *Service) DeprecatedAPIRequests(
+	ctx context.Context,
+	clusterID string,
+) ([]domain.KubernetesDeprecatedAPIRequest, error) {
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	gateway, err := s.kubeGateway(ctx, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	return gateway.DeprecatedAPIRequests(ctx)
+}
+
 func (s *Service) LimitRanges(
 	ctx context.Context,
 	clusterID, namespace string,

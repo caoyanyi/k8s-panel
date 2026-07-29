@@ -610,10 +610,12 @@ test('namespace governance reads one bounded policy kind at a time', async ({ pa
 test('security posture loads each bounded projection only when selected', async ({ page }, testInfo) => {
   const consoleErrors: string[] = []
   const requestedResources: string[] = []
+  const browserPaths: string[] = []
   page.on('console', (message) => {
     if (message.type() === 'error') consoleErrors.push(message.text())
   })
   page.on('pageerror', (error) => consoleErrors.push(error.message))
+  page.on('request', (request) => browserPaths.push(new URL(request.url()).pathname))
   await mockSecurityPosture(page, requestedResources)
 
   await page.goto('/#security')
@@ -644,6 +646,25 @@ test('security posture loads each bounded projection only when selected', async 
   await page.getByLabel('搜索节点版本偏差').fill('主版本不一致')
   await expect(page.getByText('worker-major', { exact: true })).toBeVisible()
   await expect(page.getByText('worker-current', { exact: true })).toHaveCount(0)
+
+  await page.getByRole('button', { name: '废弃 API' }).click()
+  await expect(page.getByText('extensions/v1beta1', { exact: true })).toBeVisible()
+  await expect(page.getByText('ingresses', { exact: true })).toBeVisible()
+  await expect(page.getByText('v1.22', { exact: true })).toBeVisible()
+  await expect(page.getByText('检测到 2 项废弃 API 请求证据', { exact: true })).toBeVisible()
+  expect(requestedResources).toEqual([
+    '/api/v1/clusters/clu_1/pod-security-admission/namespaces',
+    '/api/v1/clusters/clu_1/upgrade-readiness/node-versions',
+    '/api/v1/clusters/clu_1/upgrade-readiness/deprecated-apis',
+  ])
+  expect(browserPaths).not.toContain('/api/v1/clusters/clu_1/nodes')
+  expect(browserPaths).not.toContain('/metrics')
+  expect(browserPaths).not.toContain('/api')
+  expect(browserPaths).not.toContain('/apis')
+
+  await page.getByLabel('搜索废弃 API 请求证据').fill('apps/v1beta1')
+  await expect(page.getByText('apps/v1beta1', { exact: true })).toBeVisible()
+  await expect(page.getByText('extensions/v1beta1', { exact: true })).toHaveCount(0)
 
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
   expect(overflow).toBeLessThanOrEqual(1)
@@ -1040,6 +1061,18 @@ async function mockSecurityPosture(page: Page, requestedResources: string[]) {
           },
         ],
       }
+    } else if (path === '/api/v1/clusters/clu_1/upgrade-readiness/deprecated-apis') {
+      requestedResources.push(path)
+      data = [
+        {
+          group: 'apps', version: 'v1beta1', resource: 'deployments', subresource: 'scale',
+          removed_release: '1.16',
+        },
+        {
+          group: 'extensions', version: 'v1beta1', resource: 'ingresses', subresource: '',
+          removed_release: '1.22',
+        },
+      ]
     } else {
       requestedResources.push(path)
       await route.fulfill({

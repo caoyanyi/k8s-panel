@@ -270,6 +270,14 @@ type KubernetesNodeVersionSkewReport struct {
 	Nodes            []KubernetesNodeVersionSkew `json:"nodes"`
 }
 
+type KubernetesDeprecatedAPIRequest struct {
+	Group          string `json:"group"`
+	Version        string `json:"version"`
+	Resource       string `json:"resource"`
+	Subresource    string `json:"subresource"`
+	RemovedRelease string `json:"removed_release"`
+}
+
 type NodeResources struct {
 	CPU              string `json:"cpu,omitempty"`
 	Memory           string `json:"memory,omitempty"`

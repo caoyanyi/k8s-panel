@@ -85,6 +85,56 @@ describe('SecurityPage', () => {
     expect(screen.queryByText('worker-00')).not.toBeInTheDocument()
   })
 
+  it('loads deprecated API evidence only after its view is selected and searches locally', async () => {
+    const requests: string[] = []
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const path = String(input)
+      requests.push(path)
+      if (path.endsWith('/upgrade-readiness/deprecated-apis')) {
+        return Promise.resolve(dataResponse(deprecatedAPIRequests))
+      }
+      return Promise.resolve(dataResponse(postures))
+    }))
+    const user = userEvent.setup()
+
+    renderPage()
+
+    expect(await screen.findByText('payments')).toBeInTheDocument()
+    expect(requests).toEqual(['/api/v1/clusters/clu_1/pod-security-admission/namespaces'])
+
+    await user.click(screen.getByRole('button', { name: '废弃 API' }))
+
+    expect(await screen.findByText('extensions/v1beta1')).toBeInTheDocument()
+    expect(screen.getByText('ingresses')).toBeInTheDocument()
+    expect(screen.getByText('deployments')).toBeInTheDocument()
+    expect(screen.getByText('scale')).toBeInTheDocument()
+    expect(screen.getByText('v1.22')).toBeInTheDocument()
+    expect(screen.getByText('检测到 2 项废弃 API 请求证据')).toBeInTheDocument()
+    expect(requests).toEqual([
+      '/api/v1/clusters/clu_1/pod-security-admission/namespaces',
+      '/api/v1/clusters/clu_1/upgrade-readiness/deprecated-apis',
+    ])
+    expect(requests.some((path) => path.endsWith('/metrics') || path.endsWith('/nodes'))).toBe(false)
+
+    await user.type(screen.getByLabelText('搜索废弃 API 请求证据'), 'apps/v1beta1')
+    expect(screen.getByText('apps/v1beta1')).toBeInTheDocument()
+    expect(screen.queryByText('extensions/v1beta1')).not.toBeInTheDocument()
+  })
+
+  it('scopes empty deprecated API evidence to the observed API server instance', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((input: RequestInfo | URL) => (
+      Promise.resolve(dataResponse(String(input).endsWith('/upgrade-readiness/deprecated-apis') ? [] : postures))
+    )))
+    const user = userEvent.setup()
+
+    renderPage()
+    expect(await screen.findByText('payments')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '废弃 API' }))
+
+    expect(await screen.findByText('当前 API Server 实例未报告废弃 API 请求证据')).toBeInTheDocument()
+    expect(screen.queryByText('整个集群未使用废弃 API')).not.toBeInTheDocument()
+  })
+
   it('searches and paginates the projected namespace rows locally', async () => {
     const items = Array.from({ length: 101 }, (_, index) => ({
       ...postures[0],
@@ -173,6 +223,11 @@ const nodeVersionReport = {
     { name: 'worker-major', kubelet_version: 'v2.33.0', status: 'major-mismatch', minor_skew: 0, maximum_minor_skew: 0, minor_skew_comparable: false },
   ],
 }
+
+const deprecatedAPIRequests = [
+  { group: 'extensions', version: 'v1beta1', resource: 'ingresses', subresource: '', removed_release: '1.22' },
+  { group: 'apps', version: 'v1beta1', resource: 'deployments', subresource: 'scale', removed_release: '1.16' },
+]
 
 function renderPage(overrides: Partial<PanelContextValue> = {}) {
   return render(

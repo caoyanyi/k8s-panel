@@ -94,6 +94,14 @@ export interface KubernetesNodeVersionSkewReport {
   nodes: KubernetesNodeVersionSkew[]
 }
 
+export interface KubernetesDeprecatedAPIRequest {
+  group: string
+  version: string
+  resource: string
+  subresource: string
+  removed_release: string
+}
+
 export interface NodeResources {
   cpu?: string
   memory?: string

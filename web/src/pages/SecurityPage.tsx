@@ -8,6 +8,7 @@ import { TablePagination, TABLE_PAGE_SIZE } from '../components/TablePagination'
 import { usePanel } from '../context'
 import { useResource } from '../hooks'
 import type {
+  KubernetesDeprecatedAPIRequest,
   KubernetesNodeVersionSkew,
   KubernetesNodeVersionSkewReport,
   KubernetesNodeVersionSkewStatus,
@@ -16,10 +17,11 @@ import type {
 } from '../types'
 import { formatDateTime } from '../utils'
 
-type SecurityView = 'pod-security' | 'version-skew'
+type SecurityView = 'pod-security' | 'version-skew' | 'deprecated-api'
 type SecurityInventory =
   | { kind: 'pod-security'; items: KubernetesPodSecurityAdmissionNamespace[] }
   | { kind: 'version-skew'; report: KubernetesNodeVersionSkewReport }
+  | { kind: 'deprecated-api'; items: KubernetesDeprecatedAPIRequest[] }
 
 const emptyNodeVersionReport: KubernetesNodeVersionSkewReport = { api_server_version: '', nodes: [] }
 const attentionStatuses = new Set<KubernetesNodeVersionSkewStatus>([
@@ -28,6 +30,35 @@ const attentionStatuses = new Set<KubernetesNodeVersionSkewStatus>([
   'newer-than-server',
   'major-mismatch',
 ])
+const securityViewCopy: Record<SecurityView, {
+  filterLabel: string
+  loadingLabel: string
+  placeholder: string
+  resourceLabel: string
+  searchLabel: string
+}> = {
+  'pod-security': {
+    filterLabel: 'Pod 安全态势筛选',
+    loadingLabel: '正在读取 Pod 安全态势',
+    placeholder: '搜索命名空间、级别或版本',
+    resourceLabel: '个命名空间',
+    searchLabel: '搜索 Pod 安全态势',
+  },
+  'version-skew': {
+    filterLabel: '节点版本偏差筛选',
+    loadingLabel: '正在读取节点版本偏差',
+    placeholder: '搜索节点、Kubelet 或判定',
+    resourceLabel: '个节点',
+    searchLabel: '搜索节点版本偏差',
+  },
+  'deprecated-api': {
+    filterLabel: '废弃 API 请求证据筛选',
+    loadingLabel: '正在读取废弃 API 请求证据',
+    placeholder: '搜索 API 版本、资源或移除版本',
+    resourceLabel: '项证据',
+    searchLabel: '搜索废弃 API 请求证据',
+  },
+}
 
 export function SecurityPage() {
   const { clusters, selectedClusterId } = usePanel()
@@ -37,9 +68,9 @@ export function SecurityPage() {
   const selectedCluster = clusters.find((cluster) => cluster.id === selectedClusterId)
   const inventory = useResource<SecurityInventory>(async (signal) => {
     if (!selectedClusterId) {
-      return view === 'pod-security'
-        ? { kind: 'pod-security', items: [] }
-        : { kind: 'version-skew', report: emptyNodeVersionReport }
+      if (view === 'pod-security') return { kind: 'pod-security', items: [] }
+      if (view === 'version-skew') return { kind: 'version-skew', report: emptyNodeVersionReport }
+      return { kind: 'deprecated-api', items: [] }
     }
     if (view === 'pod-security') {
       const items = await api.get<KubernetesPodSecurityAdmissionNamespace[]>(
@@ -48,14 +79,22 @@ export function SecurityPage() {
       )
       return { kind: 'pod-security', items }
     }
-    const report = await api.get<KubernetesNodeVersionSkewReport>(
-      `/api/v1/clusters/${selectedClusterId}/upgrade-readiness/node-versions`,
+    if (view === 'version-skew') {
+      const report = await api.get<KubernetesNodeVersionSkewReport>(
+        `/api/v1/clusters/${selectedClusterId}/upgrade-readiness/node-versions`,
+        signal,
+      )
+      return { kind: 'version-skew', report }
+    }
+    const items = await api.get<KubernetesDeprecatedAPIRequest[]>(
+      `/api/v1/clusters/${selectedClusterId}/upgrade-readiness/deprecated-apis`,
       signal,
     )
-    return { kind: 'version-skew', report }
+    return { kind: 'deprecated-api', items }
   }, [selectedClusterId, view])
   const postureItems = inventory.data?.kind === 'pod-security' ? inventory.data.items : []
   const nodeVersionReport = inventory.data?.kind === 'version-skew' ? inventory.data.report : emptyNodeVersionReport
+  const deprecatedAPIRequests = inventory.data?.kind === 'deprecated-api' ? inventory.data.items : []
   const normalizedSearch = search.trim().toLowerCase()
   const visiblePostureItems = useMemo(() => postureItems.filter((item) => (
     !normalizedSearch || podSecurityAdmissionSearchText(item).includes(normalizedSearch)
@@ -63,17 +102,24 @@ export function SecurityPage() {
   const visibleNodeVersions = useMemo(() => nodeVersionReport.nodes.filter((item) => (
     !normalizedSearch || nodeVersionSearchText(item).includes(normalizedSearch)
   )), [nodeVersionReport, normalizedSearch])
+  const visibleDeprecatedAPIRequests = useMemo(() => deprecatedAPIRequests.filter((item) => (
+    !normalizedSearch || deprecatedAPISearchText(item).includes(normalizedSearch)
+  )), [deprecatedAPIRequests, normalizedSearch])
   useEffect(() => setPage(0), [normalizedSearch, selectedClusterId, view])
 
-  const visibleCount = view === 'pod-security' ? visiblePostureItems.length : visibleNodeVersions.length
-  const activeCount = view === 'pod-security' ? postureItems.length : nodeVersionReport.nodes.length
-  const resourceLabel = view === 'pod-security' ? '个命名空间' : '个节点'
+  const visibleCount = view === 'pod-security'
+    ? visiblePostureItems.length
+    : view === 'version-skew' ? visibleNodeVersions.length : visibleDeprecatedAPIRequests.length
+  const activeCount = view === 'pod-security'
+    ? postureItems.length
+    : view === 'version-skew' ? nodeVersionReport.nodes.length : deprecatedAPIRequests.length
 
   const totalPages = Math.max(1, Math.ceil(visibleCount / TABLE_PAGE_SIZE))
   const currentPage = Math.min(page, totalPages - 1)
   const pageStart = currentPage * TABLE_PAGE_SIZE
   const pagePostureItems = visiblePostureItems.slice(pageStart, pageStart + TABLE_PAGE_SIZE)
   const pageNodeVersions = visibleNodeVersions.slice(pageStart, pageStart + TABLE_PAGE_SIZE)
+  const pageDeprecatedAPIRequests = visibleDeprecatedAPIRequests.slice(pageStart, pageStart + TABLE_PAGE_SIZE)
   const attentionCount = nodeVersionReport.nodes.filter((node) => attentionStatuses.has(node.status)).length
   const selectView = (nextView: SecurityView) => {
     if (nextView === view) return
@@ -85,7 +131,7 @@ export function SecurityPage() {
     <div className="page">
       <PageHeader
         title="安全态势"
-        meta={selectedCluster ? `${selectedCluster.name} · ${activeCount} ${resourceLabel}` : '选择一个集群'}
+        meta={selectedCluster ? `${selectedCluster.name} · ${activeCount} ${securityViewCopy[view].resourceLabel}` : '选择一个集群'}
         actions={(
           <button
             type="button"
@@ -115,24 +161,30 @@ export function SecurityPage() {
               aria-pressed={view === 'version-skew'}
               onClick={() => selectView('version-skew')}
             >版本偏差</button>
+            <button
+              type="button"
+              className={view === 'deprecated-api' ? 'active' : ''}
+              aria-pressed={view === 'deprecated-api'}
+              onClick={() => selectView('deprecated-api')}
+            >废弃 API</button>
           </div>
-          <section className="toolbar" aria-label={view === 'pod-security' ? 'Pod 安全态势筛选' : '节点版本偏差筛选'}>
+          <section className="toolbar" aria-label={securityViewCopy[view].filterLabel}>
             <div className="search-field search-field-wide">
               <Search size={16} aria-hidden="true" />
               <label className="sr-only" htmlFor="security-posture-search">
-                {view === 'pod-security' ? '搜索 Pod 安全态势' : '搜索节点版本偏差'}
+                {securityViewCopy[view].searchLabel}
               </label>
               <input
                 id="security-posture-search"
                 type="search"
-                placeholder={view === 'pod-security' ? '搜索命名空间、级别或版本' : '搜索节点、Kubelet 或判定'}
+                placeholder={securityViewCopy[view].placeholder}
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
               />
             </div>
           </section>
           <section className="section-block table-section">
-            {inventory.loading ? <LoadingState label={view === 'pod-security' ? '正在读取 Pod 安全态势' : '正在读取节点版本偏差'} />
+            {inventory.loading ? <LoadingState label={securityViewCopy[view].loadingLabel} />
               : inventory.error ? <ErrorState error={inventory.error} onRetry={() => void inventory.refresh()} />
                 : view === 'pod-security'
                   ? visiblePostureItems.length === 0
@@ -143,12 +195,21 @@ export function SecurityPage() {
                         <TablePagination page={currentPage} totalItems={visiblePostureItems.length} onPage={setPage} />
                       </>
                     )
-                  : (
+                  : view === 'version-skew' ? (
                     <NodeVersionSkewView
                       report={nodeVersionReport}
                       items={pageNodeVersions}
                       totalItems={visibleNodeVersions.length}
                       attentionCount={attentionCount}
+                      normalizedSearch={normalizedSearch}
+                      page={currentPage}
+                      onPage={setPage}
+                    />
+                  ) : (
+                    <DeprecatedAPIView
+                      items={pageDeprecatedAPIRequests}
+                      totalItems={visibleDeprecatedAPIRequests.length}
+                      evidenceCount={deprecatedAPIRequests.length}
                       normalizedSearch={normalizedSearch}
                       page={currentPage}
                       onPage={setPage}
@@ -182,7 +243,7 @@ function NodeVersionSkewView({
 }: NodeVersionSkewViewProps) {
   return (
     <>
-      <div className="security-version-summary">
+      <div className="security-evidence-summary">
         <div><span>观测到的 API Server</span><strong className="mono">{report.api_server_version}</strong></div>
         {attentionCount > 0 && <div className="inventory-alert" role="status">{attentionCount} 个节点需处理</div>}
       </div>
@@ -197,6 +258,55 @@ function NodeVersionSkewView({
                   <td className="mono">{item.kubelet_version}</td>
                   <td><NodeVersionSkewValue item={item} /></td>
                   <td><StatusBadge status={item.status} /></td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+          <TablePagination page={page} totalItems={totalItems} onPage={onPage} />
+        </>
+      )}
+    </>
+  )
+}
+
+interface DeprecatedAPIViewProps {
+  items: KubernetesDeprecatedAPIRequest[]
+  totalItems: number
+  evidenceCount: number
+  normalizedSearch: string
+  page: number
+  onPage: (page: number) => void
+}
+
+function DeprecatedAPIView({
+  items,
+  totalItems,
+  evidenceCount,
+  normalizedSearch,
+  page,
+  onPage,
+}: DeprecatedAPIViewProps) {
+  return (
+    <>
+      <div className="security-evidence-summary">
+        <div><span>证据来源</span><strong>当前 API Server 实例</strong></div>
+        {evidenceCount > 0 && (
+          <div className="inventory-alert" role="status">检测到 {evidenceCount} 项废弃 API 请求证据</div>
+        )}
+      </div>
+      {totalItems === 0 ? (
+        <EmptyState title={normalizedSearch ? '没有匹配的废弃 API 请求证据' : '当前 API Server 实例未报告废弃 API 请求证据'} />
+      ) : (
+        <>
+          <div className="table-wrap" role="region" aria-label="废弃 API 请求证据" tabIndex={0}>
+            <table className="security-deprecated-api-table">
+              <thead><tr><th>API 版本</th><th>资源</th><th>子资源</th><th>计划移除版本</th></tr></thead>
+              <tbody>{items.map((item) => (
+                <tr key={`${item.group}/${item.version}/${item.resource}/${item.subresource}/${item.removed_release}`}>
+                  <td className="mono"><strong>{deprecatedAPIVersion(item)}</strong></td>
+                  <td className="mono">{item.resource}</td>
+                  <td className="mono">{item.subresource || <span className="detail-muted">无</span>}</td>
+                  <td className="mono"><span className="security-risk">v{item.removed_release}</span></td>
                 </tr>
               ))}</tbody>
             </table>
@@ -268,4 +378,21 @@ function podSecurityAdmissionSearchText(item: KubernetesPodSecurityAdmissionName
 
 function nodeVersionSearchText(item: KubernetesNodeVersionSkew): string {
   return [item.name, item.kubelet_version, item.status, statusLabel(item.status)].join(' ').toLowerCase()
+}
+
+function deprecatedAPIVersion(item: KubernetesDeprecatedAPIRequest): string {
+  return `${item.group || 'core'}/${item.version}`
+}
+
+function deprecatedAPISearchText(item: KubernetesDeprecatedAPIRequest): string {
+  return [
+    deprecatedAPIVersion(item),
+    item.group,
+    item.version,
+    item.resource,
+    item.subresource,
+    item.subresource ? `${item.resource}/${item.subresource}` : item.resource,
+    item.removed_release,
+    `v${item.removed_release}`,
+  ].join(' ').toLowerCase()
 }

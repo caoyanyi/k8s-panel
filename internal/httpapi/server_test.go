@@ -96,6 +96,13 @@ func TestServerAuthenticationAndClusterLifecycle(t *testing.T) {
 	if unauthorizedNodeVersionSkew.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthorized node version skew status = %d, want 401", unauthorizedNodeVersionSkew.Code)
 	}
+	unauthorizedDeprecatedAPIs := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorizedDeprecatedAPIs, httptest.NewRequest(
+		http.MethodGet, "/api/v1/clusters/clu_1/upgrade-readiness/deprecated-apis", nil,
+	))
+	if unauthorizedDeprecatedAPIs.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized deprecated API status = %d, want 401", unauthorizedDeprecatedAPIs.Code)
+	}
 	unauthorizedConfiguration := httptest.NewRecorder()
 	handler.ServeHTTP(unauthorizedConfiguration, httptest.NewRequest(http.MethodGet, "/api/v1/clusters/clu_1/configmaps", nil))
 	if unauthorizedConfiguration.Code != http.StatusUnauthorized {
@@ -752,6 +759,13 @@ func TestServerExposesAuthenticatedClusterResources(t *testing.T) {
 		!strings.Contains(nodeVersionSkew.Body.String(), `"status":"upgrade-blocking"`) {
 		t.Fatalf("node version skew status = %d, body = %s", nodeVersionSkew.Code, nodeVersionSkew.Body.String())
 	}
+	deprecatedAPIs := authenticatedRequest(t, handler, cookie, http.MethodGet, base+"/upgrade-readiness/deprecated-apis", "")
+	if deprecatedAPIs.Code != http.StatusOK ||
+		!strings.Contains(deprecatedAPIs.Body.String(), `"group":"extensions"`) ||
+		!strings.Contains(deprecatedAPIs.Body.String(), `"resource":"ingresses"`) ||
+		!strings.Contains(deprecatedAPIs.Body.String(), `"removed_release":"1.22"`) {
+		t.Fatalf("deprecated API status = %d, body = %s", deprecatedAPIs.Code, deprecatedAPIs.Body.String())
+	}
 	missingNamespace := authenticatedRequest(t, handler, cookie, http.MethodGet, base+"/resource-quotas", "")
 	if missingNamespace.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("missing governance namespace status = %d, body = %s", missingNamespace.Code, missingNamespace.Body.String())
@@ -1089,6 +1103,11 @@ func (testKube) NodeVersionSkew(context.Context) (domain.KubernetesNodeVersionSk
 			MinorSkew: 3, MaximumMinorSkew: 3, MinorSkewComparable: true,
 		}},
 	}, nil
+}
+func (testKube) DeprecatedAPIRequests(context.Context) ([]domain.KubernetesDeprecatedAPIRequest, error) {
+	return []domain.KubernetesDeprecatedAPIRequest{{
+		Group: "extensions", Version: "v1beta1", Resource: "ingresses", RemovedRelease: "1.22",
+	}}, nil
 }
 func (testKube) Nodes(context.Context) ([]domain.Node, error) {
 	return []domain.Node{{Name: "worker-01", Status: "Ready"}}, nil
