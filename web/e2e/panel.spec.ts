@@ -607,7 +607,7 @@ test('namespace governance reads one bounded policy kind at a time', async ({ pa
   expect(consoleErrors).toEqual([])
 })
 
-test('security posture reads only the bounded Pod Security Admission projection', async ({ page }, testInfo) => {
+test('security posture loads each bounded projection only when selected', async ({ page }, testInfo) => {
   const consoleErrors: string[] = []
   const requestedResources: string[] = []
   page.on('console', (message) => {
@@ -628,6 +628,22 @@ test('security posture reads only the bounded Pod Security Admission projection'
   await page.getByLabel('搜索 Pod 安全态势').fill('legacy')
   await expect(page.getByText('legacy', { exact: true })).toBeVisible()
   await expect(page.getByText('payments', { exact: true })).toHaveCount(0)
+
+  await page.getByRole('button', { name: '版本偏差' }).click()
+  await expect(page.getByText('v1.36.2', { exact: true })).toBeVisible()
+  await expect(page.getByText('worker-current', { exact: true })).toBeVisible()
+  await expect(page.getByText('同一次版本', { exact: true })).toBeVisible()
+  await expect(page.getByText('升级前需处理', { exact: true })).toBeVisible()
+  await expect(page.getByText('2 个节点需处理', { exact: true })).toBeVisible()
+  expect(requestedResources).toEqual([
+    '/api/v1/clusters/clu_1/pod-security-admission/namespaces',
+    '/api/v1/clusters/clu_1/upgrade-readiness/node-versions',
+  ])
+  expect(requestedResources).not.toContain('/api/v1/clusters/clu_1/nodes')
+
+  await page.getByLabel('搜索节点版本偏差').fill('主版本不一致')
+  await expect(page.getByText('worker-major', { exact: true })).toBeVisible()
+  await expect(page.getByText('worker-current', { exact: true })).toHaveCount(0)
 
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
   expect(overflow).toBeLessThanOrEqual(1)
@@ -1005,6 +1021,25 @@ async function mockSecurityPosture(page: Page, requestedResources: string[]) {
           invalid_mode_count: 1, created_at: '2026-07-19T08:00:00Z',
         },
       ]
+    } else if (path === '/api/v1/clusters/clu_1/upgrade-readiness/node-versions') {
+      requestedResources.push(path)
+      data = {
+        api_server_version: 'v1.36.2',
+        nodes: [
+          {
+            name: 'worker-current', kubelet_version: 'v1.36.1', status: 'same-minor',
+            minor_skew: 0, maximum_minor_skew: 3, minor_skew_comparable: true,
+          },
+          {
+            name: 'worker-old', kubelet_version: 'v1.33.9', status: 'upgrade-blocking',
+            minor_skew: 3, maximum_minor_skew: 3, minor_skew_comparable: true,
+          },
+          {
+            name: 'worker-major', kubelet_version: 'v2.33.0', status: 'major-mismatch',
+            minor_skew: 0, maximum_minor_skew: 0, minor_skew_comparable: false,
+          },
+        ],
+      }
     } else {
       requestedResources.push(path)
       await route.fulfill({

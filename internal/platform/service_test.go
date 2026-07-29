@@ -663,6 +663,10 @@ func TestServiceRejectsKubernetesReadsDuringCriticalResourcePressure(t *testing.
 			_, err := service.PodSecurityAdmissionNamespaces(context.Background(), cluster.ID)
 			return err
 		}},
+		{name: "node version skew", call: func() error {
+			_, err := service.NodeVersionSkew(context.Background(), cluster.ID)
+			return err
+		}},
 		{name: "nodes", call: func() error { _, err := service.Nodes(context.Background(), cluster.ID); return err }},
 		{name: "custom resource definitions", call: func() error {
 			_, err := service.CustomResourceDefinitions(context.Background(), cluster.ID)
@@ -803,6 +807,9 @@ func TestServiceRejectsKubernetesReadsDuringCriticalResourcePressure(t *testing.
 	}
 	if calls := gateway.podSecurityAdmissionCalls.Load(); calls != 0 {
 		t.Fatalf("PodSecurityAdmissionNamespaces() reached Kubernetes %d times under critical pressure", calls)
+	}
+	if calls := gateway.nodeVersionSkewCalls.Load(); calls != 0 {
+		t.Fatalf("NodeVersionSkew() reached Kubernetes %d times under critical pressure", calls)
 	}
 	if serviceCalls, ingressCalls, endpointSliceCalls, policyCalls := gateway.serviceCalls.Load(), gateway.ingressCalls.Load(), gateway.endpointSliceCalls.Load(), gateway.networkPolicyCalls.Load(); serviceCalls != 0 || ingressCalls != 0 || endpointSliceCalls != 0 || policyCalls != 0 {
 		t.Fatalf("network reads reached Kubernetes under critical pressure: services=%d ingresses=%d endpointSlices=%d policies=%d", serviceCalls, ingressCalls, endpointSliceCalls, policyCalls)
@@ -1071,6 +1078,36 @@ func TestServiceListsPodSecurityAdmissionPostureThroughReadGovernor(t *testing.T
 		t.Fatalf("PodSecurityAdmissionNamespaces() = %#v, %v", items, err)
 	}
 	if calls := gateway.podSecurityAdmissionCalls.Load(); calls != 1 {
+		t.Fatalf("gateway calls = %d, want 1", calls)
+	}
+}
+
+func TestServiceBuildsNodeVersionSkewReportThroughReadGovernor(t *testing.T) {
+	t.Parallel()
+
+	gateway := &fakeKubeGateway{
+		probe: domain.ClusterProbe{Version: "v1.36.2"},
+		nodeVersionSkew: domain.KubernetesNodeVersionSkewReport{
+			APIServerVersion: "v1.36.2",
+			Nodes: []domain.KubernetesNodeVersionSkew{{
+				Name: "worker-01", KubeletVersion: "v1.33.9", Status: domain.NodeVersionUpgradeBlocking,
+			}},
+		},
+	}
+	service, _, _ := newTestService(t, serviceFakes{kube: gateway})
+	cluster, err := service.CreateCluster(context.Background(), "admin", "req_cluster", domain.ClusterInput{
+		Name: "cluster", Environment: domain.EnvironmentDevelopment, Server: "https://api.example.com", BearerToken: "token",
+	})
+	if err != nil {
+		t.Fatalf("CreateCluster() error = %v", err)
+	}
+
+	report, err := service.NodeVersionSkew(context.Background(), cluster.ID)
+	if err != nil || report.APIServerVersion != "v1.36.2" || len(report.Nodes) != 1 ||
+		report.Nodes[0].Status != domain.NodeVersionUpgradeBlocking {
+		t.Fatalf("NodeVersionSkew() = %#v, %v", report, err)
+	}
+	if calls := gateway.nodeVersionSkewCalls.Load(); calls != 1 {
 		t.Fatalf("gateway calls = %d, want 1", calls)
 	}
 }
@@ -2265,6 +2302,8 @@ type fakeKubeGateway struct {
 	namespaces                       []domain.Namespace
 	podSecurityAdmissionNamespaces   []domain.KubernetesPodSecurityAdmissionNamespace
 	podSecurityAdmissionCalls        atomic.Int64
+	nodeVersionSkew                  domain.KubernetesNodeVersionSkewReport
+	nodeVersionSkewCalls             atomic.Int64
 	detail                           domain.WorkloadDetail
 	events                           []domain.KubernetesEvent
 	logs                             domain.PodLogs
@@ -2423,6 +2462,12 @@ func (g *fakeKubeGateway) Namespaces(context.Context) ([]domain.Namespace, error
 func (g *fakeKubeGateway) PodSecurityAdmissionNamespaces(context.Context) ([]domain.KubernetesPodSecurityAdmissionNamespace, error) {
 	g.podSecurityAdmissionCalls.Add(1)
 	return append([]domain.KubernetesPodSecurityAdmissionNamespace(nil), g.podSecurityAdmissionNamespaces...), nil
+}
+func (g *fakeKubeGateway) NodeVersionSkew(context.Context) (domain.KubernetesNodeVersionSkewReport, error) {
+	g.nodeVersionSkewCalls.Add(1)
+	report := g.nodeVersionSkew
+	report.Nodes = append([]domain.KubernetesNodeVersionSkew(nil), report.Nodes...)
+	return report, nil
 }
 func (g *fakeKubeGateway) Nodes(context.Context) ([]domain.Node, error) {
 	return append([]domain.Node(nil), g.nodes...), nil

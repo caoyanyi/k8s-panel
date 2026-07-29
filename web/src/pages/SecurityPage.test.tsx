@@ -45,6 +45,46 @@ describe('SecurityPage', () => {
     expect(requests.some((path) => path.endsWith('/namespaces') && !path.includes('pod-security-admission'))).toBe(false)
   })
 
+  it('loads bounded node version evidence only after the version view is selected', async () => {
+    const requests: string[] = []
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const path = String(input)
+      requests.push(path)
+      if (path.endsWith('/upgrade-readiness/node-versions')) {
+        return Promise.resolve(dataResponse(nodeVersionReport))
+      }
+      return Promise.resolve(dataResponse(postures))
+    }))
+    const user = userEvent.setup()
+
+    renderPage()
+
+    expect(await screen.findByText('payments')).toBeInTheDocument()
+    expect(requests).toEqual(['/api/v1/clusters/clu_1/pod-security-admission/namespaces'])
+
+    await user.click(screen.getByRole('button', { name: '版本偏差' }))
+
+    expect(await screen.findByText('v1.36.2')).toBeInTheDocument()
+    expect(screen.getByText('worker-00')).toBeInTheDocument()
+    expect(screen.getByText('同一次版本')).toBeInTheDocument()
+    expect(screen.getByText('政策范围内')).toBeInTheDocument()
+    expect(screen.getByText('升级前需处理')).toBeInTheDocument()
+    expect(screen.getByText('超出偏差范围')).toBeInTheDocument()
+    expect(screen.getByText('新于 API Server')).toBeInTheDocument()
+    expect(screen.getByText('主版本不一致')).toBeInTheDocument()
+    expect(screen.getByText('落后 3 个次版本')).toBeInTheDocument()
+    expect(screen.getByText('4 个节点需处理')).toBeInTheDocument()
+    expect(requests).toEqual([
+      '/api/v1/clusters/clu_1/pod-security-admission/namespaces',
+      '/api/v1/clusters/clu_1/upgrade-readiness/node-versions',
+    ])
+    expect(requests.some((path) => path.endsWith('/nodes'))).toBe(false)
+
+    await user.type(screen.getByLabelText('搜索节点版本偏差'), '主版本不一致')
+    expect(screen.getByText('worker-major')).toBeInTheDocument()
+    expect(screen.queryByText('worker-00')).not.toBeInTheDocument()
+  })
+
   it('searches and paginates the projected namespace rows locally', async () => {
     const items = Array.from({ length: 101 }, (_, index) => ({
       ...postures[0],
@@ -121,6 +161,18 @@ const postures = [
     created_at: '2026-07-18T08:00:00Z',
   },
 ]
+
+const nodeVersionReport = {
+  api_server_version: 'v1.36.2',
+  nodes: [
+    { name: 'worker-00', kubelet_version: 'v1.36.1', status: 'same-minor', minor_skew: 0, maximum_minor_skew: 3, minor_skew_comparable: true },
+    { name: 'worker-01', kubelet_version: 'v1.35.4', status: 'within-policy', minor_skew: 1, maximum_minor_skew: 3, minor_skew_comparable: true },
+    { name: 'worker-02', kubelet_version: 'v1.33.9', status: 'upgrade-blocking', minor_skew: 3, maximum_minor_skew: 3, minor_skew_comparable: true },
+    { name: 'worker-03', kubelet_version: 'v1.32.8', status: 'outside-policy', minor_skew: 4, maximum_minor_skew: 3, minor_skew_comparable: true },
+    { name: 'worker-04', kubelet_version: 'v1.37.0', status: 'newer-than-server', minor_skew: -1, maximum_minor_skew: 3, minor_skew_comparable: true },
+    { name: 'worker-major', kubelet_version: 'v2.33.0', status: 'major-mismatch', minor_skew: 0, maximum_minor_skew: 0, minor_skew_comparable: false },
+  ],
+}
 
 function renderPage(overrides: Partial<PanelContextValue> = {}) {
   return render(

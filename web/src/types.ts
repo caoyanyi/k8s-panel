@@ -72,6 +72,28 @@ export interface KubernetesPodSecurityAdmissionNamespace {
   created_at: string
 }
 
+export type KubernetesNodeVersionSkewStatus =
+  | 'same-minor'
+  | 'within-policy'
+  | 'upgrade-blocking'
+  | 'outside-policy'
+  | 'newer-than-server'
+  | 'major-mismatch'
+
+export interface KubernetesNodeVersionSkew {
+  name: string
+  kubelet_version: string
+  status: KubernetesNodeVersionSkewStatus
+  minor_skew: number
+  maximum_minor_skew: number
+  minor_skew_comparable: boolean
+}
+
+export interface KubernetesNodeVersionSkewReport {
+  api_server_version: string
+  nodes: KubernetesNodeVersionSkew[]
+}
+
 export interface NodeResources {
   cpu?: string
   memory?: string

@@ -216,6 +216,15 @@ func (s *Server) listPodSecurityAdmissionNamespaces(w http.ResponseWriter, r *ht
 	writeData(w, http.StatusOK, items)
 }
 
+func (s *Server) nodeVersionSkew(w http.ResponseWriter, r *http.Request) {
+	report, err := s.service.NodeVersionSkew(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeData(w, http.StatusOK, report)
+}
+
 func (s *Server) listNodes(w http.ResponseWriter, r *http.Request) {
 	items, err := s.service.Nodes(r.Context(), r.PathValue("id"))
 	if err != nil {

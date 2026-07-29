@@ -254,6 +254,8 @@ td strong { color: var(--text); font-size: 12px; }
 .governance-conditions { min-width: 150px; max-width: 300px; }
 .security-posture-table { min-width: 1040px; }
 .security-mode-value { min-width: 132px; }
+.security-version-table { min-width: 760px; }
+.security-skew-value { min-width: 150px; }
 .event-table { min-width: 1320px; }
 .access-table { min-width: 820px; }
 .event-message-cell { min-width: 300px; max-width: 520px; }
@@ -271,11 +273,11 @@ td strong { color: var(--text); font-size: 12px; }
 
 .status-badge { min-height: 24px; padding: 0 8px; display: inline-flex; align-items: center; gap: 6px; border: 1px solid #d9dfdb; border-radius: 999px; background: #f6f8f7; color: #536159; font-size: 11px; font-weight: 630; white-space: nowrap; }
 .status-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
-.status-connected, .status-succeeded, .status-ready, .status-active, .status-deployed, .status-true, .status-normal { color: var(--success); background: #eff9f3; border-color: #c5e6d3; }
-.status-degraded, .status-pending, .status-queued, .status-progressing, .status-retrying, .status-suspended, .status-submitted, .status-warning, .status-constrained { color: var(--warning); background: #fff8ea; border-color: #efd9aa; }
-.status-unreachable, .status-failed, .status-unavailable, .status-uninstalled, .status-critical { color: var(--danger); background: #fff1f1; border-color: #edc6c6; }
+.status-connected, .status-succeeded, .status-ready, .status-active, .status-deployed, .status-true, .status-normal, .status-same-minor { color: var(--success); background: #eff9f3; border-color: #c5e6d3; }
+.status-degraded, .status-pending, .status-queued, .status-progressing, .status-retrying, .status-suspended, .status-submitted, .status-warning, .status-constrained, .status-upgrade-blocking { color: var(--warning); background: #fff8ea; border-color: #efd9aa; }
+.status-unreachable, .status-failed, .status-unavailable, .status-uninstalled, .status-critical, .status-outside-policy, .status-newer-than-server, .status-major-mismatch { color: var(--danger); background: #fff1f1; border-color: #edc6c6; }
 .status-notready { color: var(--danger); background: #fff1f1; border-color: #edc6c6; }
-.status-running, .status-scheduled { color: var(--info); background: #eef6fc; border-color: #c8dff0; }
+.status-running, .status-scheduled, .status-within-policy { color: var(--info); background: #eef6fc; border-color: #c8dff0; }
 .status-disabled, .status-canceled, .status-unknown, .status-superseded { color: #5f6b64; background: #f1f3f2; border-color: #d9dfdb; }
 
 .data-state { min-height: 178px; padding: 28px 18px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--muted); text-align: center; font-size: 13px; }
@@ -298,6 +300,12 @@ td strong { color: var(--text); font-size: 12px; }
 .segmented-control { width: fit-content; margin-bottom: 14px; padding: 3px; display: flex; background: #e8ece9; border-radius: 6px; }
 .segmented-control button { min-width: 110px; height: 34px; padding: 0 13px; border-radius: 4px; background: transparent; color: #58665e; font-size: 12px; font-weight: 620; }
 .segmented-control button.active { background: #fff; color: var(--text); box-shadow: 0 1px 3px rgba(23, 33, 29, 0.12); }
+.security-view-control { max-width: 100%; overflow-x: auto; }
+.security-version-summary { min-height: 58px; padding: 10px 14px; display: flex; align-items: center; justify-content: space-between; gap: 14px; border-bottom: 1px solid var(--line); }
+.security-version-summary > div:first-child { min-width: 0; display: flex; align-items: baseline; gap: 10px; }
+.security-version-summary span { color: var(--muted); font-size: 11px; }
+.security-version-summary strong { overflow-wrap: anywhere; font-size: 13px; }
+.security-version-summary .inventory-alert { min-height: 32px; margin: 0; }
 .cluster-resource-control { max-width: 100%; overflow-x: auto; }
 .toolbar .admission-kind-control { flex: 0 1 auto; max-width: 100%; margin: 0; overflow-x: auto; }
 .admission-kind-control button { min-width: 104px; }

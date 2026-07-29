@@ -868,6 +868,22 @@ func (s *Service) PodSecurityAdmissionNamespaces(
 	return gateway.PodSecurityAdmissionNamespaces(ctx)
 }
 
+func (s *Service) NodeVersionSkew(
+	ctx context.Context,
+	clusterID string,
+) (domain.KubernetesNodeVersionSkewReport, error) {
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return domain.KubernetesNodeVersionSkewReport{}, err
+	}
+	defer release()
+	gateway, err := s.kubeGateway(ctx, clusterID)
+	if err != nil {
+		return domain.KubernetesNodeVersionSkewReport{}, err
+	}
+	return gateway.NodeVersionSkew(ctx)
+}
+
 func (s *Service) LimitRanges(
 	ctx context.Context,
 	clusterID, namespace string,

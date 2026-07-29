@@ -29,6 +29,12 @@ const labels: Record<string, string> = {
   deployed: '已部署',
   superseded: '已替代',
   uninstalled: '已卸载',
+  'same-minor': '同一次版本',
+  'within-policy': '政策范围内',
+  'upgrade-blocking': '升级前需处理',
+  'outside-policy': '超出偏差范围',
+  'newer-than-server': '新于 API Server',
+  'major-mismatch': '主版本不一致',
 }
 
 export function StatusBadge({ status }: StatusBadgeProps) {
@@ -36,7 +42,11 @@ export function StatusBadge({ status }: StatusBadgeProps) {
   return (
     <span className={`status-badge status-${normalized}`}>
       <span className="status-dot" aria-hidden="true" />
-      {labels[normalized] ?? status}
+      {statusLabel(status)}
     </span>
   )
+}
+
+export function statusLabel(status: string): string {
+  return labels[status.toLowerCase()] ?? status
 }

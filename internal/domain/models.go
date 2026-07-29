@@ -245,6 +245,31 @@ type KubernetesPodSecurityAdmissionNamespace struct {
 	CreatedAt        time.Time                          `json:"created_at"`
 }
 
+type KubernetesNodeVersionSkewStatus string
+
+const (
+	NodeVersionSameMinor       KubernetesNodeVersionSkewStatus = "same-minor"
+	NodeVersionWithinPolicy    KubernetesNodeVersionSkewStatus = "within-policy"
+	NodeVersionUpgradeBlocking KubernetesNodeVersionSkewStatus = "upgrade-blocking"
+	NodeVersionOutsidePolicy   KubernetesNodeVersionSkewStatus = "outside-policy"
+	NodeVersionNewerThanServer KubernetesNodeVersionSkewStatus = "newer-than-server"
+	NodeVersionMajorMismatch   KubernetesNodeVersionSkewStatus = "major-mismatch"
+)
+
+type KubernetesNodeVersionSkew struct {
+	Name                string                          `json:"name"`
+	KubeletVersion      string                          `json:"kubelet_version"`
+	Status              KubernetesNodeVersionSkewStatus `json:"status"`
+	MinorSkew           int                             `json:"minor_skew"`
+	MaximumMinorSkew    int                             `json:"maximum_minor_skew"`
+	MinorSkewComparable bool                            `json:"minor_skew_comparable"`
+}
+
+type KubernetesNodeVersionSkewReport struct {
+	APIServerVersion string                      `json:"api_server_version"`
+	Nodes            []KubernetesNodeVersionSkew `json:"nodes"`
+}
+
 type NodeResources struct {
 	CPU              string `json:"cpu,omitempty"`
 	Memory           string `json:"memory,omitempty"`

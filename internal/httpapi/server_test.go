@@ -89,6 +89,13 @@ func TestServerAuthenticationAndClusterLifecycle(t *testing.T) {
 	if unauthorizedPodSecurityAdmission.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthorized pod security admission status = %d, want 401", unauthorizedPodSecurityAdmission.Code)
 	}
+	unauthorizedNodeVersionSkew := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorizedNodeVersionSkew, httptest.NewRequest(
+		http.MethodGet, "/api/v1/clusters/clu_1/upgrade-readiness/node-versions", nil,
+	))
+	if unauthorizedNodeVersionSkew.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized node version skew status = %d, want 401", unauthorizedNodeVersionSkew.Code)
+	}
 	unauthorizedConfiguration := httptest.NewRecorder()
 	handler.ServeHTTP(unauthorizedConfiguration, httptest.NewRequest(http.MethodGet, "/api/v1/clusters/clu_1/configmaps", nil))
 	if unauthorizedConfiguration.Code != http.StatusUnauthorized {
@@ -738,6 +745,13 @@ func TestServerExposesAuthenticatedClusterResources(t *testing.T) {
 		!strings.Contains(podSecurityAdmission.Body.String(), `"level":"restricted"`) {
 		t.Fatalf("pod security admission status = %d, body = %s", podSecurityAdmission.Code, podSecurityAdmission.Body.String())
 	}
+	nodeVersionSkew := authenticatedRequest(t, handler, cookie, http.MethodGet, base+"/upgrade-readiness/node-versions", "")
+	if nodeVersionSkew.Code != http.StatusOK ||
+		!strings.Contains(nodeVersionSkew.Body.String(), `"api_server_version":"v1.36.2"`) ||
+		!strings.Contains(nodeVersionSkew.Body.String(), `"name":"worker-01"`) ||
+		!strings.Contains(nodeVersionSkew.Body.String(), `"status":"upgrade-blocking"`) {
+		t.Fatalf("node version skew status = %d, body = %s", nodeVersionSkew.Code, nodeVersionSkew.Body.String())
+	}
 	missingNamespace := authenticatedRequest(t, handler, cookie, http.MethodGet, base+"/resource-quotas", "")
 	if missingNamespace.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("missing governance namespace status = %d, body = %s", missingNamespace.Code, missingNamespace.Body.String())
@@ -1066,6 +1080,15 @@ func (testKube) PodSecurityAdmissionNamespaces(context.Context) ([]domain.Kubern
 		Audit: domain.KubernetesPodSecurityAdmissionMode{Status: domain.PodSecurityAdmissionModeInherited},
 		Warn:  domain.KubernetesPodSecurityAdmissionMode{Status: domain.PodSecurityAdmissionModeInherited},
 	}}, nil
+}
+func (testKube) NodeVersionSkew(context.Context) (domain.KubernetesNodeVersionSkewReport, error) {
+	return domain.KubernetesNodeVersionSkewReport{
+		APIServerVersion: "v1.36.2",
+		Nodes: []domain.KubernetesNodeVersionSkew{{
+			Name: "worker-01", KubeletVersion: "v1.33.9", Status: domain.NodeVersionUpgradeBlocking,
+			MinorSkew: 3, MaximumMinorSkew: 3, MinorSkewComparable: true,
+		}},
+	}, nil
 }
 func (testKube) Nodes(context.Context) ([]domain.Node, error) {
 	return []domain.Node{{Name: "worker-01", Status: "Ready"}}, nil
