@@ -1,6 +1,7 @@
 import { Eye, RefreshCw, Search } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '../api'
+import { AdmissionPolicyResourceDetailModal } from '../components/AdmissionPolicyResourceDetailModal'
 import { AdmissionWebhookConfigurationDetailModal } from '../components/AdmissionWebhookConfigurationDetailModal'
 import { EmptyState, ErrorState, LoadingState } from '../components/DataState'
 import { CustomResourceDefinitionDetailModal } from '../components/CustomResourceDefinitionDetailModal'
@@ -12,8 +13,8 @@ import { usePanel } from '../context'
 import { useResource } from '../hooks'
 import type {
   ClusterNode,
+  KubernetesAdmissionPolicyResource,
   KubernetesAdmissionWebhookConfiguration,
-  KubernetesAdmissionWebhookConfigurationKind,
   KubernetesAPIService,
   KubernetesCustomResourceDefinition,
   Namespace,
@@ -21,6 +22,7 @@ import type {
 import { formatDateTime } from '../utils'
 
 type ResourceView = 'nodes' | 'namespaces' | 'crds' | 'api-services' | 'admission-webhooks'
+type AdmissionResourceView = 'validating-webhooks' | 'mutating-webhooks' | 'policies' | 'bindings'
 
 export function ClusterResourcesPage() {
   const { clusters, selectedClusterId } = usePanel()
@@ -29,8 +31,9 @@ export function ClusterResourcesPage() {
   const [page, setPage] = useState(0)
   const [selectedNode, setSelectedNode] = useState('')
   const [selectedCRD, setSelectedCRD] = useState<KubernetesCustomResourceDefinition | null>(null)
-  const [admissionWebhookKind, setAdmissionWebhookKind] = useState<KubernetesAdmissionWebhookConfigurationKind>('validating')
+  const [admissionView, setAdmissionView] = useState<AdmissionResourceView>('validating-webhooks')
   const [selectedAdmissionWebhook, setSelectedAdmissionWebhook] = useState<KubernetesAdmissionWebhookConfiguration | null>(null)
+  const [selectedAdmissionPolicyResource, setSelectedAdmissionPolicyResource] = useState<KubernetesAdmissionPolicyResource | null>(null)
   const selectedCluster = clusters.find((cluster) => cluster.id === selectedClusterId)
   const nodes = useResource(
     (signal) => selectedClusterId && view === 'nodes' ? api.get<ClusterNode[]>(`/api/v1/clusters/${selectedClusterId}/nodes`, signal) : Promise.resolve([]),
@@ -53,21 +56,38 @@ export function ClusterResourcesPage() {
     [selectedClusterId, view],
   )
   const admissionWebhooks = useResource(
-    (signal) => selectedClusterId && view === 'admission-webhooks'
+    (signal) => selectedClusterId && view === 'admission-webhooks' &&
+      (admissionView === 'validating-webhooks' || admissionView === 'mutating-webhooks')
       ? api.get<KubernetesAdmissionWebhookConfiguration[]>(
-        `/api/v1/clusters/${selectedClusterId}/admission-webhook-configurations?${new URLSearchParams({ kind: admissionWebhookKind })}`,
+        `/api/v1/clusters/${selectedClusterId}/admission-webhook-configurations?${new URLSearchParams({ kind: admissionView === 'mutating-webhooks' ? 'mutating' : 'validating' })}`,
         signal,
       )
       : Promise.resolve([]),
-    [selectedClusterId, view, admissionWebhookKind],
+    [selectedClusterId, view, admissionView],
+  )
+  const admissionPolicies = useResource(
+    (signal) => selectedClusterId && view === 'admission-webhooks' && admissionView === 'policies'
+      ? api.get<KubernetesAdmissionPolicyResource[]>(`/api/v1/clusters/${selectedClusterId}/validating-admission-policies`, signal)
+      : Promise.resolve([]),
+    [selectedClusterId, view, admissionView],
+  )
+  const admissionPolicyBindings = useResource(
+    (signal) => selectedClusterId && view === 'admission-webhooks' && admissionView === 'bindings'
+      ? api.get<KubernetesAdmissionPolicyResource[]>(`/api/v1/clusters/${selectedClusterId}/validating-admission-policy-bindings`, signal)
+      : Promise.resolve([]),
+    [selectedClusterId, view, admissionView],
   )
 
   useEffect(() => {
     setSelectedNode('')
     setSelectedCRD(null)
     setSelectedAdmissionWebhook(null)
+    setSelectedAdmissionPolicyResource(null)
   }, [selectedClusterId, view])
-  useEffect(() => setSelectedAdmissionWebhook(null), [admissionWebhookKind])
+  useEffect(() => {
+    setSelectedAdmissionWebhook(null)
+    setSelectedAdmissionPolicyResource(null)
+  }, [admissionView])
   const normalizedSearch = search.trim().toLowerCase()
   useEffect(() => setPage(0), [normalizedSearch, selectedClusterId, view])
   const visibleNodes = useMemo(() => (nodes.data ?? []).filter((node) => (
@@ -85,14 +105,24 @@ export function ClusterResourcesPage() {
   const visibleAdmissionWebhooks = useMemo(() => (admissionWebhooks.data ?? []).filter((resource) => (
     !normalizedSearch || `${resource.name} ${resource.kind}`.toLowerCase().includes(normalizedSearch)
   )), [admissionWebhooks.data, normalizedSearch])
-  const active = { nodes, namespaces, crds: customResourceDefinitions, 'api-services': apiServices, 'admission-webhooks': admissionWebhooks }[view]
+  const visibleAdmissionPolicies = useMemo(() => (admissionPolicies.data ?? []).filter((resource) => (
+    !normalizedSearch || resource.name.toLowerCase().includes(normalizedSearch)
+  )), [admissionPolicies.data, normalizedSearch])
+  const visibleAdmissionPolicyBindings = useMemo(() => (admissionPolicyBindings.data ?? []).filter((resource) => (
+    !normalizedSearch || resource.name.toLowerCase().includes(normalizedSearch)
+  )), [admissionPolicyBindings.data, normalizedSearch])
+  const activeAdmissionResource = admissionView === 'policies' ? admissionPolicies
+    : admissionView === 'bindings' ? admissionPolicyBindings : admissionWebhooks
+  const active = view === 'admission-webhooks' ? activeAdmissionResource
+    : { nodes, namespaces, crds: customResourceDefinitions, 'api-services': apiServices }[view]
   const activeCount = active.data?.length ?? 0
   const visibleCount = {
     nodes: visibleNodes.length,
     namespaces: visibleNamespaces.length,
     crds: visibleCustomResourceDefinitions.length,
     'api-services': visibleAPIServices.length,
-    'admission-webhooks': visibleAdmissionWebhooks.length,
+    'admission-webhooks': admissionView === 'policies' ? visibleAdmissionPolicies.length
+      : admissionView === 'bindings' ? visibleAdmissionPolicyBindings.length : visibleAdmissionWebhooks.length,
   }[view]
   const totalPages = Math.max(1, Math.ceil(visibleCount / TABLE_PAGE_SIZE))
   const currentPage = Math.min(page, totalPages - 1)
@@ -102,13 +132,19 @@ export function ClusterResourcesPage() {
   const pageCustomResourceDefinitions = visibleCustomResourceDefinitions.slice(pageStart, pageStart + TABLE_PAGE_SIZE)
   const pageAPIServices = visibleAPIServices.slice(pageStart, pageStart + TABLE_PAGE_SIZE)
   const pageAdmissionWebhooks = visibleAdmissionWebhooks.slice(pageStart, pageStart + TABLE_PAGE_SIZE)
-  const resourceLabel = { nodes: '节点', namespaces: '命名空间', crds: 'CRD', 'api-services': '聚合 API', 'admission-webhooks': '准入配置' }[view]
+  const pageAdmissionPolicies = visibleAdmissionPolicies.slice(pageStart, pageStart + TABLE_PAGE_SIZE)
+  const pageAdmissionPolicyBindings = visibleAdmissionPolicyBindings.slice(pageStart, pageStart + TABLE_PAGE_SIZE)
+  const admissionResourceLabel = admissionView === 'policies' ? '校验策略'
+    : admissionView === 'bindings' ? '策略绑定' : 'Webhook 配置'
+  const resourceLabel = view === 'admission-webhooks' ? admissionResourceLabel
+    : { nodes: '节点', namespaces: '命名空间', crds: 'CRD', 'api-services': '聚合 API' }[view]
   const searchPlaceholder = {
     nodes: '搜索节点、IP 或角色',
     namespaces: '搜索命名空间或标签',
     crds: '搜索资源或 API 组',
     'api-services': '搜索 API、Service 或状态原因',
-    'admission-webhooks': '搜索准入 Webhook 配置',
+    'admission-webhooks': admissionView === 'policies' ? '搜索校验准入策略'
+      : admissionView === 'bindings' ? '搜索准入策略绑定' : '搜索准入 Webhook 配置',
   }[view]
 
   return (
@@ -130,9 +166,11 @@ export function ClusterResourcesPage() {
           </div>
           <section className="toolbar" aria-label="集群资源筛选">
             {view === 'admission-webhooks' && (
-              <div className="segmented-control admission-kind-control" role="group" aria-label="准入 Webhook 类型">
-                <button type="button" className={admissionWebhookKind === 'validating' ? 'active' : ''} onClick={() => setAdmissionWebhookKind('validating')}>Validating</button>
-                <button type="button" className={admissionWebhookKind === 'mutating' ? 'active' : ''} onClick={() => setAdmissionWebhookKind('mutating')}>Mutating</button>
+              <div className="segmented-control admission-kind-control" role="group" aria-label="准入资源类型">
+                <button type="button" className={admissionView === 'validating-webhooks' ? 'active' : ''} onClick={() => setAdmissionView('validating-webhooks')}>Validating</button>
+                <button type="button" className={admissionView === 'mutating-webhooks' ? 'active' : ''} onClick={() => setAdmissionView('mutating-webhooks')}>Mutating</button>
+                <button type="button" className={admissionView === 'policies' ? 'active' : ''} onClick={() => setAdmissionView('policies')}>校验策略</button>
+                <button type="button" className={admissionView === 'bindings' ? 'active' : ''} onClick={() => setAdmissionView('bindings')}>策略绑定</button>
               </div>
             )}
             <div className="search-field search-field-wide"><Search size={16} aria-hidden="true" /><label className="sr-only" htmlFor="cluster-resource-search">搜索集群资源</label><input id="cluster-resource-search" type="search" placeholder={searchPlaceholder} value={search} onChange={(event) => setSearch(event.target.value)} /></div>
@@ -157,10 +195,22 @@ export function ClusterResourcesPage() {
                     : <><APIServiceTable resources={pageAPIServices} /><TablePagination page={currentPage} totalItems={visibleAPIServices.length} onPage={setPage} /></>
             )}
             {view === 'admission-webhooks' && (
-              admissionWebhooks.loading ? <LoadingState label="正在读取准入 Webhook 元数据" />
-                : admissionWebhooks.error ? <ErrorState error={admissionWebhooks.error} onRetry={() => void admissionWebhooks.refresh()} />
-                  : visibleAdmissionWebhooks.length === 0 ? <EmptyState title={normalizedSearch ? '没有匹配的准入 Webhook 配置' : '当前集群没有准入 Webhook 配置'} />
-                    : <><AdmissionWebhookConfigurationTable resources={pageAdmissionWebhooks} onSelect={setSelectedAdmissionWebhook} /><TablePagination page={currentPage} totalItems={visibleAdmissionWebhooks.length} onPage={setPage} /></>
+              admissionView === 'policies' ? (
+                admissionPolicies.loading ? <LoadingState label="正在读取校验准入策略元数据" />
+                  : admissionPolicies.error ? <ErrorState error={admissionPolicies.error} onRetry={() => void admissionPolicies.refresh()} />
+                    : visibleAdmissionPolicies.length === 0 ? <EmptyState title={normalizedSearch ? '没有匹配的校验准入策略' : '当前集群没有校验准入策略'} />
+                      : <><AdmissionPolicyResourceTable resources={pageAdmissionPolicies} onSelect={setSelectedAdmissionPolicyResource} /><TablePagination page={currentPage} totalItems={visibleAdmissionPolicies.length} onPage={setPage} /></>
+              ) : admissionView === 'bindings' ? (
+                admissionPolicyBindings.loading ? <LoadingState label="正在读取准入策略绑定元数据" />
+                  : admissionPolicyBindings.error ? <ErrorState error={admissionPolicyBindings.error} onRetry={() => void admissionPolicyBindings.refresh()} />
+                    : visibleAdmissionPolicyBindings.length === 0 ? <EmptyState title={normalizedSearch ? '没有匹配的准入策略绑定' : '当前集群没有准入策略绑定'} />
+                      : <><AdmissionPolicyResourceTable resources={pageAdmissionPolicyBindings} onSelect={setSelectedAdmissionPolicyResource} /><TablePagination page={currentPage} totalItems={visibleAdmissionPolicyBindings.length} onPage={setPage} /></>
+              ) : (
+                admissionWebhooks.loading ? <LoadingState label="正在读取准入 Webhook 元数据" />
+                  : admissionWebhooks.error ? <ErrorState error={admissionWebhooks.error} onRetry={() => void admissionWebhooks.refresh()} />
+                    : visibleAdmissionWebhooks.length === 0 ? <EmptyState title={normalizedSearch ? '没有匹配的准入 Webhook 配置' : '当前集群没有准入 Webhook 配置'} />
+                      : <><AdmissionWebhookConfigurationTable resources={pageAdmissionWebhooks} onSelect={setSelectedAdmissionWebhook} /><TablePagination page={currentPage} totalItems={visibleAdmissionWebhooks.length} onPage={setPage} /></>
+              )
             )}
           </section>
         </>
@@ -168,6 +218,31 @@ export function ClusterResourcesPage() {
       {selectedNode && <NodeDetailModal clusterId={selectedClusterId} nodeName={selectedNode} open onClose={() => setSelectedNode('')} />}
       {selectedCRD && <CustomResourceDefinitionDetailModal clusterId={selectedClusterId} resource={selectedCRD} onClose={() => setSelectedCRD(null)} />}
       {selectedAdmissionWebhook && <AdmissionWebhookConfigurationDetailModal clusterId={selectedClusterId} resource={selectedAdmissionWebhook} onClose={() => setSelectedAdmissionWebhook(null)} />}
+      {selectedAdmissionPolicyResource && <AdmissionPolicyResourceDetailModal clusterId={selectedClusterId} resource={selectedAdmissionPolicyResource} onClose={() => setSelectedAdmissionPolicyResource(null)} />}
+    </div>
+  )
+}
+
+function AdmissionPolicyResourceTable({
+  resources,
+  onSelect,
+}: {
+  resources: KubernetesAdmissionPolicyResource[]
+  onSelect: (resource: KubernetesAdmissionPolicyResource) => void
+}) {
+  return (
+    <div className="table-wrap" role="region" aria-label="准入策略资源清单" tabIndex={0}>
+      <table className="admission-policy-table">
+        <thead><tr><th>名称</th><th>资源类型</th><th>创建时间</th><th className="actions-column">操作</th></tr></thead>
+        <tbody>{resources.map((resource) => (
+          <tr key={`${resource.kind}/${resource.name}`}>
+            <td className="mono"><strong>{resource.name}</strong></td>
+            <td><span className="kind-label">{resource.kind === 'policy' ? 'ValidatingAdmissionPolicy' : 'ValidatingAdmissionPolicyBinding'}</span></td>
+            <td>{formatDateTime(resource.created_at)}</td>
+            <td className="actions-column"><button type="button" className="icon-button" aria-label={`查看 ${resource.name}`} title="查看准入策略详情" onClick={() => onSelect(resource)}><Eye size={16} /></button></td>
+          </tr>
+        ))}</tbody>
+      </table>
     </div>
   )
 }

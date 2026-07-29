@@ -187,6 +187,63 @@ export interface KubernetesAdmissionWebhookConfigurationDetail extends Kubernete
   webhook_count: number
 }
 
+export type KubernetesAdmissionPolicyResourceKind = 'policy' | 'binding'
+
+export interface KubernetesAdmissionPolicyResource {
+  kind: KubernetesAdmissionPolicyResourceKind
+  name: string
+  created_at: string
+}
+
+export interface KubernetesAdmissionMatchSummary {
+  configured: boolean
+  match_policy?: 'Equivalent' | 'Exact'
+  match_policy_defaulted: boolean
+  resource_rule_count: number
+  exclude_resource_rule_count: number
+  operation_count: number
+  api_group_count: number
+  api_version_count: number
+  resource_count: number
+  namespace_selector_label_count: number
+  namespace_selector_expression_count: number
+  object_selector_label_count: number
+  object_selector_expression_count: number
+}
+
+export interface KubernetesValidatingAdmissionPolicyDetail extends KubernetesAdmissionPolicyResource {
+  kind: 'policy'
+  generation: number
+  failure_policy: 'Fail' | 'Ignore'
+  failure_policy_defaulted: boolean
+  param_kind_configured: boolean
+  param_api_version?: string
+  param_kind?: string
+  match: KubernetesAdmissionMatchSummary
+  validation_count: number
+  audit_annotation_count: number
+  match_condition_count: number
+  variable_count: number
+  observed_generation: number
+  type_checking_observed: boolean
+  expression_warning_count: number
+  condition_count: number
+}
+
+export interface KubernetesValidatingAdmissionPolicyBindingDetail extends KubernetesAdmissionPolicyResource {
+  kind: 'binding'
+  generation: number
+  policy_name: string
+  validation_actions: Array<'Deny' | 'Warn' | 'Audit'>
+  param_ref_configured: boolean
+  param_ref_mode?: 'name' | 'selector'
+  param_namespace?: string
+  parameter_not_found_action?: 'Allow' | 'Deny'
+  param_selector_label_count: number
+  param_selector_expression_count: number
+  match: KubernetesAdmissionMatchSummary
+}
+
 export interface KubernetesCustomResourceDefinitionVersion {
   name: string
   served: boolean

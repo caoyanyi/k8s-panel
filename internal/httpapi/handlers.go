@@ -288,6 +288,42 @@ func (s *Server) getAdmissionWebhookConfiguration(w http.ResponseWriter, r *http
 	writeData(w, http.StatusOK, item)
 }
 
+func (s *Server) listValidatingAdmissionPolicies(w http.ResponseWriter, r *http.Request) {
+	items, err := s.service.ValidatingAdmissionPolicies(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeData(w, http.StatusOK, items)
+}
+
+func (s *Server) getValidatingAdmissionPolicy(w http.ResponseWriter, r *http.Request) {
+	item, err := s.service.ValidatingAdmissionPolicy(r.Context(), r.PathValue("id"), r.PathValue("name"))
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeData(w, http.StatusOK, item)
+}
+
+func (s *Server) listValidatingAdmissionPolicyBindings(w http.ResponseWriter, r *http.Request) {
+	items, err := s.service.ValidatingAdmissionPolicyBindings(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeData(w, http.StatusOK, items)
+}
+
+func (s *Server) getValidatingAdmissionPolicyBinding(w http.ResponseWriter, r *http.Request) {
+	item, err := s.service.ValidatingAdmissionPolicyBinding(r.Context(), r.PathValue("id"), r.PathValue("name"))
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeData(w, http.StatusOK, item)
+}
+
 func (s *Server) listEvents(w http.ResponseWriter, r *http.Request) {
 	limit, err := parseBoundedInt(r.URL.Query().Get("limit"), 200, 1, domain.MaxClusterEventLimit, "limit")
 	if err != nil {

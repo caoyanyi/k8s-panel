@@ -228,6 +228,60 @@ describe('ClusterResourcesPage', () => {
     expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('?kind=mutating'))).toBe(true)
   })
 
+  it('loads CEL admission policies and bindings one resource type at a time', async () => {
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const path = String(input)
+      if (path.endsWith(`/validating-admission-policies/${admissionPolicy.name}`)) {
+        return Promise.resolve(dataResponse(admissionPolicyDetail))
+      }
+      if (path.endsWith('/validating-admission-policies')) return Promise.resolve(dataResponse([admissionPolicy]))
+      if (path.endsWith(`/validating-admission-policy-bindings/${admissionPolicyBinding.name}`)) {
+        return Promise.resolve(dataResponse(admissionPolicyBindingDetail))
+      }
+      if (path.endsWith('/validating-admission-policy-bindings')) return Promise.resolve(dataResponse([admissionPolicyBinding]))
+      if (path.endsWith('/admission-webhook-configurations?kind=validating')) {
+        return Promise.resolve(dataResponse([admissionWebhook]))
+      }
+      if (path.endsWith('/nodes')) return Promise.resolve(dataResponse([node]))
+      return Promise.resolve(errorResponse(404, 'not_found'))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const user = userEvent.setup()
+
+    renderPage(context)
+    await screen.findByText(node.name)
+    await user.click(screen.getByRole('button', { name: '准入' }))
+    expect(await screen.findByText(admissionWebhook.name)).toBeInTheDocument()
+    expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/validating-admission-policies'))).toBe(false)
+
+    await user.click(screen.getByRole('button', { name: '校验策略' }))
+    expect(await screen.findByText(admissionPolicy.name)).toBeInTheDocument()
+    expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/validating-admission-policy-bindings'))).toBe(false)
+    expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith(`/${admissionPolicy.name}`))).toBe(false)
+    await user.click(screen.getByRole('button', { name: `查看 ${admissionPolicy.name}` }))
+
+    const policyDialog = await screen.findByRole('dialog', { name: `校验准入策略 · ${admissionPolicy.name}` })
+    expect(within(policyDialog).getByText('Ignore')).toBeInTheDocument()
+    expect(within(policyDialog).getByText('rules.example.com/v1 · ReplicaLimit')).toBeInTheDocument()
+    expect(within(policyDialog).getByText('2 个校验 · 1 个审计注解')).toBeInTheDocument()
+    expect(within(policyDialog).getByText('已完成 · 1 个警告')).toBeInTheDocument()
+    expect(within(policyDialog).queryByText('private CEL expression')).not.toBeInTheDocument()
+    expect(within(policyDialog).queryByText('private warning')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: '策略绑定' }))
+    expect(await screen.findByText(admissionPolicyBinding.name)).toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: `校验准入策略 · ${admissionPolicy.name}` })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: `查看 ${admissionPolicyBinding.name}` }))
+
+    const bindingDialog = await screen.findByRole('dialog', { name: `准入策略绑定 · ${admissionPolicyBinding.name}` })
+    expect(within(bindingDialog).getByText(admissionPolicy.name)).toBeInTheDocument()
+    expect(within(bindingDialog).getAllByText('Deny')).toHaveLength(2)
+    expect(within(bindingDialog).getByText('Audit')).toBeInTheDocument()
+    expect(within(bindingDialog).getByText('按名称 · policy-system')).toBeInTheDocument()
+    expect(within(bindingDialog).queryByText('private-param-name')).not.toBeInTheDocument()
+    expect(within(bindingDialog).queryByText('private-selector')).not.toBeInTheDocument()
+  })
+
   it('shows an empty state without a selected cluster', () => {
     vi.stubGlobal('fetch', vi.fn())
     renderPage({ ...context, clusters: [], selectedClusterId: '' })
@@ -307,6 +361,45 @@ const admissionWebhookDetail = {
     object_selector_label_count: 0, object_selector_expression_count: 0,
     match_condition_count: 1,
   }],
+}
+
+const admissionPolicy = {
+  kind: 'policy', name: 'replica-policy.example.com', created_at: '2026-07-29T08:00:00Z',
+}
+
+const admissionPolicyDetail = {
+  ...admissionPolicy,
+  generation: 4, failure_policy: 'Ignore', failure_policy_defaulted: false,
+  param_kind_configured: true, param_api_version: 'rules.example.com/v1', param_kind: 'ReplicaLimit',
+  match: {
+    configured: true, match_policy: 'Exact', match_policy_defaulted: false,
+    resource_rule_count: 1, exclude_resource_rule_count: 1,
+    operation_count: 3, api_group_count: 2, api_version_count: 2, resource_count: 3,
+    namespace_selector_label_count: 1, namespace_selector_expression_count: 1,
+    object_selector_label_count: 1, object_selector_expression_count: 1,
+  },
+  validation_count: 2, audit_annotation_count: 1, match_condition_count: 1, variable_count: 1,
+  observed_generation: 4, type_checking_observed: true, expression_warning_count: 1, condition_count: 1,
+  created_at: admissionPolicy.created_at,
+}
+
+const admissionPolicyBinding = {
+  kind: 'binding', name: 'replica-binding.example.com', created_at: '2026-07-29T09:00:00Z',
+}
+
+const admissionPolicyBindingDetail = {
+  ...admissionPolicyBinding,
+  generation: 3, policy_name: admissionPolicy.name, validation_actions: ['Deny', 'Audit'],
+  param_ref_configured: true, param_ref_mode: 'name', param_namespace: 'policy-system',
+  parameter_not_found_action: 'Deny', param_selector_label_count: 0, param_selector_expression_count: 0,
+  match: {
+    configured: true, match_policy: 'Equivalent', match_policy_defaulted: true,
+    resource_rule_count: 1, exclude_resource_rule_count: 0,
+    operation_count: 1, api_group_count: 1, api_version_count: 1, resource_count: 1,
+    namespace_selector_label_count: 0, namespace_selector_expression_count: 0,
+    object_selector_label_count: 0, object_selector_expression_count: 0,
+  },
+  created_at: admissionPolicyBinding.created_at,
 }
 
 function renderPage(value: PanelContextValue) {

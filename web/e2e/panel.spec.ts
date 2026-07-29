@@ -310,7 +310,7 @@ test('production deployment image update requires a fresh dry-run preview', asyn
   expect(consoleErrors).toEqual([])
 })
 
-test('cluster resources show node diagnostics, bounded extensions and admission webhooks', async ({ page }, testInfo) => {
+test('cluster resources show node diagnostics, bounded extensions and admission resources', async ({ page }, testInfo) => {
   const consoleErrors: string[] = []
   const requestedResources: string[] = []
   page.on('console', (message) => {
@@ -401,6 +401,44 @@ test('cluster resources show node diagnostics, bounded extensions and admission 
   await page.getByRole('button', { name: 'Mutating' }).click()
   await expect(page.getByText('mutate.platform.example.com', { exact: true })).toBeVisible()
   expect(requestedResources).toContain('admission-mutating')
+
+  expect(requestedResources).not.toContain('admission-policies')
+  await page.getByRole('button', { name: '校验策略' }).click()
+  await expect(page.getByText('replica-policy.example.com', { exact: true })).toBeVisible()
+  expect(requestedResources).toContain('admission-policies')
+  expect(requestedResources).not.toContain('admission-policy-detail')
+  expect(requestedResources).not.toContain('admission-policy-bindings')
+  await page.getByRole('button', { name: '查看 replica-policy.example.com' }).click()
+  const admissionPolicyDialog = page.getByRole('dialog', { name: '校验准入策略 · replica-policy.example.com' })
+  await expect(admissionPolicyDialog.getByText('rules.example.com/v1 · ReplicaLimit')).toBeVisible()
+  await expect(admissionPolicyDialog.getByText('2 个校验 · 1 个审计注解')).toBeVisible()
+  await expect(admissionPolicyDialog.getByText('已完成 · 1 个警告')).toBeVisible()
+  await expect(admissionPolicyDialog.getByText('private CEL expression')).toHaveCount(0)
+  await expect(admissionPolicyDialog.getByText('private warning')).toHaveCount(0)
+  expect(requestedResources).toContain('admission-policy-detail')
+  overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
+  expect(overflow).toBeLessThanOrEqual(1)
+  result = await new AxeBuilder({ page }).analyze()
+  expect(result.violations.filter((violation) => ['serious', 'critical'].includes(violation.impact ?? ''))).toEqual([])
+  await page.screenshot({ path: `test-results/${testInfo.project.name}-admission-policy-detail.png` })
+
+  await admissionPolicyDialog.getByRole('button', { name: '关闭' }).click()
+  await page.getByRole('button', { name: '策略绑定' }).click()
+  await expect(page.getByText('replica-binding.example.com', { exact: true })).toBeVisible()
+  expect(requestedResources).toContain('admission-policy-bindings')
+  expect(requestedResources).not.toContain('admission-policy-binding-detail')
+  await page.getByRole('button', { name: '查看 replica-binding.example.com' }).click()
+  const admissionPolicyBindingDialog = page.getByRole('dialog', { name: '准入策略绑定 · replica-binding.example.com' })
+  await expect(admissionPolicyBindingDialog.getByText('replica-policy.example.com', { exact: true })).toBeVisible()
+  await expect(admissionPolicyBindingDialog.getByText('按名称 · policy-system')).toBeVisible()
+  await expect(admissionPolicyBindingDialog.getByText('private-param-name')).toHaveCount(0)
+  await expect(admissionPolicyBindingDialog.getByText('private-selector')).toHaveCount(0)
+  expect(requestedResources).toContain('admission-policy-binding-detail')
+  overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
+  expect(overflow).toBeLessThanOrEqual(1)
+  result = await new AxeBuilder({ page }).analyze()
+  expect(result.violations.filter((violation) => ['serious', 'critical'].includes(violation.impact ?? ''))).toEqual([])
+  await page.screenshot({ path: `test-results/${testInfo.project.name}-admission-policy-binding-detail.png` })
   expect(consoleErrors).toEqual([])
 })
 
@@ -1256,6 +1294,45 @@ async function mockClusterResources(page: Page, requestedResources: string[]) {
         condition_count: 1, insecure_skip_tls_verify: true, group_priority_minimum: 100,
         version_priority: 100, created_at: '2026-07-26T08:00:00Z',
       }]
+    } else if (path === '/api/v1/clusters/clu_1/validating-admission-policies/replica-policy.example.com') {
+      requestedResources.push('admission-policy-detail')
+      data = {
+        kind: 'policy', name: 'replica-policy.example.com', generation: 4,
+        failure_policy: 'Ignore', failure_policy_defaulted: false,
+        param_kind_configured: true, param_api_version: 'rules.example.com/v1', param_kind: 'ReplicaLimit',
+        match: {
+          configured: true, match_policy: 'Exact', match_policy_defaulted: false,
+          resource_rule_count: 1, exclude_resource_rule_count: 1,
+          operation_count: 3, api_group_count: 2, api_version_count: 2, resource_count: 3,
+          namespace_selector_label_count: 1, namespace_selector_expression_count: 1,
+          object_selector_label_count: 1, object_selector_expression_count: 1,
+        },
+        validation_count: 2, audit_annotation_count: 1, match_condition_count: 1, variable_count: 1,
+        observed_generation: 4, type_checking_observed: true, expression_warning_count: 1, condition_count: 1,
+        created_at: '2026-07-29T08:00:00Z', expression: 'private CEL expression', warning: 'private warning',
+      }
+    } else if (path === '/api/v1/clusters/clu_1/validating-admission-policies') {
+      requestedResources.push('admission-policies')
+      data = [{ kind: 'policy', name: 'replica-policy.example.com', created_at: '2026-07-29T08:00:00Z' }]
+    } else if (path === '/api/v1/clusters/clu_1/validating-admission-policy-bindings/replica-binding.example.com') {
+      requestedResources.push('admission-policy-binding-detail')
+      data = {
+        kind: 'binding', name: 'replica-binding.example.com', generation: 3,
+        policy_name: 'replica-policy.example.com', validation_actions: ['Deny', 'Audit'],
+        param_ref_configured: true, param_ref_mode: 'name', param_namespace: 'policy-system',
+        parameter_not_found_action: 'Deny', param_selector_label_count: 0, param_selector_expression_count: 0,
+        match: {
+          configured: true, match_policy: 'Equivalent', match_policy_defaulted: true,
+          resource_rule_count: 1, exclude_resource_rule_count: 0,
+          operation_count: 1, api_group_count: 1, api_version_count: 1, resource_count: 1,
+          namespace_selector_label_count: 0, namespace_selector_expression_count: 0,
+          object_selector_label_count: 0, object_selector_expression_count: 0,
+        },
+        created_at: '2026-07-29T09:00:00Z', param_name: 'private-param-name', selector: 'private-selector',
+      }
+    } else if (path === '/api/v1/clusters/clu_1/validating-admission-policy-bindings') {
+      requestedResources.push('admission-policy-bindings')
+      data = [{ kind: 'binding', name: 'replica-binding.example.com', created_at: '2026-07-29T09:00:00Z' }]
     } else if (path === '/api/v1/clusters/clu_1/admission-webhook-configurations/policy.platform.example.com') {
       requestedResources.push('admission-detail')
       data = {

@@ -68,6 +68,20 @@ func TestServerAuthenticationAndClusterLifecycle(t *testing.T) {
 	if unauthorizedAdmissionWebhooks.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthorized admission webhook status = %d, want 401", unauthorizedAdmissionWebhooks.Code)
 	}
+	unauthorizedAdmissionPolicies := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorizedAdmissionPolicies, httptest.NewRequest(
+		http.MethodGet, "/api/v1/clusters/clu_1/validating-admission-policies", nil,
+	))
+	if unauthorizedAdmissionPolicies.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized admission policy status = %d, want 401", unauthorizedAdmissionPolicies.Code)
+	}
+	unauthorizedAdmissionPolicyBindings := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorizedAdmissionPolicyBindings, httptest.NewRequest(
+		http.MethodGet, "/api/v1/clusters/clu_1/validating-admission-policy-bindings", nil,
+	))
+	if unauthorizedAdmissionPolicyBindings.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized admission policy binding status = %d, want 401", unauthorizedAdmissionPolicyBindings.Code)
+	}
 	unauthorizedConfiguration := httptest.NewRecorder()
 	handler.ServeHTTP(unauthorizedConfiguration, httptest.NewRequest(http.MethodGet, "/api/v1/clusters/clu_1/configmaps", nil))
 	if unauthorizedConfiguration.Code != http.StatusUnauthorized {
@@ -232,6 +246,54 @@ func TestServerAuthenticationAndClusterLifecycle(t *testing.T) {
 		t.Fatalf("invalid admission webhook name status = %d, body = %s", invalidAdmissionWebhookName.Code, invalidAdmissionWebhookName.Body.String())
 	}
 	assertErrorField(t, invalidAdmissionWebhookName.Body.Bytes(), "name")
+	admissionPoliciesPath := "/api/v1/clusters/" + created.Data.ID + "/validating-admission-policies"
+	admissionPolicies := authenticatedRequest(t, handler, cookie, http.MethodGet, admissionPoliciesPath, "")
+	if admissionPolicies.Code != http.StatusOK ||
+		!strings.Contains(admissionPolicies.Body.String(), `"name":"replica-policy.example.com"`) ||
+		!strings.Contains(admissionPolicies.Body.String(), `"kind":"policy"`) {
+		t.Fatalf("admission policies status = %d, body = %s", admissionPolicies.Code, admissionPolicies.Body.String())
+	}
+	admissionPolicyDetail := authenticatedRequest(
+		t, handler, cookie, http.MethodGet, admissionPoliciesPath+"/replica-policy.example.com", "",
+	)
+	if admissionPolicyDetail.Code != http.StatusOK ||
+		!strings.Contains(admissionPolicyDetail.Body.String(), `"failure_policy":"Fail"`) ||
+		!strings.Contains(admissionPolicyDetail.Body.String(), `"validation_count":2`) ||
+		strings.Contains(admissionPolicyDetail.Body.String(), "private CEL expression") ||
+		strings.Contains(admissionPolicyDetail.Body.String(), "private warning") {
+		t.Fatalf("admission policy detail status = %d, body = %s", admissionPolicyDetail.Code, admissionPolicyDetail.Body.String())
+	}
+	invalidAdmissionPolicyName := authenticatedRequest(
+		t, handler, cookie, http.MethodGet, admissionPoliciesPath+"/..%2Fvalidatingadmissionpolicies", "",
+	)
+	if invalidAdmissionPolicyName.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid admission policy name status = %d, body = %s", invalidAdmissionPolicyName.Code, invalidAdmissionPolicyName.Body.String())
+	}
+	assertErrorField(t, invalidAdmissionPolicyName.Body.Bytes(), "name")
+	admissionPolicyBindingsPath := "/api/v1/clusters/" + created.Data.ID + "/validating-admission-policy-bindings"
+	admissionPolicyBindings := authenticatedRequest(t, handler, cookie, http.MethodGet, admissionPolicyBindingsPath, "")
+	if admissionPolicyBindings.Code != http.StatusOK ||
+		!strings.Contains(admissionPolicyBindings.Body.String(), `"name":"replica-binding.example.com"`) ||
+		!strings.Contains(admissionPolicyBindings.Body.String(), `"kind":"binding"`) {
+		t.Fatalf("admission policy bindings status = %d, body = %s", admissionPolicyBindings.Code, admissionPolicyBindings.Body.String())
+	}
+	admissionPolicyBindingDetail := authenticatedRequest(
+		t, handler, cookie, http.MethodGet, admissionPolicyBindingsPath+"/replica-binding.example.com", "",
+	)
+	if admissionPolicyBindingDetail.Code != http.StatusOK ||
+		!strings.Contains(admissionPolicyBindingDetail.Body.String(), `"policy_name":"replica-policy.example.com"`) ||
+		!strings.Contains(admissionPolicyBindingDetail.Body.String(), `"validation_actions":["Deny","Audit"]`) ||
+		strings.Contains(admissionPolicyBindingDetail.Body.String(), "private-param-name") ||
+		strings.Contains(admissionPolicyBindingDetail.Body.String(), "private-selector") {
+		t.Fatalf("admission policy binding detail status = %d, body = %s", admissionPolicyBindingDetail.Code, admissionPolicyBindingDetail.Body.String())
+	}
+	invalidAdmissionPolicyBindingName := authenticatedRequest(
+		t, handler, cookie, http.MethodGet, admissionPolicyBindingsPath+"/..%2Fvalidatingadmissionpolicybindings", "",
+	)
+	if invalidAdmissionPolicyBindingName.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid admission policy binding name status = %d, body = %s", invalidAdmissionPolicyBindingName.Code, invalidAdmissionPolicyBindingName.Body.String())
+	}
+	assertErrorField(t, invalidAdmissionPolicyBindingName.Body.Bytes(), "name")
 	networkPoliciesPath := "/api/v1/clusters/" + created.Data.ID + "/network-policies"
 	networkPolicies := authenticatedRequest(t, handler, cookie, http.MethodGet, networkPoliciesPath+"?namespace=payments", "")
 	if networkPolicies.Code != http.StatusOK || !strings.Contains(networkPolicies.Body.String(), `"name":"gateway-policy"`) ||
@@ -1036,6 +1098,40 @@ func (testKube) AdmissionWebhookConfiguration(
 			AdmissionReviewVersions: []string{"v1"},
 		}},
 		WebhookCount: 1,
+	}, nil
+}
+func (testKube) ValidatingAdmissionPolicies(context.Context) ([]domain.KubernetesAdmissionPolicyResource, error) {
+	return []domain.KubernetesAdmissionPolicyResource{{
+		Kind: domain.AdmissionPolicyResourcePolicy, Name: "replica-policy.example.com",
+	}}, nil
+}
+func (testKube) ValidatingAdmissionPolicy(
+	_ context.Context,
+	name string,
+) (domain.KubernetesValidatingAdmissionPolicyDetail, error) {
+	return domain.KubernetesValidatingAdmissionPolicyDetail{
+		KubernetesAdmissionPolicyResource: domain.KubernetesAdmissionPolicyResource{
+			Kind: domain.AdmissionPolicyResourcePolicy, Name: name,
+		},
+		Generation: 2, FailurePolicy: "Fail", ValidationCount: 2,
+		Match: domain.KubernetesAdmissionMatchSummary{Configured: true, MatchPolicy: "Equivalent"},
+	}, nil
+}
+func (testKube) ValidatingAdmissionPolicyBindings(context.Context) ([]domain.KubernetesAdmissionPolicyResource, error) {
+	return []domain.KubernetesAdmissionPolicyResource{{
+		Kind: domain.AdmissionPolicyResourceBinding, Name: "replica-binding.example.com",
+	}}, nil
+}
+func (testKube) ValidatingAdmissionPolicyBinding(
+	_ context.Context,
+	name string,
+) (domain.KubernetesValidatingAdmissionPolicyBindingDetail, error) {
+	return domain.KubernetesValidatingAdmissionPolicyBindingDetail{
+		KubernetesAdmissionPolicyResource: domain.KubernetesAdmissionPolicyResource{
+			Kind: domain.AdmissionPolicyResourceBinding, Name: name,
+		},
+		Generation: 2, PolicyName: "replica-policy.example.com", ValidationActions: []string{"Deny", "Audit"},
+		ParamRefConfigured: true, ParamRefMode: "name", ParameterNotFoundAction: "Deny",
 	}, nil
 }
 func (testKube) Events(_ context.Context, namespace, eventType string, _ int) ([]domain.KubernetesEvent, error) {

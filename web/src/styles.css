@@ -297,7 +297,7 @@ td strong { color: var(--text); font-size: 12px; }
 .segmented-control button { min-width: 110px; height: 34px; padding: 0 13px; border-radius: 4px; background: transparent; color: #58665e; font-size: 12px; font-weight: 620; }
 .segmented-control button.active { background: #fff; color: var(--text); box-shadow: 0 1px 3px rgba(23, 33, 29, 0.12); }
 .cluster-resource-control { max-width: 100%; overflow-x: auto; }
-.toolbar .admission-kind-control { flex: 0 0 auto; margin: 0; }
+.toolbar .admission-kind-control { flex: 0 1 auto; max-width: 100%; margin: 0; overflow-x: auto; }
 .admission-kind-control button { min-width: 104px; }
 .access-kind-control { max-width: 100%; overflow-x: auto; }
 .access-kind-control button { min-width: 142px; }

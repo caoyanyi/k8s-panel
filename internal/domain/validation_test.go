@@ -706,6 +706,44 @@ func TestValidateAdmissionWebhookConfigurationName(t *testing.T) {
 	}
 }
 
+func TestValidateAdmissionPolicyResourceName(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		value     string
+		wantError bool
+	}{
+		{name: "qualified name", value: "replica-policy.platform.example.com"},
+		{name: "single label", value: "policy"},
+		{name: "empty", value: "", wantError: true},
+		{name: "path traversal", value: "../validatingadmissionpolicies", wantError: true},
+		{name: "uppercase", value: "Policy.example.com", wantError: true},
+		{name: "too long", value: strings.Repeat("a", 254), wantError: true},
+	}
+
+	for _, tt := range tests {
+		test := tt
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			err := ValidateAdmissionPolicyResourceName(test.value)
+			if test.wantError {
+				if err == nil {
+					t.Fatalf("ValidateAdmissionPolicyResourceName(%q) accepted invalid value", test.value)
+				}
+				var validationErr *ValidationError
+				if !errors.As(err, &validationErr) || validationErr.Field != "name" {
+					t.Fatalf("ValidateAdmissionPolicyResourceName() error = %v, want name validation error", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ValidateAdmissionPolicyResourceName(%q) error = %v", test.value, err)
+			}
+		})
+	}
+}
+
 func TestValidateWorkloadOperationInput(t *testing.T) {
 	t.Parallel()
 

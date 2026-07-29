@@ -684,6 +684,22 @@ func TestServiceRejectsKubernetesReadsDuringCriticalResourcePressure(t *testing.
 			)
 			return err
 		}},
+		{name: "validating admission policies", call: func() error {
+			_, err := service.ValidatingAdmissionPolicies(context.Background(), cluster.ID)
+			return err
+		}},
+		{name: "validating admission policy detail", call: func() error {
+			_, err := service.ValidatingAdmissionPolicy(context.Background(), cluster.ID, "policy.platform.example.com")
+			return err
+		}},
+		{name: "validating admission policy bindings", call: func() error {
+			_, err := service.ValidatingAdmissionPolicyBindings(context.Background(), cluster.ID)
+			return err
+		}},
+		{name: "validating admission policy binding detail", call: func() error {
+			_, err := service.ValidatingAdmissionPolicyBinding(context.Background(), cluster.ID, "binding.platform.example.com")
+			return err
+		}},
 		{name: "node detail", call: func() error { _, err := service.NodeDetail(context.Background(), cluster.ID, "worker-01"); return err }},
 		{name: "node events", call: func() error {
 			_, err := service.NodeEvents(context.Background(), cluster.ID, "worker-01", 20)
@@ -1301,6 +1317,76 @@ func TestServiceListsAdmissionWebhookConfigurationsAndValidatesInputsBeforeGatew
 	}
 	if gateway.admissionWebhookListCalls.Load() != 1 || gateway.admissionWebhookDetailCalls.Load() != 1 {
 		t.Fatal("invalid admission webhook inputs reached Kubernetes gateway")
+	}
+}
+
+func TestServiceListsAdmissionPoliciesAndValidatesNamesBeforeGateway(t *testing.T) {
+	t.Parallel()
+
+	const policyName = "policy.platform.example.com"
+	const bindingName = "binding.platform.example.com"
+	gateway := &fakeKubeGateway{
+		probe: domain.ClusterProbe{Version: "v1.36.2"},
+		admissionPolicies: []domain.KubernetesAdmissionPolicyResource{{
+			Kind: domain.AdmissionPolicyResourcePolicy, Name: policyName,
+		}},
+		admissionPolicyDetail: domain.KubernetesValidatingAdmissionPolicyDetail{
+			KubernetesAdmissionPolicyResource: domain.KubernetesAdmissionPolicyResource{
+				Kind: domain.AdmissionPolicyResourcePolicy, Name: policyName,
+			},
+			FailurePolicy: "Fail",
+		},
+		admissionPolicyBindings: []domain.KubernetesAdmissionPolicyResource{{
+			Kind: domain.AdmissionPolicyResourceBinding, Name: bindingName,
+		}},
+		admissionPolicyBindingDetail: domain.KubernetesValidatingAdmissionPolicyBindingDetail{
+			KubernetesAdmissionPolicyResource: domain.KubernetesAdmissionPolicyResource{
+				Kind: domain.AdmissionPolicyResourceBinding, Name: bindingName,
+			},
+			PolicyName: policyName,
+		},
+	}
+	service, _, _ := newTestService(t, serviceFakes{kube: gateway})
+	cluster, err := service.CreateCluster(context.Background(), "admin", "req_cluster", domain.ClusterInput{
+		Name: "cluster", Environment: domain.EnvironmentDevelopment, Server: "https://api.example.com", BearerToken: "token",
+	})
+	if err != nil {
+		t.Fatalf("CreateCluster() error = %v", err)
+	}
+
+	policies, err := service.ValidatingAdmissionPolicies(context.Background(), cluster.ID)
+	if err != nil || len(policies) != 1 || policies[0].Name != policyName {
+		t.Fatalf("ValidatingAdmissionPolicies() = %#v, %v", policies, err)
+	}
+	policy, err := service.ValidatingAdmissionPolicy(context.Background(), cluster.ID, policyName)
+	if err != nil || policy.Name != policyName || policy.FailurePolicy != "Fail" {
+		t.Fatalf("ValidatingAdmissionPolicy() = %#v, %v", policy, err)
+	}
+	bindings, err := service.ValidatingAdmissionPolicyBindings(context.Background(), cluster.ID)
+	if err != nil || len(bindings) != 1 || bindings[0].Name != bindingName {
+		t.Fatalf("ValidatingAdmissionPolicyBindings() = %#v, %v", bindings, err)
+	}
+	binding, err := service.ValidatingAdmissionPolicyBinding(context.Background(), cluster.ID, bindingName)
+	if err != nil || binding.Name != bindingName || binding.PolicyName != policyName {
+		t.Fatalf("ValidatingAdmissionPolicyBinding() = %#v, %v", binding, err)
+	}
+	if gateway.admissionPolicyName != policyName || gateway.admissionPolicyBindingName != bindingName ||
+		gateway.policyListCalls.Load() != 1 || gateway.policyDetailCalls.Load() != 1 ||
+		gateway.policyBindingListCalls.Load() != 1 || gateway.policyBindingDetailCalls.Load() != 1 {
+		t.Fatalf("admission policy gateway inputs/calls = policy %q, binding %q, %d/%d/%d/%d",
+			gateway.admissionPolicyName, gateway.admissionPolicyBindingName,
+			gateway.policyListCalls.Load(), gateway.policyDetailCalls.Load(),
+			gateway.policyBindingListCalls.Load(), gateway.policyBindingDetailCalls.Load())
+	}
+
+	if _, err := service.ValidatingAdmissionPolicy(context.Background(), cluster.ID, "../validatingadmissionpolicies"); err == nil {
+		t.Fatal("ValidatingAdmissionPolicy() accepted an invalid name")
+	}
+	if _, err := service.ValidatingAdmissionPolicyBinding(context.Background(), cluster.ID, "../validatingadmissionpolicybindings"); err == nil {
+		t.Fatal("ValidatingAdmissionPolicyBinding() accepted an invalid name")
+	}
+	if gateway.policyDetailCalls.Load() != 1 || gateway.policyBindingDetailCalls.Load() != 1 {
+		t.Fatal("invalid admission policy names reached Kubernetes gateway")
 	}
 }
 
@@ -2164,6 +2250,16 @@ type fakeKubeGateway struct {
 	admissionWebhookName             string
 	admissionWebhookListCalls        atomic.Int64
 	admissionWebhookDetailCalls      atomic.Int64
+	admissionPolicies                []domain.KubernetesAdmissionPolicyResource
+	admissionPolicyDetail            domain.KubernetesValidatingAdmissionPolicyDetail
+	admissionPolicyBindings          []domain.KubernetesAdmissionPolicyResource
+	admissionPolicyBindingDetail     domain.KubernetesValidatingAdmissionPolicyBindingDetail
+	admissionPolicyName              string
+	admissionPolicyBindingName       string
+	policyListCalls                  atomic.Int64
+	policyDetailCalls                atomic.Int64
+	policyBindingListCalls           atomic.Int64
+	policyBindingDetailCalls         atomic.Int64
 	services                         []domain.KubernetesService
 	ingresses                        []domain.KubernetesIngress
 	endpointSlices                   []domain.KubernetesEndpointSlice
@@ -2333,6 +2429,34 @@ func (g *fakeKubeGateway) AdmissionWebhookConfiguration(
 	g.admissionWebhookName = name
 	g.mutationMu.Unlock()
 	return g.admissionWebhookDetail, nil
+}
+func (g *fakeKubeGateway) ValidatingAdmissionPolicies(context.Context) ([]domain.KubernetesAdmissionPolicyResource, error) {
+	g.policyListCalls.Add(1)
+	return append([]domain.KubernetesAdmissionPolicyResource(nil), g.admissionPolicies...), nil
+}
+func (g *fakeKubeGateway) ValidatingAdmissionPolicy(
+	_ context.Context,
+	name string,
+) (domain.KubernetesValidatingAdmissionPolicyDetail, error) {
+	g.policyDetailCalls.Add(1)
+	g.mutationMu.Lock()
+	g.admissionPolicyName = name
+	g.mutationMu.Unlock()
+	return g.admissionPolicyDetail, nil
+}
+func (g *fakeKubeGateway) ValidatingAdmissionPolicyBindings(context.Context) ([]domain.KubernetesAdmissionPolicyResource, error) {
+	g.policyBindingListCalls.Add(1)
+	return append([]domain.KubernetesAdmissionPolicyResource(nil), g.admissionPolicyBindings...), nil
+}
+func (g *fakeKubeGateway) ValidatingAdmissionPolicyBinding(
+	_ context.Context,
+	name string,
+) (domain.KubernetesValidatingAdmissionPolicyBindingDetail, error) {
+	g.policyBindingDetailCalls.Add(1)
+	g.mutationMu.Lock()
+	g.admissionPolicyBindingName = name
+	g.mutationMu.Unlock()
+	return g.admissionPolicyBindingDetail, nil
 }
 func (g *fakeKubeGateway) Workloads(context.Context, string, string) ([]domain.Workload, error) {
 	return nil, nil

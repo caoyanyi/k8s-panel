@@ -561,6 +561,76 @@ func (s *Service) AdmissionWebhookConfiguration(
 	return gateway.AdmissionWebhookConfiguration(ctx, kind, name)
 }
 
+func (s *Service) ValidatingAdmissionPolicies(
+	ctx context.Context,
+	clusterID string,
+) ([]domain.KubernetesAdmissionPolicyResource, error) {
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	gateway, err := s.kubeGateway(ctx, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	return gateway.ValidatingAdmissionPolicies(ctx)
+}
+
+func (s *Service) ValidatingAdmissionPolicy(
+	ctx context.Context,
+	clusterID, name string,
+) (domain.KubernetesValidatingAdmissionPolicyDetail, error) {
+	if err := domain.ValidateAdmissionPolicyResourceName(name); err != nil {
+		return domain.KubernetesValidatingAdmissionPolicyDetail{}, err
+	}
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return domain.KubernetesValidatingAdmissionPolicyDetail{}, err
+	}
+	defer release()
+	gateway, err := s.kubeGateway(ctx, clusterID)
+	if err != nil {
+		return domain.KubernetesValidatingAdmissionPolicyDetail{}, err
+	}
+	return gateway.ValidatingAdmissionPolicy(ctx, name)
+}
+
+func (s *Service) ValidatingAdmissionPolicyBindings(
+	ctx context.Context,
+	clusterID string,
+) ([]domain.KubernetesAdmissionPolicyResource, error) {
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	gateway, err := s.kubeGateway(ctx, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	return gateway.ValidatingAdmissionPolicyBindings(ctx)
+}
+
+func (s *Service) ValidatingAdmissionPolicyBinding(
+	ctx context.Context,
+	clusterID, name string,
+) (domain.KubernetesValidatingAdmissionPolicyBindingDetail, error) {
+	if err := domain.ValidateAdmissionPolicyResourceName(name); err != nil {
+		return domain.KubernetesValidatingAdmissionPolicyBindingDetail{}, err
+	}
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return domain.KubernetesValidatingAdmissionPolicyBindingDetail{}, err
+	}
+	defer release()
+	gateway, err := s.kubeGateway(ctx, clusterID)
+	if err != nil {
+		return domain.KubernetesValidatingAdmissionPolicyBindingDetail{}, err
+	}
+	return gateway.ValidatingAdmissionPolicyBinding(ctx, name)
+}
+
 func (s *Service) Events(
 	ctx context.Context,
 	clusterID, namespace, eventType string,

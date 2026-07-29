@@ -356,6 +356,13 @@ func ValidateAdmissionWebhookConfigurationName(name string) error {
 	return nil
 }
 
+func ValidateAdmissionPolicyResourceName(name string) error {
+	if !validDNSSubdomain(name) {
+		return Invalid("name", "must be a valid Kubernetes admission policy resource name")
+	}
+	return nil
+}
+
 func validateHTTPSURL(raw string, allowPath bool) (*url.URL, error) {
 	parsed, err := url.ParseRequestURI(strings.TrimSpace(raw))
 	if err != nil {

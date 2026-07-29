@@ -579,6 +579,68 @@ type KubernetesAdmissionWebhookConfigurationDetail struct {
 	WebhookCount int                          `json:"webhook_count"`
 }
 
+type KubernetesAdmissionPolicyResourceKind string
+
+const (
+	AdmissionPolicyResourcePolicy  KubernetesAdmissionPolicyResourceKind = "policy"
+	AdmissionPolicyResourceBinding KubernetesAdmissionPolicyResourceKind = "binding"
+)
+
+type KubernetesAdmissionPolicyResource struct {
+	Kind      KubernetesAdmissionPolicyResourceKind `json:"kind"`
+	Name      string                                `json:"name"`
+	CreatedAt time.Time                             `json:"created_at"`
+}
+
+type KubernetesAdmissionMatchSummary struct {
+	Configured                       bool   `json:"configured"`
+	MatchPolicy                      string `json:"match_policy,omitempty"`
+	MatchPolicyDefaulted             bool   `json:"match_policy_defaulted"`
+	ResourceRuleCount                int    `json:"resource_rule_count"`
+	ExcludeResourceRuleCount         int    `json:"exclude_resource_rule_count"`
+	OperationCount                   int    `json:"operation_count"`
+	APIGroupCount                    int    `json:"api_group_count"`
+	APIVersionCount                  int    `json:"api_version_count"`
+	ResourceCount                    int    `json:"resource_count"`
+	NamespaceSelectorLabelCount      int    `json:"namespace_selector_label_count"`
+	NamespaceSelectorExpressionCount int    `json:"namespace_selector_expression_count"`
+	ObjectSelectorLabelCount         int    `json:"object_selector_label_count"`
+	ObjectSelectorExpressionCount    int    `json:"object_selector_expression_count"`
+}
+
+type KubernetesValidatingAdmissionPolicyDetail struct {
+	KubernetesAdmissionPolicyResource
+	Generation             int64                           `json:"generation"`
+	FailurePolicy          string                          `json:"failure_policy"`
+	FailurePolicyDefaulted bool                            `json:"failure_policy_defaulted"`
+	ParamKindConfigured    bool                            `json:"param_kind_configured"`
+	ParamAPIVersion        string                          `json:"param_api_version,omitempty"`
+	ParamKind              string                          `json:"param_kind,omitempty"`
+	Match                  KubernetesAdmissionMatchSummary `json:"match"`
+	ValidationCount        int                             `json:"validation_count"`
+	AuditAnnotationCount   int                             `json:"audit_annotation_count"`
+	MatchConditionCount    int                             `json:"match_condition_count"`
+	VariableCount          int                             `json:"variable_count"`
+	ObservedGeneration     int64                           `json:"observed_generation"`
+	TypeCheckingObserved   bool                            `json:"type_checking_observed"`
+	ExpressionWarningCount int                             `json:"expression_warning_count"`
+	ConditionCount         int                             `json:"condition_count"`
+}
+
+type KubernetesValidatingAdmissionPolicyBindingDetail struct {
+	KubernetesAdmissionPolicyResource
+	Generation                   int64                           `json:"generation"`
+	PolicyName                   string                          `json:"policy_name"`
+	ValidationActions            []string                        `json:"validation_actions"`
+	ParamRefConfigured           bool                            `json:"param_ref_configured"`
+	ParamRefMode                 string                          `json:"param_ref_mode,omitempty"`
+	ParamNamespace               string                          `json:"param_namespace,omitempty"`
+	ParameterNotFoundAction      string                          `json:"parameter_not_found_action,omitempty"`
+	ParamSelectorLabelCount      int                             `json:"param_selector_label_count"`
+	ParamSelectorExpressionCount int                             `json:"param_selector_expression_count"`
+	Match                        KubernetesAdmissionMatchSummary `json:"match"`
+}
+
 type KubernetesCustomResourceDefinitionVersion struct {
 	Name       string `json:"name"`
 	Served     bool   `json:"served"`
