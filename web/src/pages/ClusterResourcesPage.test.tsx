@@ -157,6 +157,30 @@ describe('ClusterResourcesPage', () => {
     )
   })
 
+  it('loads aggregated API health only when selected', async () => {
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const path = String(input)
+      if (path.endsWith('/api-services')) return Promise.resolve(dataResponse([apiService]))
+      if (path.endsWith('/nodes')) return Promise.resolve(dataResponse([node]))
+      return Promise.resolve(errorResponse(404, 'not_found'))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const user = userEvent.setup()
+
+    renderPage(context)
+    await screen.findByText(node.name)
+    expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/api-services'))).toBe(false)
+    await user.click(screen.getByRole('button', { name: '聚合 API' }))
+
+    expect(await screen.findByText('metrics.k8s.io/v1beta1')).toBeInTheDocument()
+    expect(screen.getByText('kube-system/metrics-server:443')).toBeInTheDocument()
+    expect(screen.getByText('不可用')).toBeInTheDocument()
+    expect(screen.getByText('FailedDiscoveryCheck')).toBeInTheDocument()
+    expect(screen.getByText('跳过 TLS 校验')).toBeInTheDocument()
+    expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/namespaces'))).toBe(false)
+    expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/custom-resource-definitions'))).toBe(false)
+  })
+
   it('shows an empty state without a selected cluster', () => {
     vi.stubGlobal('fetch', vi.fn())
     renderPage({ ...context, clusters: [], selectedClusterId: '' })
@@ -204,6 +228,15 @@ const namespace = {
 const crd = {
   name: 'widgets.platform.example.com', resource: 'widgets', group: 'platform.example.com',
   created_at: '2026-07-26T08:00:00Z',
+}
+
+const apiService = {
+  name: 'v1beta1.metrics.k8s.io', group: 'metrics.k8s.io', version: 'v1beta1', local: false,
+  service_namespace: 'kube-system', service_name: 'metrics-server', service_port: 443,
+  service_port_defaulted: true, availability_observed: true, availability_status: 'False',
+  availability_reason: 'FailedDiscoveryCheck', availability_transition_time: '2026-07-26T08:02:00Z',
+  condition_count: 1, insecure_skip_tls_verify: true, group_priority_minimum: 100,
+  version_priority: 100, created_at: '2026-07-26T08:00:00Z',
 }
 
 function renderPage(value: PanelContextValue) {

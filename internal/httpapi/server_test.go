@@ -56,6 +56,11 @@ func TestServerAuthenticationAndClusterLifecycle(t *testing.T) {
 	if unauthorizedCRDs.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthorized CRD status = %d, want 401", unauthorizedCRDs.Code)
 	}
+	unauthorizedAPIServices := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorizedAPIServices, httptest.NewRequest(http.MethodGet, "/api/v1/clusters/clu_1/api-services", nil))
+	if unauthorizedAPIServices.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized APIService status = %d, want 401", unauthorizedAPIServices.Code)
+	}
 	unauthorizedConfiguration := httptest.NewRecorder()
 	handler.ServeHTTP(unauthorizedConfiguration, httptest.NewRequest(http.MethodGet, "/api/v1/clusters/clu_1/configmaps", nil))
 	if unauthorizedConfiguration.Code != http.StatusUnauthorized {
@@ -180,6 +185,14 @@ func TestServerAuthenticationAndClusterLifecycle(t *testing.T) {
 		t.Fatalf("invalid CRD name status = %d, body = %s", invalidCRDName.Code, invalidCRDName.Body.String())
 	}
 	assertErrorField(t, invalidCRDName.Body.Bytes(), "name")
+	apiServicesPath := "/api/v1/clusters/" + created.Data.ID + "/api-services"
+	apiServices := authenticatedRequest(t, handler, cookie, http.MethodGet, apiServicesPath, "")
+	if apiServices.Code != http.StatusOK || !strings.Contains(apiServices.Body.String(), `"name":"v1beta1.metrics.k8s.io"`) ||
+		!strings.Contains(apiServices.Body.String(), `"availability_status":"False"`) ||
+		!strings.Contains(apiServices.Body.String(), `"service_name":"metrics-server"`) ||
+		strings.Contains(apiServices.Body.String(), "private availability message") {
+		t.Fatalf("API services status = %d, body = %s", apiServices.Code, apiServices.Body.String())
+	}
 	networkPoliciesPath := "/api/v1/clusters/" + created.Data.ID + "/network-policies"
 	networkPolicies := authenticatedRequest(t, handler, cookie, http.MethodGet, networkPoliciesPath+"?namespace=payments", "")
 	if networkPolicies.Code != http.StatusOK || !strings.Contains(networkPolicies.Body.String(), `"name":"gateway-policy"`) ||
@@ -954,6 +967,14 @@ func (testKube) CustomResourceDefinition(_ context.Context, name string) (domain
 		VersionCount: 1, StoredVersions: []string{"v1"}, StoredVersionCount: 1,
 		ConversionStrategy: "None", Conditions: []domain.KubernetesCustomResourceDefinitionCondition{},
 	}, nil
+}
+func (testKube) APIServices(context.Context) ([]domain.KubernetesAPIService, error) {
+	return []domain.KubernetesAPIService{{
+		Name: "v1beta1.metrics.k8s.io", Group: "metrics.k8s.io", Version: "v1beta1",
+		ServiceNamespace: "kube-system", ServiceName: "metrics-server", ServicePort: 443,
+		AvailabilityObserved: true, AvailabilityStatus: "False", AvailabilityReason: "FailedDiscoveryCheck",
+		ConditionCount: 1, GroupPriorityMinimum: 100, VersionPriority: 100,
+	}}, nil
 }
 func (testKube) Events(_ context.Context, namespace, eventType string, _ int) ([]domain.KubernetesEvent, error) {
 	return []domain.KubernetesEvent{{

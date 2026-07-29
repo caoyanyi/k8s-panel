@@ -504,6 +504,19 @@ func (s *Service) CustomResourceDefinition(
 	return gateway.CustomResourceDefinition(ctx, name)
 }
 
+func (s *Service) APIServices(ctx context.Context, clusterID string) ([]domain.KubernetesAPIService, error) {
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	gateway, err := s.kubeGateway(ctx, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	return gateway.APIServices(ctx)
+}
+
 func (s *Service) Events(
 	ctx context.Context,
 	clusterID, namespace, eventType string,

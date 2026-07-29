@@ -668,6 +668,10 @@ func TestServiceRejectsKubernetesReadsDuringCriticalResourcePressure(t *testing.
 			_, err := service.CustomResourceDefinition(context.Background(), cluster.ID, "widgets.platform.example.com")
 			return err
 		}},
+		{name: "API services", call: func() error {
+			_, err := service.APIServices(context.Background(), cluster.ID)
+			return err
+		}},
 		{name: "node detail", call: func() error { _, err := service.NodeDetail(context.Background(), cluster.ID, "worker-01"); return err }},
 		{name: "node events", call: func() error {
 			_, err := service.NodeEvents(context.Background(), cluster.ID, "worker-01", 20)
@@ -1197,6 +1201,33 @@ func TestServiceListsCustomResourceDefinitionsAndValidatesDetailNameBeforeGatewa
 	}
 	if gateway.crdDetailCalls.Load() != 1 {
 		t.Fatal("invalid CRD name reached Kubernetes gateway")
+	}
+}
+
+func TestServiceListsAPIServices(t *testing.T) {
+	t.Parallel()
+
+	gateway := &fakeKubeGateway{
+		probe: domain.ClusterProbe{Version: "v1.36.2"},
+		apiServices: []domain.KubernetesAPIService{{
+			Name: "v1beta1.metrics.k8s.io", Group: "metrics.k8s.io", Version: "v1beta1",
+			ServiceNamespace: "kube-system", ServiceName: "metrics-server", ServicePort: 443,
+		}},
+	}
+	service, _, _ := newTestService(t, serviceFakes{kube: gateway})
+	cluster, err := service.CreateCluster(context.Background(), "admin", "req_cluster", domain.ClusterInput{
+		Name: "cluster", Environment: domain.EnvironmentDevelopment, Server: "https://api.example.com", BearerToken: "token",
+	})
+	if err != nil {
+		t.Fatalf("CreateCluster() error = %v", err)
+	}
+
+	items, err := service.APIServices(context.Background(), cluster.ID)
+	if err != nil || len(items) != 1 || items[0].Name != "v1beta1.metrics.k8s.io" {
+		t.Fatalf("APIServices() = %#v, %v", items, err)
+	}
+	if gateway.apiServiceCalls.Load() != 1 {
+		t.Fatalf("APIService gateway calls = %d, want 1", gateway.apiServiceCalls.Load())
 	}
 }
 
@@ -2052,6 +2083,8 @@ type fakeKubeGateway struct {
 	crdName                          string
 	crdListCalls                     atomic.Int64
 	crdDetailCalls                   atomic.Int64
+	apiServices                      []domain.KubernetesAPIService
+	apiServiceCalls                  atomic.Int64
 	services                         []domain.KubernetesService
 	ingresses                        []domain.KubernetesIngress
 	endpointSlices                   []domain.KubernetesEndpointSlice
@@ -2195,6 +2228,10 @@ func (g *fakeKubeGateway) CustomResourceDefinition(_ context.Context, name strin
 	g.crdName = name
 	g.mutationMu.Unlock()
 	return g.crdDetail, nil
+}
+func (g *fakeKubeGateway) APIServices(context.Context) ([]domain.KubernetesAPIService, error) {
+	g.apiServiceCalls.Add(1)
+	return append([]domain.KubernetesAPIService(nil), g.apiServices...), nil
 }
 func (g *fakeKubeGateway) Workloads(context.Context, string, string) ([]domain.Workload, error) {
 	return nil, nil

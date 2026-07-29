@@ -123,6 +123,26 @@ export interface KubernetesCustomResourceDefinition {
   created_at: string
 }
 
+export interface KubernetesAPIService {
+  name: string
+  group: string
+  version: string
+  local: boolean
+  service_namespace?: string
+  service_name?: string
+  service_port?: number
+  service_port_defaulted: boolean
+  availability_observed: boolean
+  availability_status?: 'True' | 'False' | 'Unknown'
+  availability_reason?: string
+  availability_transition_time?: string
+  condition_count: number
+  insecure_skip_tls_verify: boolean
+  group_priority_minimum: number
+  version_priority: number
+  created_at: string
+}
+
 export interface KubernetesCustomResourceDefinitionVersion {
   name: string
   served: boolean

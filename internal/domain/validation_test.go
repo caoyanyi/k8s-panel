@@ -607,6 +607,40 @@ func TestValidateCustomResourceDefinitionName(t *testing.T) {
 	}
 }
 
+func TestValidateAPIServiceName(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		value     string
+		wantField string
+	}{
+		{name: "aggregated API", value: "v1beta1.metrics.k8s.io"},
+		{name: "legacy core API", value: "v1."},
+		{name: "missing separator", value: "v1", wantField: "name"},
+		{name: "missing version", value: ".metrics.k8s.io", wantField: "name"},
+		{name: "empty group label", value: "v1..metrics.k8s.io", wantField: "name"},
+		{name: "uppercase", value: "V1.metrics.k8s.io", wantField: "name"},
+		{name: "path traversal", value: "../apiservices", wantField: "name"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := ValidateAPIServiceName(tt.value)
+			if tt.wantField == "" {
+				if err != nil {
+					t.Fatalf("ValidateAPIServiceName() error = %v", err)
+				}
+				return
+			}
+			var validationErr *ValidationError
+			if !errors.As(err, &validationErr) || validationErr.Field != tt.wantField {
+				t.Fatalf("ValidateAPIServiceName() error = %v, want field %q", err, tt.wantField)
+			}
+		})
+	}
+}
+
 func TestValidateWorkloadOperationInput(t *testing.T) {
 	t.Parallel()
 

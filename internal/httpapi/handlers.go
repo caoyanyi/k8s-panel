@@ -257,6 +257,15 @@ func (s *Server) getCustomResourceDefinition(w http.ResponseWriter, r *http.Requ
 	writeData(w, http.StatusOK, item)
 }
 
+func (s *Server) listAPIServices(w http.ResponseWriter, r *http.Request) {
+	items, err := s.service.APIServices(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeData(w, http.StatusOK, items)
+}
+
 func (s *Server) listEvents(w http.ResponseWriter, r *http.Request) {
 	limit, err := parseBoundedInt(r.URL.Query().Get("limit"), 200, 1, domain.MaxClusterEventLimit, "limit")
 	if err != nil {

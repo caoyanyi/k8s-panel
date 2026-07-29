@@ -310,7 +310,7 @@ test('production deployment image update requires a fresh dry-run preview', asyn
   expect(consoleErrors).toEqual([])
 })
 
-test('cluster resources show node diagnostics, namespaces and bounded CRDs', async ({ page }, testInfo) => {
+test('cluster resources show node diagnostics, namespaces, bounded CRDs and aggregated APIs', async ({ page }, testInfo) => {
   const consoleErrors: string[] = []
   const requestedResources: string[] = []
   page.on('console', (message) => {
@@ -362,6 +362,21 @@ test('cluster resources show node diagnostics, namespaces and bounded CRDs', asy
   result = await new AxeBuilder({ page }).analyze()
   expect(result.violations.filter((violation) => ['serious', 'critical'].includes(violation.impact ?? ''))).toEqual([])
   await page.screenshot({ path: `test-results/${testInfo.project.name}-crd-detail.png` })
+
+  await crdDialog.getByRole('button', { name: '关闭' }).click()
+  expect(requestedResources).not.toContain('api-services')
+  await page.getByRole('button', { name: '聚合 API' }).click()
+  await expect(page.getByText('metrics.k8s.io/v1beta1')).toBeVisible()
+  await expect(page.getByText('kube-system/metrics-server:443')).toBeVisible()
+  await expect(page.getByText('不可用')).toBeVisible()
+  await expect(page.getByText('FailedDiscoveryCheck')).toBeVisible()
+  await expect(page.getByText('跳过 TLS 校验')).toBeVisible()
+  expect(requestedResources).toContain('api-services')
+  overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
+  expect(overflow).toBeLessThanOrEqual(1)
+  result = await new AxeBuilder({ page }).analyze()
+  expect(result.violations.filter((violation) => ['serious', 'critical'].includes(violation.impact ?? ''))).toEqual([])
+  await page.screenshot({ path: `test-results/${testInfo.project.name}-api-services.png`, fullPage: true })
   expect(consoleErrors).toEqual([])
 })
 
@@ -1207,6 +1222,16 @@ async function mockClusterResources(page: Page, requestedResources: string[]) {
         }],
         condition_count: 1, conditions_truncated: false,
       }
+    } else if (path === '/api/v1/clusters/clu_1/api-services') {
+      requestedResources.push('api-services')
+      data = [{
+        name: 'v1beta1.metrics.k8s.io', group: 'metrics.k8s.io', version: 'v1beta1', local: false,
+        service_namespace: 'kube-system', service_name: 'metrics-server', service_port: 443,
+        service_port_defaulted: true, availability_observed: true, availability_status: 'False',
+        availability_reason: 'FailedDiscoveryCheck', availability_transition_time: '2026-07-26T08:02:00Z',
+        condition_count: 1, insecure_skip_tls_verify: true, group_priority_minimum: 100,
+        version_priority: 100, created_at: '2026-07-26T08:00:00Z',
+      }]
     } else {
       await route.fulfill({
         status: 404,

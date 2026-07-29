@@ -9,10 +9,10 @@ import { StatusBadge } from '../components/StatusBadge'
 import { TablePagination, TABLE_PAGE_SIZE } from '../components/TablePagination'
 import { usePanel } from '../context'
 import { useResource } from '../hooks'
-import type { ClusterNode, KubernetesCustomResourceDefinition, Namespace } from '../types'
+import type { ClusterNode, KubernetesAPIService, KubernetesCustomResourceDefinition, Namespace } from '../types'
 import { formatDateTime } from '../utils'
 
-type ResourceView = 'nodes' | 'namespaces' | 'crds'
+type ResourceView = 'nodes' | 'namespaces' | 'crds' | 'api-services'
 
 export function ClusterResourcesPage() {
   const { clusters, selectedClusterId } = usePanel()
@@ -36,6 +36,12 @@ export function ClusterResourcesPage() {
       : Promise.resolve([]),
     [selectedClusterId, view],
   )
+  const apiServices = useResource(
+    (signal) => selectedClusterId && view === 'api-services'
+      ? api.get<KubernetesAPIService[]>(`/api/v1/clusters/${selectedClusterId}/api-services`, signal)
+      : Promise.resolve([]),
+    [selectedClusterId, view],
+  )
 
   useEffect(() => {
     setSelectedNode('')
@@ -52,21 +58,31 @@ export function ClusterResourcesPage() {
   const visibleCustomResourceDefinitions = useMemo(() => (customResourceDefinitions.data ?? []).filter((resource) => (
     !normalizedSearch || `${resource.name} ${resource.resource} ${resource.group}`.toLowerCase().includes(normalizedSearch)
   )), [customResourceDefinitions.data, normalizedSearch])
-  const active = view === 'nodes' ? nodes : view === 'namespaces' ? namespaces : customResourceDefinitions
+  const visibleAPIServices = useMemo(() => (apiServices.data ?? []).filter((resource) => (
+    !normalizedSearch || `${resource.name} ${resource.group} ${resource.version} ${resource.service_namespace ?? ''} ${resource.service_name ?? ''} ${resource.availability_reason ?? ''}`.toLowerCase().includes(normalizedSearch)
+  )), [apiServices.data, normalizedSearch])
+  const active = { nodes, namespaces, crds: customResourceDefinitions, 'api-services': apiServices }[view]
   const activeCount = active.data?.length ?? 0
-  const visibleCount = view === 'nodes'
-    ? visibleNodes.length
-    : view === 'namespaces' ? visibleNamespaces.length : visibleCustomResourceDefinitions.length
+  const visibleCount = {
+    nodes: visibleNodes.length,
+    namespaces: visibleNamespaces.length,
+    crds: visibleCustomResourceDefinitions.length,
+    'api-services': visibleAPIServices.length,
+  }[view]
   const totalPages = Math.max(1, Math.ceil(visibleCount / TABLE_PAGE_SIZE))
   const currentPage = Math.min(page, totalPages - 1)
   const pageStart = currentPage * TABLE_PAGE_SIZE
   const pageNodes = visibleNodes.slice(pageStart, pageStart + TABLE_PAGE_SIZE)
   const pageNamespaces = visibleNamespaces.slice(pageStart, pageStart + TABLE_PAGE_SIZE)
   const pageCustomResourceDefinitions = visibleCustomResourceDefinitions.slice(pageStart, pageStart + TABLE_PAGE_SIZE)
-  const resourceLabel = view === 'nodes' ? '节点' : view === 'namespaces' ? '命名空间' : 'CRD'
-  const searchPlaceholder = view === 'nodes'
-    ? '搜索节点、IP 或角色'
-    : view === 'namespaces' ? '搜索命名空间或标签' : '搜索资源或 API 组'
+  const pageAPIServices = visibleAPIServices.slice(pageStart, pageStart + TABLE_PAGE_SIZE)
+  const resourceLabel = { nodes: '节点', namespaces: '命名空间', crds: 'CRD', 'api-services': '聚合 API' }[view]
+  const searchPlaceholder = {
+    nodes: '搜索节点、IP 或角色',
+    namespaces: '搜索命名空间或标签',
+    crds: '搜索资源或 API 组',
+    'api-services': '搜索 API、Service 或状态原因',
+  }[view]
 
   return (
     <div className="page">
@@ -82,20 +98,29 @@ export function ClusterResourcesPage() {
             <button type="button" className={view === 'nodes' ? 'active' : ''} onClick={() => setView('nodes')}>节点</button>
             <button type="button" className={view === 'namespaces' ? 'active' : ''} onClick={() => setView('namespaces')}>命名空间</button>
             <button type="button" className={view === 'crds' ? 'active' : ''} onClick={() => setView('crds')}>CRD</button>
+            <button type="button" className={view === 'api-services' ? 'active' : ''} onClick={() => setView('api-services')}>聚合 API</button>
           </div>
           <section className="toolbar" aria-label="集群资源筛选">
             <div className="search-field search-field-wide"><Search size={16} aria-hidden="true" /><label className="sr-only" htmlFor="cluster-resource-search">搜索集群资源</label><input id="cluster-resource-search" type="search" placeholder={searchPlaceholder} value={search} onChange={(event) => setSearch(event.target.value)} /></div>
           </section>
           <section className="section-block table-section">
-            {view === 'nodes' ? (
+            {view === 'nodes' && (
               nodes.loading ? <LoadingState label="正在读取节点" /> : nodes.error ? <ErrorState error={nodes.error} onRetry={() => void nodes.refresh()} /> : visibleNodes.length === 0 ? <EmptyState title={normalizedSearch ? '没有匹配的节点' : '当前集群没有节点'} /> : <><NodeTable nodes={pageNodes} onSelect={setSelectedNode} /><TablePagination page={currentPage} totalItems={visibleNodes.length} onPage={setPage} /></>
-            ) : view === 'namespaces' ? (
+            )}
+            {view === 'namespaces' && (
               namespaces.loading ? <LoadingState label="正在读取命名空间" /> : namespaces.error ? <ErrorState error={namespaces.error} onRetry={() => void namespaces.refresh()} /> : visibleNamespaces.length === 0 ? <EmptyState title={normalizedSearch ? '没有匹配的命名空间' : '当前集群没有命名空间'} /> : <><NamespaceTable namespaces={pageNamespaces} /><TablePagination page={currentPage} totalItems={visibleNamespaces.length} onPage={setPage} /></>
-            ) : (
+            )}
+            {view === 'crds' && (
               customResourceDefinitions.loading ? <LoadingState label="正在读取 CRD 元数据" />
                 : customResourceDefinitions.error ? <ErrorState error={customResourceDefinitions.error} onRetry={() => void customResourceDefinitions.refresh()} />
                   : visibleCustomResourceDefinitions.length === 0 ? <EmptyState title={normalizedSearch ? '没有匹配的 CRD' : '当前集群没有 CRD'} />
                     : <><CustomResourceDefinitionTable resources={pageCustomResourceDefinitions} onSelect={setSelectedCRD} /><TablePagination page={currentPage} totalItems={visibleCustomResourceDefinitions.length} onPage={setPage} /></>
+            )}
+            {view === 'api-services' && (
+              apiServices.loading ? <LoadingState label="正在读取聚合 API 健康状态" />
+                : apiServices.error ? <ErrorState error={apiServices.error} onRetry={() => void apiServices.refresh()} />
+                  : visibleAPIServices.length === 0 ? <EmptyState title={normalizedSearch ? '没有匹配的聚合 API' : '当前集群没有聚合 API'} />
+                    : <><APIServiceTable resources={pageAPIServices} /><TablePagination page={currentPage} totalItems={visibleAPIServices.length} onPage={setPage} /></>
             )}
           </section>
         </>
@@ -104,6 +129,42 @@ export function ClusterResourcesPage() {
       {selectedCRD && <CustomResourceDefinitionDetailModal clusterId={selectedClusterId} resource={selectedCRD} onClose={() => setSelectedCRD(null)} />}
     </div>
   )
+}
+
+function APIServiceTable({ resources }: { resources: KubernetesAPIService[] }) {
+  return (
+    <div className="table-wrap" role="region" aria-label="聚合 API 清单" tabIndex={0}>
+      <table className="api-service-table">
+        <thead><tr><th>API</th><th>处理位置</th><th>后端</th><th>可用性</th><th>状态原因</th><th>TLS</th><th>优先级</th><th>创建时间</th></tr></thead>
+        <tbody>{resources.map((resource) => (
+          <tr key={resource.name}>
+            <td><div className="primary-cell"><strong>{resource.group ? `${resource.group}/${resource.version}` : `core/${resource.version}`}</strong><span className="mono subtle-id">{resource.name}</span></div></td>
+            <td>{resource.local ? '本地' : 'Service'}</td>
+            <td className="mono">{resource.local ? 'kube-apiserver' : `${resource.service_namespace}/${resource.service_name}:${resource.service_port}`}</td>
+            <td>{apiServiceAvailability(resource)}</td>
+            <td><div className="primary-cell"><span className="mono">{resource.availability_reason || '-'}</span><small>{apiServiceConditionSummary(resource)}</small></div></td>
+            <td>{resource.local ? '-' : resource.insecure_skip_tls_verify ? <span className="security-risk">跳过 TLS 校验</span> : <span className="detail-muted">启用校验</span>}</td>
+            <td className="mono">{resource.group_priority_minimum} / {resource.version_priority}</td>
+            <td>{formatDateTime(resource.created_at)}</td>
+          </tr>
+        ))}</tbody>
+      </table>
+    </div>
+  )
+}
+
+function apiServiceAvailability(resource: KubernetesAPIService) {
+  if (!resource.availability_observed) return <span className="detail-muted">未报告</span>
+  if (resource.availability_status === 'True') return <StatusBadge status="True" />
+  if (resource.availability_status === 'False') return <StatusBadge status="Unavailable" />
+  return <StatusBadge status="Unknown" />
+}
+
+function apiServiceConditionSummary(resource: KubernetesAPIService) {
+  const conditionCount = `${resource.condition_count} 个条件`
+  return resource.availability_transition_time
+    ? `${formatDateTime(resource.availability_transition_time)} · ${conditionCount}`
+    : conditionCount
 }
 
 function CustomResourceDefinitionTable({

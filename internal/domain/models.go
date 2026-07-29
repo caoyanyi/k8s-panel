@@ -509,6 +509,26 @@ type KubernetesCustomResourceDefinition struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+type KubernetesAPIService struct {
+	Name                       string     `json:"name"`
+	Group                      string     `json:"group"`
+	Version                    string     `json:"version"`
+	Local                      bool       `json:"local"`
+	ServiceNamespace           string     `json:"service_namespace,omitempty"`
+	ServiceName                string     `json:"service_name,omitempty"`
+	ServicePort                int32      `json:"service_port,omitempty"`
+	ServicePortDefaulted       bool       `json:"service_port_defaulted"`
+	AvailabilityObserved       bool       `json:"availability_observed"`
+	AvailabilityStatus         string     `json:"availability_status,omitempty"`
+	AvailabilityReason         string     `json:"availability_reason,omitempty"`
+	AvailabilityTransitionTime *time.Time `json:"availability_transition_time,omitempty"`
+	ConditionCount             int        `json:"condition_count"`
+	InsecureSkipTLSVerify      bool       `json:"insecure_skip_tls_verify"`
+	GroupPriorityMinimum       int32      `json:"group_priority_minimum"`
+	VersionPriority            int32      `json:"version_priority"`
+	CreatedAt                  time.Time  `json:"created_at"`
+}
+
 type KubernetesCustomResourceDefinitionVersion struct {
 	Name       string `json:"name"`
 	Served     bool   `json:"served"`
