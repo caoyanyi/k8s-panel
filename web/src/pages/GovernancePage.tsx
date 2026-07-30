@@ -4,6 +4,7 @@ import { api } from '../api'
 import { EmptyState, ErrorState, LoadingState } from '../components/DataState'
 import { PageHeader } from '../components/PageHeader'
 import { PriorityClassDetailModal } from '../components/PriorityClassDetailModal'
+import { RuntimeClassDetailModal } from '../components/RuntimeClassDetailModal'
 import { TablePagination, TABLE_PAGE_SIZE } from '../components/TablePagination'
 import { usePanel } from '../context'
 import { useResource } from '../hooks'
@@ -16,18 +17,20 @@ import type {
   KubernetesQuotaResource,
   KubernetesPriorityClass,
   KubernetesResourceQuota,
+  KubernetesRuntimeClass,
   KubernetesSelectorMode,
   Namespace,
 } from '../types'
 import { formatDateTime } from '../utils'
 
-type GovernanceView = 'quotas' | 'limits' | 'autoscalers' | 'budgets' | 'priority-classes'
+type GovernanceView = 'quotas' | 'limits' | 'autoscalers' | 'budgets' | 'priority-classes' | 'runtime-classes'
 type GovernanceInventory =
   | { kind: 'quotas'; items: KubernetesResourceQuota[] }
   | { kind: 'limits'; items: KubernetesLimitRange[] }
   | { kind: 'autoscalers'; items: KubernetesHorizontalPodAutoscaler[] }
   | { kind: 'budgets'; items: KubernetesPodDisruptionBudget[] }
   | { kind: 'priority-classes'; items: KubernetesPriorityClass[] }
+  | { kind: 'runtime-classes'; items: KubernetesRuntimeClass[] }
 
 interface QuotaRow {
   quota: KubernetesResourceQuota
@@ -45,6 +48,7 @@ const resourceLabels: Record<GovernanceView, string> = {
   autoscalers: 'HPA',
   budgets: 'PDB',
   'priority-classes': 'PriorityClass',
+  'runtime-classes': 'RuntimeClass',
 }
 
 export function GovernancePage() {
@@ -53,8 +57,9 @@ export function GovernancePage() {
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(0)
   const [selectedPriorityClass, setSelectedPriorityClass] = useState<KubernetesPriorityClass | null>(null)
+  const [selectedRuntimeClass, setSelectedRuntimeClass] = useState<KubernetesRuntimeClass | null>(null)
   const selectedCluster = clusters.find((cluster) => cluster.id === selectedClusterId)
-  const namespaceScoped = view !== 'priority-classes'
+  const namespaceScoped = view !== 'priority-classes' && view !== 'runtime-classes'
   const namespaces = useResource(
     (signal) => selectedClusterId && namespaceScoped
       ? api.get<Namespace[]>(`/api/v1/clusters/${selectedClusterId}/namespaces`, signal)
@@ -68,6 +73,15 @@ export function GovernancePage() {
         kind: 'priority-classes',
         items: await api.get<KubernetesPriorityClass[]>(
           `/api/v1/clusters/${selectedClusterId}/priority-classes`,
+          signal,
+        ),
+      }
+    }
+    if (view === 'runtime-classes') {
+      return {
+        kind: 'runtime-classes',
+        items: await api.get<KubernetesRuntimeClass[]>(
+          `/api/v1/clusters/${selectedClusterId}/runtime-classes`,
           signal,
         ),
       }
@@ -118,12 +132,14 @@ export function GovernancePage() {
   }, [namespaceScoped, namespaces.data, selectedNamespace, setSelectedNamespace])
 
   useEffect(() => setSelectedPriorityClass(null), [selectedClusterId, selectedNamespace, view])
+  useEffect(() => setSelectedRuntimeClass(null), [selectedClusterId, selectedNamespace, view])
 
   const quotaItems = inventory.data?.kind === 'quotas' ? inventory.data.items : []
   const limitItems = inventory.data?.kind === 'limits' ? inventory.data.items : []
   const autoscalerItems = inventory.data?.kind === 'autoscalers' ? inventory.data.items : []
   const budgetItems = inventory.data?.kind === 'budgets' ? inventory.data.items : []
   const priorityClassItems = inventory.data?.kind === 'priority-classes' ? inventory.data.items : []
+  const runtimeClassItems = inventory.data?.kind === 'runtime-classes' ? inventory.data.items : []
   const quotaRows = useMemo(() => flattenQuotas(quotaItems), [quotaItems])
   const limitRows = useMemo(() => flattenLimitRanges(limitItems), [limitItems])
   const normalizedSearch = search.trim().toLowerCase()
@@ -144,11 +160,15 @@ export function GovernancePage() {
   const visiblePriorityClasses = useMemo(() => priorityClassItems.filter((item) => (
     !normalizedSearch || item.name.toLowerCase().includes(normalizedSearch)
   )), [normalizedSearch, priorityClassItems])
+  const visibleRuntimeClasses = useMemo(() => runtimeClassItems.filter((item) => (
+    !normalizedSearch || item.name.toLowerCase().includes(normalizedSearch)
+  )), [normalizedSearch, runtimeClassItems])
   useEffect(() => setPage(0), [normalizedSearch, selectedClusterId, selectedNamespace, view])
 
   const activeItemCount = activeInventoryCount(inventory.data, view)
   const visibleRowCount = visibleInventoryCount(
-    view, visibleQuotaRows, visibleLimitRows, visibleAutoscalers, visibleBudgets, visiblePriorityClasses,
+    view, visibleQuotaRows, visibleLimitRows, visibleAutoscalers, visibleBudgets,
+    visiblePriorityClasses, visibleRuntimeClasses,
   )
   const totalPages = Math.max(1, Math.ceil(visibleRowCount / TABLE_PAGE_SIZE))
   const currentPage = Math.min(page, totalPages - 1)
@@ -184,6 +204,7 @@ export function GovernancePage() {
             <button type="button" className={view === 'autoscalers' ? 'active' : ''} aria-pressed={view === 'autoscalers'} onClick={() => setView('autoscalers')}>HPA</button>
             <button type="button" className={view === 'budgets' ? 'active' : ''} aria-pressed={view === 'budgets'} onClick={() => setView('budgets')}>PDB</button>
             <button type="button" className={view === 'priority-classes' ? 'active' : ''} aria-pressed={view === 'priority-classes'} onClick={() => setView('priority-classes')}>PriorityClass</button>
+            <button type="button" className={view === 'runtime-classes' ? 'active' : ''} aria-pressed={view === 'runtime-classes'} onClick={() => setView('runtime-classes')}>RuntimeClass</button>
           </div>
           <section className="toolbar" aria-label="资源治理筛选">
             {namespaceScoped && (
@@ -206,7 +227,7 @@ export function GovernancePage() {
               <input
                 id="governance-search"
                 type="search"
-                placeholder={view === 'priority-classes' ? '搜索 PriorityClass 名称' : `搜索 ${resourceLabel} 或资源`}
+                placeholder={!namespaceScoped ? `搜索 ${resourceLabel} 名称` : `搜索 ${resourceLabel} 或资源`}
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
               />
@@ -241,13 +262,21 @@ export function GovernancePage() {
                           <DisruptionBudgetTable items={visibleBudgets.slice(pageStart, pageStart + TABLE_PAGE_SIZE)} />
                           <TablePagination page={currentPage} totalItems={visibleBudgets.length} onPage={setPage} />
                         </>
-                      ) : (
+                      ) : view === 'priority-classes' ? (
                         <>
                           <PriorityClassTable
                             items={visiblePriorityClasses.slice(pageStart, pageStart + TABLE_PAGE_SIZE)}
                             onSelect={setSelectedPriorityClass}
                           />
                           <TablePagination page={currentPage} totalItems={visiblePriorityClasses.length} onPage={setPage} />
+                        </>
+                      ) : (
+                        <>
+                          <RuntimeClassTable
+                            items={visibleRuntimeClasses.slice(pageStart, pageStart + TABLE_PAGE_SIZE)}
+                            onSelect={setSelectedRuntimeClass}
+                          />
+                          <TablePagination page={currentPage} totalItems={visibleRuntimeClasses.length} onPage={setPage} />
                         </>
                       )}
           </section>
@@ -260,6 +289,45 @@ export function GovernancePage() {
           onClose={() => setSelectedPriorityClass(null)}
         />
       )}
+      {selectedRuntimeClass && (
+        <RuntimeClassDetailModal
+          clusterId={selectedClusterId}
+          resource={selectedRuntimeClass}
+          onClose={() => setSelectedRuntimeClass(null)}
+        />
+      )}
+    </div>
+  )
+}
+
+function RuntimeClassTable({
+  items,
+  onSelect,
+}: {
+  items: KubernetesRuntimeClass[]
+  onSelect: (item: KubernetesRuntimeClass) => void
+}) {
+  return (
+    <div className="table-wrap" role="region" aria-label="RuntimeClass 清单" tabIndex={0}>
+      <table className="governance-table governance-runtime-class-table">
+        <thead><tr><th>名称</th><th>作用域</th><th>创建时间</th><th className="actions-column">操作</th></tr></thead>
+        <tbody>{items.map((item) => (
+          <tr key={item.name}>
+            <td className="mono"><strong>{item.name}</strong></td>
+            <td><span className="kind-label">集群级</span></td>
+            <td>{formatDateTime(item.created_at)}</td>
+            <td className="actions-column">
+              <button
+                type="button"
+                className="icon-button"
+                aria-label={`查看 ${item.name}`}
+                title="查看 RuntimeClass 详情"
+                onClick={() => onSelect(item)}
+              ><Eye size={16} /></button>
+            </td>
+          </tr>
+        ))}</tbody>
+      </table>
     </div>
   )
 }
@@ -303,6 +371,7 @@ function emptyInventory(view: GovernanceView): GovernanceInventory {
     case 'autoscalers': return { kind: 'autoscalers', items: [] }
     case 'budgets': return { kind: 'budgets', items: [] }
     case 'priority-classes': return { kind: 'priority-classes', items: [] }
+    case 'runtime-classes': return { kind: 'runtime-classes', items: [] }
   }
 }
 
@@ -318,6 +387,7 @@ function inventoryIsTruncated(inventory: GovernanceInventory | null): boolean {
     case 'autoscalers': return inventory.items.some((item) => item.conditions_truncated)
     case 'budgets': return inventory.items.some((item) => item.conditions_truncated)
     case 'priority-classes': return false
+    case 'runtime-classes': return false
   }
 }
 
@@ -328,6 +398,7 @@ function visibleInventoryCount(
   autoscalers: KubernetesHorizontalPodAutoscaler[],
   budgets: KubernetesPodDisruptionBudget[],
   priorityClasses: KubernetesPriorityClass[],
+  runtimeClasses: KubernetesRuntimeClass[],
 ): number {
   switch (view) {
     case 'quotas': return quotas.length
@@ -335,6 +406,7 @@ function visibleInventoryCount(
     case 'autoscalers': return autoscalers.length
     case 'budgets': return budgets.length
     case 'priority-classes': return priorityClasses.length
+    case 'runtime-classes': return runtimeClasses.length
   }
 }
 

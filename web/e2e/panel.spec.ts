@@ -635,12 +635,27 @@ test('governance reads one bounded policy kind at a time', async ({ page }, test
   await expect(dialog.getByText('是')).toBeVisible()
   await expect(dialog.getByText('private scheduling guidance')).toHaveCount(0)
   expect(requestedKinds.at(-1)).toBe('priorityclass-detail:workload-high')
+  await dialog.getByRole('button', { name: '关闭' }).click()
+
+  await page.getByRole('button', { name: 'RuntimeClass' }).click()
+  await expect(page.getByText('kata-containers', { exact: true })).toBeVisible()
+  await expect(page.getByText('runc', { exact: true })).toBeVisible()
+  await expect(page.getByLabel('命名空间')).toHaveCount(0)
+  expect(requestedKinds.at(-1)).toBe('runtimeclasses:cluster')
+  await page.getByRole('button', { name: '查看 kata-containers' }).click()
+  const runtimeDialog = page.getByRole('dialog', { name: 'RuntimeClass · kata-containers' })
+  await expect(runtimeDialog.getByText('kata-fc')).toBeVisible()
+  await expect(runtimeDialog.getByText('250m')).toBeVisible()
+  await expect(runtimeDialog.getByText('120Mi')).toBeVisible()
+  await expect(runtimeDialog.getByText('private.example.com/runtime')).toHaveCount(0)
+  await expect(runtimeDialog.getByText('private-taint')).toHaveCount(0)
+  expect(requestedKinds.at(-1)).toBe('runtimeclass-detail:kata-containers')
 
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
   expect(overflow).toBeLessThanOrEqual(1)
   const result = await new AxeBuilder({ page }).analyze()
   expect(result.violations.filter((violation) => ['serious', 'critical'].includes(violation.impact ?? ''))).toEqual([])
-  await page.screenshot({ path: `test-results/${testInfo.project.name}-priority-class-governance.png`, fullPage: true })
+  await page.screenshot({ path: `test-results/${testInfo.project.name}-runtime-class-governance.png`, fullPage: true })
   expect(consoleErrors).toEqual([])
 })
 
@@ -1091,6 +1106,20 @@ async function mockGovernanceResources(page: Page, requestedKinds: string[]) {
       data = [
         { name: 'system-cluster-critical', created_at: '2026-07-20T08:00:00Z' },
         { name: 'workload-high', created_at: '2026-07-28T03:15:00Z' },
+      ]
+    } else if (path === '/api/v1/clusters/clu_1/runtime-classes/kata-containers') {
+      requestedKinds.push('runtimeclass-detail:kata-containers')
+      data = {
+        name: 'kata-containers', created_at: '2026-07-28T03:20:00Z', handler: 'kata-fc',
+        overhead_configured: true, pod_overhead_cpu: '250m', pod_overhead_memory: '120Mi',
+        overhead_resource_count: 3, scheduling_configured: true, node_selector_count: 2, toleration_count: 2,
+        nodeSelector: { 'private.example.com/runtime': 'kata' }, tolerations: [{ key: 'private-taint' }],
+      }
+    } else if (path === '/api/v1/clusters/clu_1/runtime-classes') {
+      requestedKinds.push('runtimeclasses:cluster')
+      data = [
+        { name: 'kata-containers', created_at: '2026-07-28T03:20:00Z' },
+        { name: 'runc', created_at: '2026-07-20T08:00:00Z' },
       ]
     } else {
       data = []

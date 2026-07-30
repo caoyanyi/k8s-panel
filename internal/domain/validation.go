@@ -348,6 +348,20 @@ func ValidatePriorityClassName(name string) error {
 	return nil
 }
 
+func ValidateRuntimeClassName(name string) error {
+	if !validDNSSubdomain(name) {
+		return Invalid("name", "must be a valid Kubernetes RuntimeClass name")
+	}
+	return nil
+}
+
+func ValidateRuntimeClassHandler(handler string) error {
+	if !validDNSLabel(handler) {
+		return Invalid("handler", "must be a valid Kubernetes RuntimeClass handler")
+	}
+	return nil
+}
+
 func ValidateAPIServiceName(name string) error {
 	version, group, found := strings.Cut(name, ".")
 	if !found || len(name) > 253 || !validDNSLabel(version) || (group != "" && !validDNSSubdomain(group)) {

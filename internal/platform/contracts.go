@@ -61,6 +61,8 @@ type KubeGateway interface {
 	CertificateSigningRequest(context.Context, string) (domain.KubernetesCertificateSigningRequestDetail, error)
 	PriorityClasses(context.Context) ([]domain.KubernetesPriorityClass, error)
 	PriorityClass(context.Context, string) (domain.KubernetesPriorityClassDetail, error)
+	RuntimeClasses(context.Context) ([]domain.KubernetesRuntimeClass, error)
+	RuntimeClass(context.Context, string) (domain.KubernetesRuntimeClassDetail, error)
 	APIServices(context.Context) ([]domain.KubernetesAPIService, error)
 	AdmissionWebhookConfigurations(context.Context, domain.KubernetesAdmissionWebhookConfigurationKind) ([]domain.KubernetesAdmissionWebhookConfiguration, error)
 	AdmissionWebhookConfiguration(context.Context, domain.KubernetesAdmissionWebhookConfigurationKind, string) (domain.KubernetesAdmissionWebhookConfigurationDetail, error)

@@ -674,6 +674,64 @@ func TestValidatePriorityClassName(t *testing.T) {
 	}
 }
 
+func TestValidateRuntimeClassNameAndHandler(t *testing.T) {
+	t.Parallel()
+
+	nameTests := []struct {
+		name      string
+		value     string
+		wantField string
+	}{
+		{name: "dns label", value: "kata-containers"},
+		{name: "dns subdomain", value: "sandbox.platform.example.com"},
+		{name: "empty", value: "", wantField: "name"},
+		{name: "uppercase", value: "Kata", wantField: "name"},
+		{name: "path traversal", value: "../runtimeclasses", wantField: "name"},
+		{name: "too long", value: strings.Repeat("a", 254), wantField: "name"},
+	}
+	for _, tt := range nameTests {
+		t.Run("name "+tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := ValidateRuntimeClassName(tt.value)
+			assertValidationField(t, err, tt.wantField)
+		})
+	}
+
+	handlerTests := []struct {
+		name      string
+		value     string
+		wantField string
+	}{
+		{name: "runc", value: "runc"},
+		{name: "hyphenated", value: "kata-fc"},
+		{name: "empty", value: "", wantField: "handler"},
+		{name: "subdomain", value: "runtime.example.com", wantField: "handler"},
+		{name: "uppercase", value: "Kata", wantField: "handler"},
+		{name: "too long", value: strings.Repeat("a", 64), wantField: "handler"},
+	}
+	for _, tt := range handlerTests {
+		t.Run("handler "+tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := ValidateRuntimeClassHandler(tt.value)
+			assertValidationField(t, err, tt.wantField)
+		})
+	}
+}
+
+func assertValidationField(t *testing.T, err error, wantField string) {
+	t.Helper()
+	if wantField == "" {
+		if err != nil {
+			t.Fatalf("validation error = %v", err)
+		}
+		return
+	}
+	var validationErr *ValidationError
+	if !errors.As(err, &validationErr) || validationErr.Field != wantField {
+		t.Fatalf("validation error = %v, want field %q", err, wantField)
+	}
+}
+
 func TestValidateAPIServiceName(t *testing.T) {
 	t.Parallel()
 

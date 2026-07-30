@@ -648,6 +648,23 @@ type KubernetesPriorityClassDetail struct {
 	PreemptionPolicyDefaulted bool                                    `json:"preemption_policy_defaulted"`
 }
 
+type KubernetesRuntimeClass struct {
+	Name      string    `json:"name"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type KubernetesRuntimeClassDetail struct {
+	KubernetesRuntimeClass
+	Handler               string  `json:"handler"`
+	OverheadConfigured    bool    `json:"overhead_configured"`
+	PodOverheadCPU        *string `json:"pod_overhead_cpu,omitempty"`
+	PodOverheadMemory     *string `json:"pod_overhead_memory,omitempty"`
+	OverheadResourceCount int     `json:"overhead_resource_count"`
+	SchedulingConfigured  bool    `json:"scheduling_configured"`
+	NodeSelectorCount     int     `json:"node_selector_count"`
+	TolerationCount       int     `json:"toleration_count"`
+}
+
 type KubernetesAPIService struct {
 	Name                       string     `json:"name"`
 	Group                      string     `json:"group"`

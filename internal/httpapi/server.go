@@ -138,6 +138,8 @@ func (s *Server) routes() {
 	s.mux.Handle("GET /api/v1/clusters/{id}/certificate-signing-requests/{name}", s.protected(http.HandlerFunc(s.getCertificateSigningRequest)))
 	s.mux.Handle("GET /api/v1/clusters/{id}/priority-classes", s.protected(http.HandlerFunc(s.listPriorityClasses)))
 	s.mux.Handle("GET /api/v1/clusters/{id}/priority-classes/{name}", s.protected(http.HandlerFunc(s.getPriorityClass)))
+	s.mux.Handle("GET /api/v1/clusters/{id}/runtime-classes", s.protected(http.HandlerFunc(s.listRuntimeClasses)))
+	s.mux.Handle("GET /api/v1/clusters/{id}/runtime-classes/{name}", s.protected(http.HandlerFunc(s.getRuntimeClass)))
 	s.mux.Handle("GET /api/v1/clusters/{id}/api-services", s.protected(http.HandlerFunc(s.listAPIServices)))
 	s.mux.Handle("GET /api/v1/clusters/{id}/admission-webhook-configurations", s.protected(http.HandlerFunc(s.listAdmissionWebhookConfigurations)))
 	s.mux.Handle("GET /api/v1/clusters/{id}/admission-webhook-configurations/{name}", s.protected(http.HandlerFunc(s.getAdmissionWebhookConfiguration)))

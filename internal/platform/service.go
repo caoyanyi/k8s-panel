@@ -571,6 +571,38 @@ func (s *Service) PriorityClass(
 	return gateway.PriorityClass(ctx, name)
 }
 
+func (s *Service) RuntimeClasses(ctx context.Context, clusterID string) ([]domain.KubernetesRuntimeClass, error) {
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	gateway, err := s.kubeGateway(ctx, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	return gateway.RuntimeClasses(ctx)
+}
+
+func (s *Service) RuntimeClass(
+	ctx context.Context,
+	clusterID, name string,
+) (domain.KubernetesRuntimeClassDetail, error) {
+	if err := domain.ValidateRuntimeClassName(name); err != nil {
+		return domain.KubernetesRuntimeClassDetail{}, err
+	}
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return domain.KubernetesRuntimeClassDetail{}, err
+	}
+	defer release()
+	gateway, err := s.kubeGateway(ctx, clusterID)
+	if err != nil {
+		return domain.KubernetesRuntimeClassDetail{}, err
+	}
+	return gateway.RuntimeClass(ctx, name)
+}
+
 func (s *Service) APIServices(ctx context.Context, clusterID string) ([]domain.KubernetesAPIService, error) {
 	release, err := s.acquireKubernetesRead(ctx)
 	if err != nil {

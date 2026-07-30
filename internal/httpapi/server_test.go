@@ -66,6 +66,11 @@ func TestServerAuthenticationAndClusterLifecycle(t *testing.T) {
 	if unauthorizedPriorityClasses.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthorized PriorityClass status = %d, want 401", unauthorizedPriorityClasses.Code)
 	}
+	unauthorizedRuntimeClasses := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorizedRuntimeClasses, httptest.NewRequest(http.MethodGet, "/api/v1/clusters/clu_1/runtime-classes", nil))
+	if unauthorizedRuntimeClasses.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized RuntimeClass status = %d, want 401", unauthorizedRuntimeClasses.Code)
+	}
 	unauthorizedAPIServices := httptest.NewRecorder()
 	handler.ServeHTTP(unauthorizedAPIServices, httptest.NewRequest(http.MethodGet, "/api/v1/clusters/clu_1/api-services", nil))
 	if unauthorizedAPIServices.Code != http.StatusUnauthorized {
@@ -290,6 +295,33 @@ func TestServerAuthenticationAndClusterLifecycle(t *testing.T) {
 		t.Fatalf("invalid PriorityClass name status = %d, body = %s", invalidPriorityClassName.Code, invalidPriorityClassName.Body.String())
 	}
 	assertErrorField(t, invalidPriorityClassName.Body.Bytes(), "name")
+	runtimeClassPath := "/api/v1/clusters/" + created.Data.ID + "/runtime-classes"
+	runtimeClasses := authenticatedRequest(t, handler, cookie, http.MethodGet, runtimeClassPath, "")
+	if runtimeClasses.Code != http.StatusOK || !strings.Contains(runtimeClasses.Body.String(), `"name":"kata-containers"`) ||
+		strings.Contains(runtimeClasses.Body.String(), "private-runtime-selector") {
+		t.Fatalf("RuntimeClasses status = %d, body = %s", runtimeClasses.Code, runtimeClasses.Body.String())
+	}
+	missingRuntimeClasses := authenticatedRequest(
+		t, handler, cookie, http.MethodGet, "/api/v1/clusters/clu_missing/runtime-classes", "",
+	)
+	if missingRuntimeClasses.Code != http.StatusNotFound {
+		t.Fatalf("missing cluster RuntimeClasses status = %d, body = %s", missingRuntimeClasses.Code, missingRuntimeClasses.Body.String())
+	}
+	runtimeClassDetail := authenticatedRequest(t, handler, cookie, http.MethodGet, runtimeClassPath+"/kata-containers", "")
+	if runtimeClassDetail.Code != http.StatusOK ||
+		!strings.Contains(runtimeClassDetail.Body.String(), `"handler":"kata-fc"`) ||
+		!strings.Contains(runtimeClassDetail.Body.String(), `"pod_overhead_cpu":"250m"`) ||
+		!strings.Contains(runtimeClassDetail.Body.String(), `"node_selector_count":2`) ||
+		strings.Contains(runtimeClassDetail.Body.String(), "private-runtime-selector") ||
+		strings.Contains(runtimeClassDetail.Body.String(), `"nodeSelector"`) ||
+		strings.Contains(runtimeClassDetail.Body.String(), `"tolerations"`) {
+		t.Fatalf("RuntimeClass detail status = %d, body = %s", runtimeClassDetail.Code, runtimeClassDetail.Body.String())
+	}
+	invalidRuntimeClassName := authenticatedRequest(t, handler, cookie, http.MethodGet, runtimeClassPath+"/..%2Fruntimeclasses", "")
+	if invalidRuntimeClassName.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid RuntimeClass name status = %d, body = %s", invalidRuntimeClassName.Code, invalidRuntimeClassName.Body.String())
+	}
+	assertErrorField(t, invalidRuntimeClassName.Body.Bytes(), "name")
 	apiServicesPath := "/api/v1/clusters/" + created.Data.ID + "/api-services"
 	apiServices := authenticatedRequest(t, handler, cookie, http.MethodGet, apiServicesPath, "")
 	if apiServices.Code != http.StatusOK || !strings.Contains(apiServices.Body.String(), `"name":"v1beta1.metrics.k8s.io"`) ||
@@ -1263,6 +1295,23 @@ func (testKube) PriorityClass(_ context.Context, name string) (domain.Kubernetes
 	return domain.KubernetesPriorityClassDetail{
 		KubernetesPriorityClass: domain.KubernetesPriorityClass{Name: name},
 		Value:                   1000000, PreemptionPolicy: domain.PriorityClassPreemptLower,
+	}, nil
+}
+func (testKube) RuntimeClasses(context.Context) ([]domain.KubernetesRuntimeClass, error) {
+	return []domain.KubernetesRuntimeClass{{Name: "kata-containers"}}, nil
+}
+func (testKube) RuntimeClass(_ context.Context, name string) (domain.KubernetesRuntimeClassDetail, error) {
+	cpu, memory := "250m", "120Mi"
+	return domain.KubernetesRuntimeClassDetail{
+		KubernetesRuntimeClass: domain.KubernetesRuntimeClass{Name: name},
+		Handler:                "kata-fc",
+		OverheadConfigured:     true,
+		PodOverheadCPU:         &cpu,
+		PodOverheadMemory:      &memory,
+		OverheadResourceCount:  3,
+		SchedulingConfigured:   true,
+		NodeSelectorCount:      2,
+		TolerationCount:        2,
 	}, nil
 }
 func (testKube) APIServices(context.Context) ([]domain.KubernetesAPIService, error) {

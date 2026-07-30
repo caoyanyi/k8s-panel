@@ -9,7 +9,7 @@ K8s Panel 是一个独立实现的 Kubernetes 与 Helm 管理面板。后端使�
 - 集群概览、节点/命名空间资源清单、节点诊断详情、CRD 与证书签名请求元数据/按需状态详情、聚合 API 健康清单，以及准入 Webhook/CEL 校验策略与绑定检查
 - Deployment/StatefulSet/DaemonSet/Job/CronJob/Pod 工作负载查询
 - Service/Ingress/EndpointSlice/NetworkPolicy 网络清单、ConfigMap/Secret 最小配置摘要，以及 PVC/PV/StorageClass 存储摘要
-- 命名空间 ResourceQuota、LimitRange、HPA、PodDisruptionBudget 治理清单，以及集群级 PriorityClass 元数据与按需调度策略详情
+- 命名空间 ResourceQuota、LimitRange、HPA、PodDisruptionBudget 治理清单，以及集群级 PriorityClass 与 RuntimeClass 元数据和按需配置详情
 - Pod Security Admission 命名空间安全态势，区分显式级别、版本固定、继承集群默认值和无效标签组合
 - 节点 Kubelet 与已观测 API Server 的版本偏差态势，标记政策范围、升级阻塞、超限和主版本不一致
 - 当前 API Server 实例报告的废弃 API 请求证据，按 API、资源和计划移除版本展示
@@ -75,6 +75,8 @@ TLS 证书证据只在用户切换视图后占用一个 Kubernetes 读取槽，�
 CertificateSigningRequest 清单只在用户切换视图后读取 PartialObjectMetadata，最多 4 页、1,000 个对象和 4 MiB；单对象详情只在用户选择后读取且最多 2 MiB。响应仅保留请求者、签名器、请求有效期、用途和有界状态条件，不返回或解析 PKCS#10 请求、已签发证书、UID、用户组、额外身份属性、标签、注解或条件消息，也不提供审批、拒绝和签发操作。
 
 PriorityClass 清单只在用户切换到集群级治理视图后读取 PartialObjectMetadata，同时停止不再需要的命名空间清单读取；最多 4 页、1,000 个对象和 4 MiB。单对象详情最多 1 MiB，只返回整数优先级、全局默认标记和规范化后的抢占策略，不返回 description、标签、注解或 managedFields，不扫描 Pod、工作负载或调度队列，也不模拟实际抢占结果。
+
+RuntimeClass 清单同样只在用户切换视图后读取 PartialObjectMetadata，最多 4 页、1,000 个对象和 4 MiB；单对象详情最多 1 MiB。响应只返回运行时 handler、CPU/内存 Pod overhead 字符串及资源项、节点选择器和容忍数量，不返回扩展资源名称、标签键值、容忍规则或对象元数据，不读取 Pod、Node、CRI 配置或宿主机运行时 socket，也不验证 handler 是否实际可用。
 
 自适应资源控制默认在内存或归一化系统负载达到 80% 时，将后台操作、Kubernetes 读取并发和客户端缓存容量分别减半；达到 95% 时暂停启动新任务、快速拒绝新的集群读取、显式连接测试、权限能力检测和凭据轮换，并将客户端缓存收缩到 1。权限能力检测固定顺序执行 10 次轻量授权检查，单批次只占用一个读取槽，不轮询、不缓存结果；重复检测同一集群和命名空间时快速拒绝。凭据轮换先使用独立客户端验证候选凭据，成功后再原子替换，失败时保留原凭据和缓存连接。客户端按集群与凭据版本复用，闲置超时、LRU 淘汰、禁用/删除集群或服务关闭时释放空闲连接，不缓存 Kubernetes 对象和日志。指标暂不可用时按配置上限运行。低配置主机建议设置 `PANEL_HELM_WORKERS=1`、`PANEL_KUBERNETES_READ_CONCURRENCY=2`、`PANEL_KUBERNETES_CLIENT_CACHE_SIZE=4`、较小的 `PANEL_OPERATION_QUEUE_SIZE`，并按实际流量下调 `PANEL_MAX_CONCURRENT_REQUESTS`。
 

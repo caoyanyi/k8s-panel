@@ -127,6 +127,49 @@ describe('GovernancePage', () => {
     expect(requested.filter((path) => path.endsWith('/priority-classes/workload-high'))).toHaveLength(1)
   })
 
+  it('loads RuntimeClass metadata and detail only after its cluster-scoped view is selected', async () => {
+    const requested: string[] = []
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const path = String(input)
+      requested.push(path)
+      if (path.endsWith('/namespaces')) return Promise.resolve(dataResponse([namespace]))
+      if (path.includes('/resource-quotas')) return Promise.resolve(dataResponse([quota]))
+      if (path.endsWith('/runtime-classes/kata-containers')) {
+        return Promise.resolve(dataResponse({
+          ...runtimeClasses[1], handler: 'kata-fc', overhead_configured: true,
+          pod_overhead_cpu: '250m', pod_overhead_memory: '120Mi', overhead_resource_count: 3,
+          scheduling_configured: true, node_selector_count: 2, toleration_count: 2,
+          nodeSelector: { 'private.example.com/runtime': 'kata' }, tolerations: [{ key: 'private-taint' }],
+        }))
+      }
+      if (path.endsWith('/runtime-classes')) return Promise.resolve(dataResponse(runtimeClasses))
+      return Promise.resolve(errorResponse(404, 'not_found'))
+    }))
+    const user = userEvent.setup()
+
+    renderPage()
+
+    expect(await screen.findAllByText('compute-quota')).toHaveLength(2)
+    expect(requested.some((path) => path.includes('/runtime-classes'))).toBe(false)
+    await user.click(screen.getByRole('button', { name: 'RuntimeClass' }))
+
+    expect(await screen.findByText('kata-containers')).toBeInTheDocument()
+    expect(screen.getByText('runc')).toBeInTheDocument()
+    expect(screen.queryByLabelText('命名空间')).not.toBeInTheDocument()
+    expect(requested.filter((path) => path.endsWith('/namespaces'))).toHaveLength(1)
+    expect(requested.filter((path) => path.endsWith('/runtime-classes'))).toHaveLength(1)
+    expect(requested.some((path) => path.includes('/priority-classes'))).toBe(false)
+
+    await user.click(screen.getByRole('button', { name: '查看 kata-containers' }))
+    const dialog = await screen.findByRole('dialog', { name: 'RuntimeClass · kata-containers' })
+    expect(within(dialog).getByText('kata-fc')).toBeInTheDocument()
+    expect(within(dialog).getByText('250m')).toBeInTheDocument()
+    expect(within(dialog).getByText('120Mi')).toBeInTheDocument()
+    expect(screen.queryByText('private.example.com/runtime')).not.toBeInTheDocument()
+    expect(screen.queryByText('private-taint')).not.toBeInTheDocument()
+    expect(requested.filter((path) => path.endsWith('/runtime-classes/kata-containers'))).toHaveLength(1)
+  })
+
   it('requires an explicit namespace before reading policy objects', async () => {
     const requested: string[] = []
     vi.stubGlobal('fetch', vi.fn().mockImplementation((input: RequestInfo | URL) => {
@@ -315,6 +358,11 @@ const disruptionBudget = {
 const priorityClasses = [
   { name: 'system-cluster-critical', created_at: '2026-07-20T08:00:00Z' },
   { name: 'workload-high', created_at: '2026-07-28T03:15:00Z' },
+]
+
+const runtimeClasses = [
+  { name: 'runc', created_at: '2026-07-20T08:00:00Z' },
+  { name: 'kata-containers', created_at: '2026-07-28T03:15:00Z' },
 ]
 
 function renderPage(overrides: Partial<PanelContextValue> = {}) {

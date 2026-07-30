@@ -704,6 +704,14 @@ func TestServiceRejectsKubernetesReadsDuringCriticalResourcePressure(t *testing.
 			_, err := service.PriorityClass(context.Background(), cluster.ID, "workload-high")
 			return err
 		}},
+		{name: "runtime classes", call: func() error {
+			_, err := service.RuntimeClasses(context.Background(), cluster.ID)
+			return err
+		}},
+		{name: "runtime class detail", call: func() error {
+			_, err := service.RuntimeClass(context.Background(), cluster.ID, "kata-containers")
+			return err
+		}},
 		{name: "API services", call: func() error {
 			_, err := service.APIServices(context.Background(), cluster.ID)
 			return err
@@ -1509,6 +1517,48 @@ func TestServiceListsPriorityClassesAndValidatesDetailNameBeforeGateway(t *testi
 	}
 	if gateway.priorityClassDetailCalls.Load() != 1 {
 		t.Fatal("invalid PriorityClass name reached Kubernetes gateway")
+	}
+}
+
+func TestServiceListsRuntimeClassesAndValidatesDetailNameBeforeGateway(t *testing.T) {
+	t.Parallel()
+
+	const name = "kata-containers"
+	gateway := &fakeKubeGateway{
+		probe:          domain.ClusterProbe{Version: "v1.36.2"},
+		runtimeClasses: []domain.KubernetesRuntimeClass{{Name: name}},
+		runtimeClassDetail: domain.KubernetesRuntimeClassDetail{
+			KubernetesRuntimeClass: domain.KubernetesRuntimeClass{Name: name},
+			Handler:                "kata-fc",
+		},
+	}
+	service, _, _ := newTestService(t, serviceFakes{kube: gateway})
+	cluster, err := service.CreateCluster(context.Background(), "admin", "req_cluster", domain.ClusterInput{
+		Name: "cluster", Environment: domain.EnvironmentDevelopment, Server: "https://api.example.com", BearerToken: "token",
+	})
+	if err != nil {
+		t.Fatalf("CreateCluster() error = %v", err)
+	}
+
+	items, err := service.RuntimeClasses(context.Background(), cluster.ID)
+	if err != nil || len(items) != 1 || items[0].Name != name {
+		t.Fatalf("RuntimeClasses() = %#v, %v", items, err)
+	}
+	detail, err := service.RuntimeClass(context.Background(), cluster.ID, name)
+	if err != nil || detail.Name != name || detail.Handler != "kata-fc" {
+		t.Fatalf("RuntimeClass() = %#v, %v", detail, err)
+	}
+	if gateway.runtimeClassName != name || gateway.runtimeClassListCalls.Load() != 1 ||
+		gateway.runtimeClassDetailCalls.Load() != 1 {
+		t.Fatalf("RuntimeClass gateway inputs = name %q, list calls %d, detail calls %d",
+			gateway.runtimeClassName, gateway.runtimeClassListCalls.Load(), gateway.runtimeClassDetailCalls.Load())
+	}
+
+	if _, err := service.RuntimeClass(context.Background(), cluster.ID, "../runtimeclasses"); err == nil {
+		t.Fatal("RuntimeClass() accepted an invalid name")
+	}
+	if gateway.runtimeClassDetailCalls.Load() != 1 {
+		t.Fatal("invalid RuntimeClass name reached Kubernetes gateway")
 	}
 }
 
@@ -2539,6 +2589,11 @@ type fakeKubeGateway struct {
 	priorityClassName                string
 	priorityClassListCalls           atomic.Int64
 	priorityClassDetailCalls         atomic.Int64
+	runtimeClasses                   []domain.KubernetesRuntimeClass
+	runtimeClassDetail               domain.KubernetesRuntimeClassDetail
+	runtimeClassName                 string
+	runtimeClassListCalls            atomic.Int64
+	runtimeClassDetailCalls          atomic.Int64
 	apiServices                      []domain.KubernetesAPIService
 	apiServiceCalls                  atomic.Int64
 	admissionWebhooks                []domain.KubernetesAdmissionWebhookConfiguration
@@ -2750,6 +2805,20 @@ func (g *fakeKubeGateway) PriorityClass(
 	g.priorityClassName = name
 	g.mutationMu.Unlock()
 	return g.priorityClassDetail, nil
+}
+func (g *fakeKubeGateway) RuntimeClasses(context.Context) ([]domain.KubernetesRuntimeClass, error) {
+	g.runtimeClassListCalls.Add(1)
+	return append([]domain.KubernetesRuntimeClass(nil), g.runtimeClasses...), nil
+}
+func (g *fakeKubeGateway) RuntimeClass(
+	_ context.Context,
+	name string,
+) (domain.KubernetesRuntimeClassDetail, error) {
+	g.runtimeClassDetailCalls.Add(1)
+	g.mutationMu.Lock()
+	g.runtimeClassName = name
+	g.mutationMu.Unlock()
+	return g.runtimeClassDetail, nil
 }
 func (g *fakeKubeGateway) APIServices(context.Context) ([]domain.KubernetesAPIService, error) {
 	g.apiServiceCalls.Add(1)

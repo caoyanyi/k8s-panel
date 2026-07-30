@@ -221,6 +221,22 @@ export interface KubernetesPriorityClassDetail extends KubernetesPriorityClass {
   preemption_policy_defaulted: boolean
 }
 
+export interface KubernetesRuntimeClass {
+  name: string
+  created_at: string
+}
+
+export interface KubernetesRuntimeClassDetail extends KubernetesRuntimeClass {
+  handler: string
+  overhead_configured: boolean
+  pod_overhead_cpu?: string
+  pod_overhead_memory?: string
+  overhead_resource_count: number
+  scheduling_configured: boolean
+  node_selector_count: number
+  toleration_count: number
+}
+
 export interface KubernetesAPIService {
   name: string
   group: string
