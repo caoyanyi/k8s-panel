@@ -675,6 +675,10 @@ func TestServiceRejectsKubernetesReadsDuringCriticalResourcePressure(t *testing.
 			_, err := service.EndpointCertificate(context.Background(), cluster.ID)
 			return err
 		}},
+		{name: "disruption budget evidence", call: func() error {
+			_, err := service.DisruptionBudgets(context.Background(), cluster.ID)
+			return err
+		}},
 		{name: "nodes", call: func() error { _, err := service.Nodes(context.Background(), cluster.ID); return err }},
 		{name: "custom resource definitions", call: func() error {
 			_, err := service.CustomResourceDefinitions(context.Background(), cluster.ID)
@@ -824,6 +828,9 @@ func TestServiceRejectsKubernetesReadsDuringCriticalResourcePressure(t *testing.
 	}
 	if calls := gateway.endpointCertificateCalls.Load(); calls != 0 {
 		t.Fatalf("EndpointCertificate() reached Kubernetes %d times under critical pressure", calls)
+	}
+	if calls := gateway.disruptionBudgetEvidenceCalls.Load(); calls != 0 {
+		t.Fatalf("DisruptionBudgets() reached Kubernetes %d times under critical pressure", calls)
 	}
 	if serviceCalls, ingressCalls, endpointSliceCalls, policyCalls := gateway.serviceCalls.Load(), gateway.ingressCalls.Load(), gateway.endpointSliceCalls.Load(), gateway.networkPolicyCalls.Load(); serviceCalls != 0 || ingressCalls != 0 || endpointSliceCalls != 0 || policyCalls != 0 {
 		t.Fatalf("network reads reached Kubernetes under critical pressure: services=%d ingresses=%d endpointSlices=%d policies=%d", serviceCalls, ingressCalls, endpointSliceCalls, policyCalls)
@@ -1177,6 +1184,33 @@ func TestServiceReadsEndpointCertificateThroughReadGovernor(t *testing.T) {
 		t.Fatalf("EndpointCertificate() = %#v, %v", evidence, err)
 	}
 	if calls := gateway.endpointCertificateCalls.Load(); calls != 1 {
+		t.Fatalf("gateway calls = %d, want 1", calls)
+	}
+}
+
+func TestServiceListsDisruptionBudgetEvidenceThroughReadGovernor(t *testing.T) {
+	t.Parallel()
+
+	gateway := &fakeKubeGateway{
+		probe: domain.ClusterProbe{Version: "v1.36.2"},
+		disruptionBudgetEvidence: []domain.KubernetesPodDisruptionBudget{{
+			Namespace: "payments", Name: "gateway-budget", Observed: true,
+			DisruptionStatus: domain.DisruptionBudgetBlocked,
+		}},
+	}
+	service, _, _ := newTestService(t, serviceFakes{kube: gateway})
+	cluster, err := service.CreateCluster(context.Background(), "admin", "req_cluster", domain.ClusterInput{
+		Name: "cluster", Environment: domain.EnvironmentDevelopment, Server: "https://api.example.com", BearerToken: "token",
+	})
+	if err != nil {
+		t.Fatalf("CreateCluster() error = %v", err)
+	}
+
+	items, err := service.DisruptionBudgets(context.Background(), cluster.ID)
+	if err != nil || len(items) != 1 || items[0].DisruptionStatus != domain.DisruptionBudgetBlocked {
+		t.Fatalf("DisruptionBudgets() = %#v, %v", items, err)
+	}
+	if calls := gateway.disruptionBudgetEvidenceCalls.Load(); calls != 1 {
 		t.Fatalf("gateway calls = %d, want 1", calls)
 	}
 }
@@ -2377,6 +2411,8 @@ type fakeKubeGateway struct {
 	deprecatedAPIRequestCalls        atomic.Int64
 	endpointCertificate              domain.KubernetesEndpointCertificate
 	endpointCertificateCalls         atomic.Int64
+	disruptionBudgetEvidence         []domain.KubernetesPodDisruptionBudget
+	disruptionBudgetEvidenceCalls    atomic.Int64
 	detail                           domain.WorkloadDetail
 	events                           []domain.KubernetesEvent
 	logs                             domain.PodLogs
@@ -2549,6 +2585,10 @@ func (g *fakeKubeGateway) DeprecatedAPIRequests(context.Context) ([]domain.Kuber
 func (g *fakeKubeGateway) EndpointCertificate(context.Context) (domain.KubernetesEndpointCertificate, error) {
 	g.endpointCertificateCalls.Add(1)
 	return g.endpointCertificate, nil
+}
+func (g *fakeKubeGateway) DisruptionBudgets(context.Context) ([]domain.KubernetesPodDisruptionBudget, error) {
+	g.disruptionBudgetEvidenceCalls.Add(1)
+	return append([]domain.KubernetesPodDisruptionBudget(nil), g.disruptionBudgetEvidence...), nil
 }
 func (g *fakeKubeGateway) Nodes(context.Context) ([]domain.Node, error) {
 	return append([]domain.Node(nil), g.nodes...), nil

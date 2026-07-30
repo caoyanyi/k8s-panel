@@ -110,6 +110,13 @@ func TestServerAuthenticationAndClusterLifecycle(t *testing.T) {
 	if unauthorizedEndpointCertificate.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthorized endpoint certificate status = %d, want 401", unauthorizedEndpointCertificate.Code)
 	}
+	unauthorizedDisruptionBudgets := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorizedDisruptionBudgets, httptest.NewRequest(
+		http.MethodGet, "/api/v1/clusters/clu_1/upgrade-readiness/disruption-budgets", nil,
+	))
+	if unauthorizedDisruptionBudgets.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized disruption budgets status = %d, want 401", unauthorizedDisruptionBudgets.Code)
+	}
 	unauthorizedConfiguration := httptest.NewRecorder()
 	handler.ServeHTTP(unauthorizedConfiguration, httptest.NewRequest(http.MethodGet, "/api/v1/clusters/clu_1/configmaps", nil))
 	if unauthorizedConfiguration.Code != http.StatusUnauthorized {
@@ -785,6 +792,23 @@ func TestServerExposesAuthenticatedClusterResources(t *testing.T) {
 		strings.Contains(strings.ToLower(endpointCertificate.Body.String()), "issuer") {
 		t.Fatalf("endpoint certificate response exposed identity fields: %s", endpointCertificate.Body.String())
 	}
+	disruptionBudgets := authenticatedRequest(t, handler, cookie, http.MethodGet, base+"/upgrade-readiness/disruption-budgets", "")
+	if disruptionBudgets.Code != http.StatusOK ||
+		!strings.Contains(disruptionBudgets.Body.String(), `"namespace":"payments"`) ||
+		!strings.Contains(disruptionBudgets.Body.String(), `"name":"gateway-budget"`) ||
+		!strings.Contains(disruptionBudgets.Body.String(), `"disruption_status":"blocked"`) ||
+		strings.Contains(disruptionBudgets.Body.String(), "private-selector") ||
+		strings.Contains(disruptionBudgets.Body.String(), "disruptedPods") {
+		t.Fatalf("disruption budgets status = %d, body = %s", disruptionBudgets.Code, disruptionBudgets.Body.String())
+	}
+	missingDisruptionBudgetCluster := authenticatedRequest(
+		t, handler, cookie, http.MethodGet, "/api/v1/clusters/clu_missing/upgrade-readiness/disruption-budgets", "",
+	)
+	if missingDisruptionBudgetCluster.Code != http.StatusNotFound {
+		t.Fatalf("missing disruption budget cluster status = %d, body = %s",
+			missingDisruptionBudgetCluster.Code, missingDisruptionBudgetCluster.Body.String())
+	}
+	assertErrorCode(t, missingDisruptionBudgetCluster.Body.Bytes(), "not_found")
 	missingNamespace := authenticatedRequest(t, handler, cookie, http.MethodGet, base+"/resource-quotas", "")
 	if missingNamespace.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("missing governance namespace status = %d, body = %s", missingNamespace.Code, missingNamespace.Body.String())
@@ -1134,6 +1158,13 @@ func (testKube) EndpointCertificate(context.Context) (domain.KubernetesEndpointC
 		ObservedAt: observedAt, NotBefore: observedAt.Add(-24 * time.Hour), NotAfter: observedAt.Add(30 * 24 * time.Hour),
 		RemainingSeconds: 2592000, Status: domain.EndpointCertificateExpiring,
 	}, nil
+}
+func (testKube) DisruptionBudgets(context.Context) ([]domain.KubernetesPodDisruptionBudget, error) {
+	return []domain.KubernetesPodDisruptionBudget{{
+		Namespace: "payments", Name: "gateway-budget", SelectorMode: domain.KubernetesSelectorFiltered,
+		MinAvailable: "75%", CurrentHealthy: 3, DesiredHealthy: 3, DisruptionsAllowed: 0, ExpectedPods: 4,
+		Observed: true, DisruptionStatus: domain.DisruptionBudgetBlocked,
+	}}, nil
 }
 func (testKube) Nodes(context.Context) ([]domain.Node, error) {
 	return []domain.Node{{Name: "worker-01", Status: "Ready"}}, nil

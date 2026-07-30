@@ -169,6 +169,44 @@ describe('SecurityPage', () => {
     expect(requests.some((path) => path.endsWith('/metrics') || path.endsWith('/nodes') || path.endsWith('/api') || path.endsWith('/apis'))).toBe(false)
   })
 
+  it('loads cluster disruption budget evidence only after its view is selected and searches locally', async () => {
+    const requests: string[] = []
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const path = String(input)
+      requests.push(path)
+      if (path.endsWith('/upgrade-readiness/disruption-budgets')) {
+        return Promise.resolve(dataResponse(disruptionBudgets))
+      }
+      return Promise.resolve(dataResponse(postures))
+    }))
+    const user = userEvent.setup()
+
+    renderPage()
+
+    expect(await screen.findByText('payments')).toBeInTheDocument()
+    expect(requests).toEqual(['/api/v1/clusters/clu_1/pod-security-admission/namespaces'])
+
+    await user.click(screen.getByRole('button', { name: '中断预算' }))
+
+    expect(await screen.findByText('gateway-budget')).toBeInTheDocument()
+    expect(screen.getByText('允许中断')).toBeInTheDocument()
+    expect(screen.getByText('当前受阻')).toBeInTheDocument()
+    expect(screen.getByText('未匹配 Pod')).toBeInTheDocument()
+    expect(screen.getByText('待同步')).toBeInTheDocument()
+    expect(screen.getByText('1 项当前受阻证据')).toBeInTheDocument()
+    expect(screen.getByText('当前 PDB 控制器状态')).toBeInTheDocument()
+    expect(screen.getByText('不代表节点一定无法排空')).toBeInTheDocument()
+    expect(requests).toEqual([
+      '/api/v1/clusters/clu_1/pod-security-admission/namespaces',
+      '/api/v1/clusters/clu_1/upgrade-readiness/disruption-budgets',
+    ])
+    expect(requests.some((path) => path.endsWith('/pods') || path.endsWith('/nodes') || path.includes('/eviction'))).toBe(false)
+
+    await user.type(screen.getByLabelText('搜索中断预算证据'), 'platform inactive')
+    expect(screen.getByText('idle-budget')).toBeInTheDocument()
+    expect(screen.queryByText('gateway-budget')).not.toBeInTheDocument()
+  })
+
   it('searches and paginates the projected namespace rows locally', async () => {
     const items = Array.from({ length: 101 }, (_, index) => ({
       ...postures[0],
@@ -270,6 +308,49 @@ const endpointCertificate = {
   remaining_seconds: 30 * 24 * 60 * 60,
   status: 'expiring' as const,
 }
+
+const disruptionBudgetBase = {
+  selector_mode: 'filtered' as const,
+  selector_label_count: 1,
+  selector_expression_count: 0,
+  min_available: '75%',
+  current_healthy: 3,
+  desired_healthy: 3,
+  disruptions_allowed: 0,
+  expected_pods: 4,
+  observed: true,
+  unhealthy_pod_eviction_policy: 'IfHealthyBudget',
+  unhealthy_pod_eviction_policy_defaulted: true,
+  conditions: [],
+  condition_count: 0,
+  conditions_truncated: false,
+  created_at: '2026-07-30T08:00:00Z',
+}
+
+const disruptionBudgets = [
+  { ...disruptionBudgetBase, namespace: 'payments', name: 'gateway-budget', disruption_status: 'blocked' as const },
+  {
+    ...disruptionBudgetBase,
+    namespace: 'payments',
+    name: 'worker-budget',
+    disruptions_allowed: 1,
+    disruption_status: 'available' as const,
+  },
+  {
+    ...disruptionBudgetBase,
+    namespace: 'platform',
+    name: 'idle-budget',
+    expected_pods: 0,
+    disruption_status: 'inactive' as const,
+  },
+  {
+    ...disruptionBudgetBase,
+    namespace: 'legacy',
+    name: 'stale-budget',
+    observed: false,
+    disruption_status: 'unobserved' as const,
+  },
+]
 
 function renderPage(overrides: Partial<PanelContextValue> = {}) {
   return render(

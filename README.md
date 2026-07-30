@@ -14,6 +14,7 @@ K8s Panel 是一个独立实现的 Kubernetes 与 Helm 管理面板。后端使�
 - 节点 Kubelet 与已观测 API Server 的版本偏差态势，标记政策范围、升级阻塞、超限和主版本不一致
 - 当前 API Server 实例报告的废弃 API 请求证据，按 API、资源和计划移除版本展示
 - 当前连接端点经验证的 TLS 叶证书有效期证据，区分有效、临近到期、紧急和已到期状态
+- 集群级 PodDisruptionBudget 中断证据，区分允许中断、当前受阻、未匹配 Pod 和控制器待同步状态
 - ServiceAccount、Role、RoleBinding、ClusterRole、ClusterRoleBinding 元数据清单与按需规则/主体详情，支持 ServiceAccount 单动作权限模拟
 - 按集群或命名空间查看事件，默认聚焦 Warning，支持本地搜索和分页
 - 工作负载详情、脱敏 YAML、关联事件与有界 Pod 日志快照
@@ -66,6 +67,8 @@ go run ./cmd/panel
 面板默认拒绝访问私网地址。若 Kubernetes API 或 Helm 仓库位于私网，应将其精确网段加入 `PANEL_ALLOWED_PRIVATE_CIDRS`，不要无条件放开全部内网。
 
 Kubernetes 单类资源清单最多读取 5,000 项、20 页和 32 MiB 原始数据，Web 表格每页只渲染 100 行；工作负载同时查询多种类型时共享这一总预算并固定串行读取，指定类型时只请求对应 API。资源治理必须限定到单个命名空间，一次只读取 ResourceQuota、LimitRange、HPA 或 PodDisruptionBudget 中的一类；单次最多 4 页、1,000 个对象、4 MiB 原始数据和 4,096 条投影资源、约束或状态条件，ResourceQuota 另限制 1,024 个 Scope。HPA 只返回目标、副本与指标计数，不查询 Metrics API；PodDisruptionBudget 只返回选择器计数和可用性状态，不返回标签值或 disruptedPods。Pod Security Admission 态势仅按需读取 Namespace PartialObjectMetadata，每次最多 4 页、1,000 个命名空间、4 MiB 和每对象 256 个标签；只投影六个标准 PSA 标签的有限状态，不回显其他标签或非法值，不读取 Pod、API Server 默认配置和静态豁免。节点版本偏差态势仅在用户切换视图后读取一次 `/version` 和 Kubernetes Table 格式的 Node 清单；最多读取 4 页、1,000 个节点、每页 1 MiB 和总计 2 MiB，不回退完整 Node 对象、不轮询，也不据此宣称整个集群已可升级。废弃 API 请求证据仅在用户切换视图后占用一个 Kubernetes 读取槽，并从当前 API Server 实例读取一次 `/metrics`；响应上限为 8 MiB、单行 64 KiB、最多投影 512 条目标指标，只保留 group、version、resource、subresource 和 removed_release，不轮询、不缓存，也不读取 Prometheus、审计日志、客户端或对象身份，因此不代表整个高可用集群的完整使用情况。EndpointSlice 和 NetworkPolicy 清单沿用 4 页、1,000 个对象和 4 MiB 上限，并分别把单次端点/端口或 selector/规则/peer/port 处理量限制为 16,384 项；EndpointSlice 响应只返回 Service 归属、地址族和条件计数，不返回端点地址、节点、目标对象或端口详情，NetworkPolicy 响应只包含选择范围和规则计数，不返回标签、CIDR 或端口内容，也不推断有效连通性或 CNI 执行状态。CRD 清单仅使用 PartialObjectMetadata，最多读取 8 页、2,000 项和 16 MiB；完整 CRD 只在用户选择单个对象后读取，响应上限为 2 MiB，且不会返回 OpenAPI Schema、转换 Webhook 配置或扫描自定义资源实例。聚合 API 清单只在用户切换到对应视图后读取 APIService 元数据，单次最多 4 页、1,000 个对象、4 MiB 和 4,096 条状态条件；响应不包含 CA Bundle、标签、注解或条件消息，也不会探测聚合 API、Service、Pod、网络和证书。准入 Webhook、ValidatingAdmissionPolicy 与 Binding 清单同样只在对应视图激活时读取元数据，每类最多 4 页、1,000 项和 4 MiB，单个详情最多 2 MiB；响应只保留失败/匹配策略、参数类型、执行动作和有界计数，不返回 CA、URL、规则内容、selector、参数名称、CEL 或类型检查正文，也不回退 beta API 或执行 Discovery。事件中心不自动轮询，默认在 API Server 侧过滤 Warning，单次最多串行读取 8 页、2,000 项和 16 MiB 原始事件并返回最近 200 条，用户可请求的返回上限为 500。配置与存储清单使用 Kubernetes Table 内容协商，只接收最小摘要且不回退读取完整对象；Secret 必须限定到单个命名空间，PV 卷源、CSI 标识、挂载选项和 StorageClass 参数不会进入面板响应。访问控制清单一次只读取一种资源并使用元数据内容协商，命名空间资源不允许全集群读取；清单最多 8 页、2,000 项和 16 MiB，单对象详情最多 2 MiB，规则和主体分别最多展示 128 项，ServiceAccount 详情不返回 Secret 名称。ServiceAccount 权限模拟每次只提交一个 64 KiB 上限的 SubjectAccessReview，不扫描 RBAC 图谱、不轮询、不缓存结果。超过后端上限会停止读取并返回错误，避免大集群拖垮控制面。
+
+集群级中断预算证据只在用户切换视图后占用一个 Kubernetes 读取槽，并串行读取一次 `policy/v1` PDB 清单；最多 4 页、1,000 个对象、单页 2 MiB、总计 4 MiB 和 4,096 条投影条件。该视图不读取 Pod、Node 或工作负载，不执行 Eviction 或排空模拟；“当前受阻”仅表示已同步且匹配 Pod 的 PDB 当前不允许健康 Pod 自愿中断，不代表节点一定无法排空。
 
 TLS 证书证据只在用户切换视图后占用一个 Kubernetes 读取槽，复用一次 `/version` 请求已经完成验证的 TLS 握手状态，并将最多 64 KiB 的响应体流式丢弃。面板只返回 UTC 有效期、剩余秒数和固定状态，不返回 Subject、Issuer、SAN、Serial、指纹或证书内容；该证据可能来自负载均衡器或反向代理，仅代表当前连接命中的 TLS 终止端点，不扫描宿主机 PKI、其他控制面实例或执行证书续期。
 

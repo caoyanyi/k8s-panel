@@ -14,16 +14,18 @@ import type {
   KubernetesNodeVersionSkew,
   KubernetesNodeVersionSkewReport,
   KubernetesNodeVersionSkewStatus,
+  KubernetesPodDisruptionBudget,
   KubernetesPodSecurityAdmissionMode,
   KubernetesPodSecurityAdmissionNamespace,
 } from '../types'
 import { formatDateTime } from '../utils'
 
-type SecurityView = 'pod-security' | 'version-skew' | 'deprecated-api' | 'endpoint-certificate'
+type SecurityView = 'pod-security' | 'version-skew' | 'deprecated-api' | 'disruption-budget' | 'endpoint-certificate'
 type SecurityInventory =
   | { kind: 'pod-security'; items: KubernetesPodSecurityAdmissionNamespace[] }
   | { kind: 'version-skew'; report: KubernetesNodeVersionSkewReport }
   | { kind: 'deprecated-api'; items: KubernetesDeprecatedAPIRequest[] }
+  | { kind: 'disruption-budget'; items: KubernetesPodDisruptionBudget[] }
   | { kind: 'endpoint-certificate'; evidence: KubernetesEndpointCertificate | null }
 
 const emptyNodeVersionReport: KubernetesNodeVersionSkewReport = { api_server_version: '', nodes: [] }
@@ -61,6 +63,13 @@ const securityViewCopy: Record<SecurityView, {
     resourceLabel: '项证据',
     searchLabel: '搜索废弃 API 请求证据',
   },
+  'disruption-budget': {
+    filterLabel: '中断预算证据筛选',
+    loadingLabel: '正在读取集群中断预算证据',
+    placeholder: '搜索命名空间、PDB、状态或策略',
+    resourceLabel: '项中断预算',
+    searchLabel: '搜索中断预算证据',
+  },
   'endpoint-certificate': {
     loadingLabel: '正在读取当前连接端点 TLS 证书',
     resourceLabel: '项证书证据',
@@ -78,6 +87,7 @@ export function SecurityPage() {
       if (view === 'pod-security') return { kind: 'pod-security', items: [] }
       if (view === 'version-skew') return { kind: 'version-skew', report: emptyNodeVersionReport }
       if (view === 'deprecated-api') return { kind: 'deprecated-api', items: [] }
+      if (view === 'disruption-budget') return { kind: 'disruption-budget', items: [] }
       return { kind: 'endpoint-certificate', evidence: null }
     }
     if (view === 'pod-security') {
@@ -101,6 +111,13 @@ export function SecurityPage() {
       )
       return { kind: 'deprecated-api', items }
     }
+    if (view === 'disruption-budget') {
+      const items = await api.get<KubernetesPodDisruptionBudget[]>(
+        `/api/v1/clusters/${selectedClusterId}/upgrade-readiness/disruption-budgets`,
+        signal,
+      )
+      return { kind: 'disruption-budget', items }
+    }
     const evidence = await api.get<KubernetesEndpointCertificate>(
       `/api/v1/clusters/${selectedClusterId}/upgrade-readiness/endpoint-certificate`,
       signal,
@@ -110,6 +127,7 @@ export function SecurityPage() {
   const postureItems = inventory.data?.kind === 'pod-security' ? inventory.data.items : []
   const nodeVersionReport = inventory.data?.kind === 'version-skew' ? inventory.data.report : emptyNodeVersionReport
   const deprecatedAPIRequests = inventory.data?.kind === 'deprecated-api' ? inventory.data.items : []
+  const disruptionBudgets = inventory.data?.kind === 'disruption-budget' ? inventory.data.items : []
   const endpointCertificate = inventory.data?.kind === 'endpoint-certificate' ? inventory.data.evidence : null
   const normalizedSearch = search.trim().toLowerCase()
   const visiblePostureItems = useMemo(() => postureItems.filter((item) => (
@@ -121,18 +139,25 @@ export function SecurityPage() {
   const visibleDeprecatedAPIRequests = useMemo(() => deprecatedAPIRequests.filter((item) => (
     !normalizedSearch || deprecatedAPISearchText(item).includes(normalizedSearch)
   )), [deprecatedAPIRequests, normalizedSearch])
+  const visibleDisruptionBudgets = useMemo(() => disruptionBudgets.filter((item) => (
+    disruptionBudgetMatchesSearch(item, normalizedSearch)
+  )), [disruptionBudgets, normalizedSearch])
   useEffect(() => setPage(0), [normalizedSearch, selectedClusterId, view])
 
   const visibleCount = view === 'pod-security'
     ? visiblePostureItems.length
     : view === 'version-skew'
       ? visibleNodeVersions.length
-      : view === 'deprecated-api' ? visibleDeprecatedAPIRequests.length : endpointCertificate ? 1 : 0
+      : view === 'deprecated-api'
+        ? visibleDeprecatedAPIRequests.length
+        : view === 'disruption-budget' ? visibleDisruptionBudgets.length : endpointCertificate ? 1 : 0
   const activeCount = view === 'pod-security'
     ? postureItems.length
     : view === 'version-skew'
       ? nodeVersionReport.nodes.length
-      : view === 'deprecated-api' ? deprecatedAPIRequests.length : endpointCertificate ? 1 : 0
+      : view === 'deprecated-api'
+        ? deprecatedAPIRequests.length
+        : view === 'disruption-budget' ? disruptionBudgets.length : endpointCertificate ? 1 : 0
 
   const totalPages = Math.max(1, Math.ceil(visibleCount / TABLE_PAGE_SIZE))
   const currentPage = Math.min(page, totalPages - 1)
@@ -140,7 +165,9 @@ export function SecurityPage() {
   const pagePostureItems = visiblePostureItems.slice(pageStart, pageStart + TABLE_PAGE_SIZE)
   const pageNodeVersions = visibleNodeVersions.slice(pageStart, pageStart + TABLE_PAGE_SIZE)
   const pageDeprecatedAPIRequests = visibleDeprecatedAPIRequests.slice(pageStart, pageStart + TABLE_PAGE_SIZE)
+  const pageDisruptionBudgets = visibleDisruptionBudgets.slice(pageStart, pageStart + TABLE_PAGE_SIZE)
   const attentionCount = nodeVersionReport.nodes.filter((node) => attentionStatuses.has(node.status)).length
+  const blockedDisruptionBudgetCount = disruptionBudgets.filter((budget) => budget.disruption_status === 'blocked').length
   const selectView = (nextView: SecurityView) => {
     if (nextView === view) return
     setSearch('')
@@ -181,6 +208,12 @@ export function SecurityPage() {
               aria-pressed={view === 'version-skew'}
               onClick={() => selectView('version-skew')}
             >版本偏差</button>
+            <button
+              type="button"
+              className={view === 'disruption-budget' ? 'active' : ''}
+              aria-pressed={view === 'disruption-budget'}
+              onClick={() => selectView('disruption-budget')}
+            >中断预算</button>
             <button
               type="button"
               className={view === 'deprecated-api' ? 'active' : ''}
@@ -242,6 +275,16 @@ export function SecurityPage() {
                       page={currentPage}
                       onPage={setPage}
                     />
+                  ) : view === 'disruption-budget' ? (
+                    <DisruptionBudgetView
+                      items={pageDisruptionBudgets}
+                      totalItems={visibleDisruptionBudgets.length}
+                      evidenceCount={disruptionBudgets.length}
+                      blockedCount={blockedDisruptionBudgetCount}
+                      normalizedSearch={normalizedSearch}
+                      page={currentPage}
+                      onPage={setPage}
+                    />
                   ) : endpointCertificate ? (
                     <EndpointCertificateView evidence={endpointCertificate} />
                   ) : (
@@ -263,7 +306,7 @@ function EndpointCertificateView({ evidence }: { evidence: KubernetesEndpointCer
           <div className="inventory-alert" role="status">证书有效期需要关注</div>
         )}
       </div>
-      <div className="security-certificate-scope">
+      <div className="security-evidence-scope">
         <div><span>证据类型</span><strong>TLS 握手叶证书</strong></div>
         <span className="detail-muted">可能由负载均衡器或代理终止</span>
       </div>
@@ -281,6 +324,81 @@ function EndpointCertificateView({ evidence }: { evidence: KubernetesEndpointCer
       </div>
     </>
   )
+}
+
+interface DisruptionBudgetViewProps {
+  items: KubernetesPodDisruptionBudget[]
+  totalItems: number
+  evidenceCount: number
+  blockedCount: number
+  normalizedSearch: string
+  page: number
+  onPage: (page: number) => void
+}
+
+function DisruptionBudgetView({
+  items,
+  totalItems,
+  evidenceCount,
+  blockedCount,
+  normalizedSearch,
+  page,
+  onPage,
+}: DisruptionBudgetViewProps) {
+  return (
+    <>
+      <div className="security-evidence-summary">
+        <div><span>证据来源</span><strong>当前 PDB 控制器状态</strong></div>
+        {blockedCount > 0 && <div className="inventory-alert" role="status">{blockedCount} 项当前受阻证据</div>}
+      </div>
+      <div className="security-evidence-scope">
+        <div><span>判定范围</span><strong>健康 Pod 的自愿中断</strong></div>
+        <span className="detail-muted">不代表节点一定无法排空</span>
+      </div>
+      {totalItems === 0 ? (
+        <EmptyState title={normalizedSearch ? '没有匹配的中断预算证据' : evidenceCount === 0 ? '当前集群没有 PodDisruptionBudget' : '没有可展示的中断预算证据'} />
+      ) : (
+        <>
+          <div className="table-wrap" role="region" aria-label="集群中断预算升级证据" tabIndex={0}>
+            <table className="security-disruption-budget-table">
+              <thead><tr><th>预算</th><th>中断证据</th><th>选择范围</th><th>可用性约束</th><th>当前 / 期望健康</th><th>允许次数</th><th>预期 Pod</th><th>异常 Pod 策略</th><th>创建时间</th></tr></thead>
+              <tbody>{items.map((item) => (
+                <tr key={`${item.namespace}:${item.name}`}>
+                  <td>
+                    <div className="primary-cell">
+                      <strong>{item.name}</strong>
+                      <small className="mono">{item.namespace}</small>
+                    </div>
+                  </td>
+                  <td><StatusBadge status={item.disruption_status} /></td>
+                  <td>{disruptionBudgetSelectorLabel(item)}</td>
+                  <td><DisruptionBudgetAvailability item={item} /></td>
+                  <td className="mono">{item.current_healthy} / {item.desired_healthy}</td>
+                  <td className="mono">{item.disruptions_allowed}</td>
+                  <td className="mono">{item.expected_pods}</td>
+                  <td>{item.unhealthy_pod_eviction_policy}{item.unhealthy_pod_eviction_policy_defaulted ? '（默认）' : ''}</td>
+                  <td>{formatDateTime(item.created_at)}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+          <TablePagination page={page} totalItems={totalItems} onPage={onPage} />
+        </>
+      )}
+    </>
+  )
+}
+
+function DisruptionBudgetAvailability({ item }: { item: KubernetesPodDisruptionBudget }) {
+  if (item.min_available) return <div className="primary-cell"><strong className="mono">{item.min_available}</strong><small>最少可用</small></div>
+  if (item.max_unavailable) return <div className="primary-cell"><strong className="mono">{item.max_unavailable}</strong><small>最多不可用</small></div>
+  return <span className="detail-muted">未设置</span>
+}
+
+function disruptionBudgetSelectorLabel(item: KubernetesPodDisruptionBudget): string {
+  if (item.selector_mode === 'none') return '不匹配 Pod'
+  if (item.selector_mode === 'all') return '命名空间内全部 Pod'
+  return `${item.selector_label_count} 标签 · ${item.selector_expression_count} 表达式`
 }
 
 const endpointCertificateStatusLabels: Record<KubernetesEndpointCertificateStatus, string> = {
@@ -490,4 +608,20 @@ function deprecatedAPISearchText(item: KubernetesDeprecatedAPIRequest): string {
     item.removed_release,
     `v${item.removed_release}`,
   ].join(' ').toLowerCase()
+}
+
+function disruptionBudgetMatchesSearch(item: KubernetesPodDisruptionBudget, normalizedSearch: string): boolean {
+  if (!normalizedSearch) return true
+  const text = [
+    item.namespace,
+    item.name,
+    item.disruption_status,
+    statusLabel(item.disruption_status),
+    item.selector_mode,
+    disruptionBudgetSelectorLabel(item),
+    item.min_available ?? '',
+    item.max_unavailable ?? '',
+    item.unhealthy_pod_eviction_policy,
+  ].join(' ').toLowerCase()
+  return normalizedSearch.split(/\s+/).every((term) => text.includes(term))
 }

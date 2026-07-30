@@ -66,9 +66,26 @@ func (c *Client) PodDisruptionBudgets(
 	if err := domain.ValidateNamespace(namespace); err != nil {
 		return nil, err
 	}
-	items, err := c.listGovernanceRaw(
+	return c.listPodDisruptionBudgets(
 		ctx,
 		"/apis/policy/v1/namespaces/"+namespace+"/poddisruptionbudgets",
+		namespace,
+		false,
+	)
+}
+
+func (c *Client) DisruptionBudgets(ctx context.Context) ([]domain.KubernetesPodDisruptionBudget, error) {
+	return c.listPodDisruptionBudgets(ctx, "/apis/policy/v1/poddisruptionbudgets", "", true)
+}
+
+func (c *Client) listPodDisruptionBudgets(
+	ctx context.Context,
+	path, expectedNamespace string,
+	allNamespaces bool,
+) ([]domain.KubernetesPodDisruptionBudget, error) {
+	items, err := c.listGovernanceRaw(
+		ctx,
+		path,
 		"policy/v1",
 		"PodDisruptionBudgetList",
 	)
@@ -78,13 +95,18 @@ func (c *Client) PodDisruptionBudgets(
 	remainingConditions := maxGovernanceProjectedEntries
 	budgets := make([]domain.KubernetesPodDisruptionBudget, 0, len(items))
 	for _, item := range items {
-		budget, err := decodePodDisruptionBudget(item, namespace, &remainingConditions)
+		budget, err := decodePodDisruptionBudget(item, expectedNamespace, allNamespaces, &remainingConditions)
 		if err != nil {
 			return nil, err
 		}
 		budgets = append(budgets, budget)
 	}
-	sort.Slice(budgets, func(i, j int) bool { return budgets[i].Name < budgets[j].Name })
+	sort.Slice(budgets, func(i, j int) bool {
+		if budgets[i].Namespace != budgets[j].Namespace {
+			return budgets[i].Namespace < budgets[j].Namespace
+		}
+		return budgets[i].Name < budgets[j].Name
+	})
 	return budgets, nil
 }
 
@@ -164,6 +186,7 @@ func decodeHorizontalPodAutoscaler(
 func decodePodDisruptionBudget(
 	raw json.RawMessage,
 	expectedNamespace string,
+	allNamespaces bool,
 	remainingConditions *int,
 ) (domain.KubernetesPodDisruptionBudget, error) {
 	var source struct {
@@ -188,10 +211,18 @@ func decodePodDisruptionBudget(
 	if err := json.Unmarshal(raw, &source); err != nil {
 		return domain.KubernetesPodDisruptionBudget{}, fmt.Errorf("decode Kubernetes PodDisruptionBudget: %w", domain.ErrUpstream)
 	}
-	if err := validateGovernanceIdentity(
-		source.APIVersion, source.Kind, "policy/v1", "PodDisruptionBudget", source.Metadata, expectedNamespace,
-	); err != nil {
-		return domain.KubernetesPodDisruptionBudget{}, err
+	var identityErr error
+	if allNamespaces {
+		identityErr = validateGovernanceIdentityAnyNamespace(
+			source.APIVersion, source.Kind, "policy/v1", "PodDisruptionBudget", source.Metadata,
+		)
+	} else {
+		identityErr = validateGovernanceIdentity(
+			source.APIVersion, source.Kind, "policy/v1", "PodDisruptionBudget", source.Metadata, expectedNamespace,
+		)
+	}
+	if identityErr != nil {
+		return domain.KubernetesPodDisruptionBudget{}, identityErr
 	}
 	if availabilityValuePresent(source.Spec.MinAvailable) && availabilityValuePresent(source.Spec.MaxUnavailable) {
 		return domain.KubernetesPodDisruptionBudget{}, fmt.Errorf("Kubernetes disruption budget has mutually exclusive availability fields: %w", domain.ErrUpstream)
@@ -232,17 +263,35 @@ func decodePodDisruptionBudget(
 			selectorMode = domain.KubernetesSelectorFiltered
 		}
 	}
+	observed := generationObserved(source.Metadata.Generation, source.Status.ObservedGeneration)
 	return domain.KubernetesPodDisruptionBudget{
 		Namespace: source.Metadata.Namespace, Name: source.Metadata.Name,
 		SelectorMode: selectorMode, SelectorLabelCount: selectorLabelCount, SelectorExpressionCount: selectorExpressionCount,
 		MinAvailable: minAvailable, MaxUnavailable: maxUnavailable,
 		CurrentHealthy: source.Status.CurrentHealthy, DesiredHealthy: source.Status.DesiredHealthy,
 		DisruptionsAllowed: source.Status.DisruptionsAllowed, ExpectedPods: source.Status.ExpectedPods,
-		Observed:                   generationObserved(source.Metadata.Generation, source.Status.ObservedGeneration),
+		Observed:                   observed,
+		DisruptionStatus:           disruptionBudgetStatus(observed, source.Status.ExpectedPods, source.Status.DisruptionsAllowed),
 		UnhealthyPodEvictionPolicy: policy, UnhealthyPodEvictionPolicyDefaulted: policyDefaulted,
 		Conditions: conditions, ConditionCount: len(source.Status.Conditions), ConditionsTruncated: truncated,
 		CreatedAt: source.Metadata.CreationTimestamp,
 	}, nil
+}
+
+func disruptionBudgetStatus(
+	observed bool,
+	expectedPods, disruptionsAllowed int32,
+) domain.KubernetesDisruptionBudgetStatus {
+	if !observed {
+		return domain.DisruptionBudgetUnobserved
+	}
+	if expectedPods == 0 {
+		return domain.DisruptionBudgetInactive
+	}
+	if disruptionsAllowed == 0 {
+		return domain.DisruptionBudgetBlocked
+	}
+	return domain.DisruptionBudgetAvailable
 }
 
 func projectAvailabilityConditions(

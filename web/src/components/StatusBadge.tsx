@@ -35,6 +35,10 @@ const labels: Record<string, string> = {
   'outside-policy': '超出偏差范围',
   'newer-than-server': '新于 API Server',
   'major-mismatch': '主版本不一致',
+  available: '允许中断',
+  blocked: '当前受阻',
+  inactive: '未匹配 Pod',
+  unobserved: '待同步',
 }
 
 export function StatusBadge({ status }: StatusBadgeProps) {

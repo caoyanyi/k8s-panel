@@ -666,6 +666,26 @@ test('security posture loads each bounded projection only when selected', async 
   await expect(page.getByText('apps/v1beta1', { exact: true })).toBeVisible()
   await expect(page.getByText('extensions/v1beta1', { exact: true })).toHaveCount(0)
 
+  await page.getByRole('button', { name: '中断预算' }).click()
+  await expect(page.getByText('gateway-budget', { exact: true })).toBeVisible()
+  await expect(page.getByText('当前受阻', { exact: true })).toBeVisible()
+  await expect(page.getByText('允许中断', { exact: true })).toBeVisible()
+  await expect(page.getByText('1 项当前受阻证据', { exact: true })).toBeVisible()
+  await expect(page.getByText('不代表节点一定无法排空', { exact: true })).toBeVisible()
+  expect(requestedResources).toEqual([
+    '/api/v1/clusters/clu_1/pod-security-admission/namespaces',
+    '/api/v1/clusters/clu_1/upgrade-readiness/node-versions',
+    '/api/v1/clusters/clu_1/upgrade-readiness/deprecated-apis',
+    '/api/v1/clusters/clu_1/upgrade-readiness/disruption-budgets',
+  ])
+  expect(browserPaths).not.toContain('/api/v1/clusters/clu_1/pods')
+  expect(browserPaths).not.toContain('/api/v1/clusters/clu_1/nodes')
+  await page.screenshot({ path: `test-results/${testInfo.project.name}-security-disruption-budgets.png`, fullPage: true })
+
+  await page.getByLabel('搜索中断预算证据').fill('platform available')
+  await expect(page.getByText('platform-budget', { exact: true })).toBeVisible()
+  await expect(page.getByText('gateway-budget', { exact: true })).toHaveCount(0)
+
   await page.getByRole('button', { name: 'TLS 证书' }).click()
   await expect(page.getByText('当前连接端点', { exact: true })).toBeVisible()
   await expect(page.getByText('TLS 握手叶证书', { exact: true })).toBeVisible()
@@ -676,6 +696,7 @@ test('security posture loads each bounded projection only when selected', async 
     '/api/v1/clusters/clu_1/pod-security-admission/namespaces',
     '/api/v1/clusters/clu_1/upgrade-readiness/node-versions',
     '/api/v1/clusters/clu_1/upgrade-readiness/deprecated-apis',
+    '/api/v1/clusters/clu_1/upgrade-readiness/disruption-budgets',
     '/api/v1/clusters/clu_1/upgrade-readiness/endpoint-certificate',
   ])
   expect(browserPaths).not.toContain('/metrics')
@@ -1087,6 +1108,26 @@ async function mockSecurityPosture(page: Page, requestedResources: string[]) {
         {
           group: 'extensions', version: 'v1beta1', resource: 'ingresses', subresource: '',
           removed_release: '1.22',
+        },
+      ]
+    } else if (path === '/api/v1/clusters/clu_1/upgrade-readiness/disruption-budgets') {
+      requestedResources.push(path)
+      const baseBudget = {
+        selector_mode: 'filtered', selector_label_count: 1, selector_expression_count: 0,
+        min_available: '75%', current_healthy: 3, desired_healthy: 3,
+        expected_pods: 4, observed: true,
+        unhealthy_pod_eviction_policy: 'IfHealthyBudget', unhealthy_pod_eviction_policy_defaulted: true,
+        conditions: [], condition_count: 0, conditions_truncated: false,
+        created_at: '2026-07-30T08:00:00Z',
+      }
+      data = [
+        {
+          ...baseBudget, namespace: 'payments', name: 'gateway-budget',
+          disruptions_allowed: 0, disruption_status: 'blocked',
+        },
+        {
+          ...baseBudget, namespace: 'platform', name: 'platform-budget',
+          disruptions_allowed: 1, disruption_status: 'available',
         },
       ]
     } else if (path === '/api/v1/clusters/clu_1/upgrade-readiness/endpoint-certificate') {

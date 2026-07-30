@@ -128,6 +128,7 @@ func (s *Server) routes() {
 	s.mux.Handle("GET /api/v1/clusters/{id}/upgrade-readiness/node-versions", s.protected(http.HandlerFunc(s.nodeVersionSkew)))
 	s.mux.Handle("GET /api/v1/clusters/{id}/upgrade-readiness/deprecated-apis", s.protected(http.HandlerFunc(s.listDeprecatedAPIRequests)))
 	s.mux.Handle("GET /api/v1/clusters/{id}/upgrade-readiness/endpoint-certificate", s.protected(http.HandlerFunc(s.endpointCertificate)))
+	s.mux.Handle("GET /api/v1/clusters/{id}/upgrade-readiness/disruption-budgets", s.protected(http.HandlerFunc(s.listDisruptionBudgetEvidence)))
 	s.mux.Handle("GET /api/v1/clusters/{id}/nodes", s.protected(http.HandlerFunc(s.listNodes)))
 	s.mux.Handle("GET /api/v1/clusters/{id}/nodes/{name}", s.protected(http.HandlerFunc(s.getNodeDetail)))
 	s.mux.Handle("GET /api/v1/clusters/{id}/nodes/{name}/events", s.protected(http.HandlerFunc(s.listNodeEvents)))

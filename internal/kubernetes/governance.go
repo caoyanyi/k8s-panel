@@ -331,12 +331,35 @@ func validateGovernanceIdentity(
 	metadata governanceMetadata,
 	expectedNamespace string,
 ) error {
-	if apiVersion != expectedAPIVersion || kind != expectedKind || !validKubernetesMetadataString(metadata.Name) ||
-		metadata.CreationTimestamp.IsZero() {
-		return fmt.Errorf("invalid Kubernetes governance object identity: %w", domain.ErrUpstream)
+	if err := validateGovernanceObjectIdentity(apiVersion, kind, expectedAPIVersion, expectedKind, metadata); err != nil {
+		return err
 	}
 	if metadata.Namespace != expectedNamespace || domain.ValidateNamespace(metadata.Namespace) != nil {
 		return fmt.Errorf("Kubernetes governance object exceeded namespace scope: %w", domain.ErrUpstream)
+	}
+	return nil
+}
+
+func validateGovernanceIdentityAnyNamespace(
+	apiVersion, kind, expectedAPIVersion, expectedKind string,
+	metadata governanceMetadata,
+) error {
+	if err := validateGovernanceObjectIdentity(apiVersion, kind, expectedAPIVersion, expectedKind, metadata); err != nil {
+		return err
+	}
+	if domain.ValidateNamespace(metadata.Namespace) != nil {
+		return fmt.Errorf("Kubernetes governance object exceeded namespace scope: %w", domain.ErrUpstream)
+	}
+	return nil
+}
+
+func validateGovernanceObjectIdentity(
+	apiVersion, kind, expectedAPIVersion, expectedKind string,
+	metadata governanceMetadata,
+) error {
+	if apiVersion != expectedAPIVersion || kind != expectedKind || !validKubernetesMetadataString(metadata.Name) ||
+		metadata.CreationTimestamp.IsZero() {
+		return fmt.Errorf("invalid Kubernetes governance object identity: %w", domain.ErrUpstream)
 	}
 	return nil
 }

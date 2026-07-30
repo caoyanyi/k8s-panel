@@ -916,6 +916,22 @@ func (s *Service) EndpointCertificate(
 	return gateway.EndpointCertificate(ctx)
 }
 
+func (s *Service) DisruptionBudgets(
+	ctx context.Context,
+	clusterID string,
+) ([]domain.KubernetesPodDisruptionBudget, error) {
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	gateway, err := s.kubeGateway(ctx, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	return gateway.DisruptionBudgets(ctx)
+}
+
 func (s *Service) LimitRanges(
 	ctx context.Context,
 	clusterID, namespace string,

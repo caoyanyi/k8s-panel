@@ -538,6 +538,7 @@ export interface KubernetesHorizontalPodAutoscaler {
 }
 
 export type KubernetesSelectorMode = 'none' | 'all' | 'filtered'
+export type KubernetesDisruptionBudgetStatus = 'available' | 'blocked' | 'inactive' | 'unobserved'
 
 export interface KubernetesPodDisruptionBudget {
   namespace: string
@@ -552,6 +553,7 @@ export interface KubernetesPodDisruptionBudget {
   disruptions_allowed: number
   expected_pods: number
   observed: boolean
+  disruption_status: KubernetesDisruptionBudgetStatus
   unhealthy_pod_eviction_policy: string
   unhealthy_pod_eviction_policy_defaulted: boolean
   conditions: KubernetesPolicyCondition[]

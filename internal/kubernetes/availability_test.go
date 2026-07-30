@@ -151,6 +151,113 @@ func TestClientListsNamespaceAvailabilityPolicies(t *testing.T) {
 	}
 }
 
+func TestClientListsClusterDisruptionBudgetEvidence(t *testing.T) {
+	t.Parallel()
+
+	item := func(namespace, name string, generation int64, observedGeneration *int64, expectedPods, disruptionsAllowed int32) map[string]any {
+		status := map[string]any{
+			"currentHealthy": 3, "desiredHealthy": 3,
+			"expectedPods": expectedPods, "disruptionsAllowed": disruptionsAllowed,
+		}
+		if observedGeneration != nil {
+			status["observedGeneration"] = *observedGeneration
+		}
+		return map[string]any{
+			"apiVersion": "policy/v1", "kind": "PodDisruptionBudget",
+			"metadata": map[string]any{
+				"namespace": namespace, "name": name, "generation": generation,
+				"creationTimestamp": "2026-07-30T03:00:00Z",
+			},
+			"spec": map[string]any{
+				"selector":       map[string]any{"matchLabels": map[string]string{"private-app": "not-projected"}},
+				"maxUnavailable": 1,
+			},
+			"status": status,
+		}
+	}
+	observed := int64(2)
+	stale := int64(1)
+	var requests []string
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.URL.RequestURI())
+		if r.URL.Path != "/apis/policy/v1/poddisruptionbudgets" || r.URL.Query().Get("limit") != governanceListPageSize {
+			t.Errorf("request URI = %q", r.URL.RequestURI())
+		}
+		response := map[string]any{
+			"apiVersion": "policy/v1", "kind": "PodDisruptionBudgetList", "metadata": map[string]any{},
+			"items": []any{
+				item("beta", "inactive", 2, &observed, 0, 0),
+				item("alpha", "z-available", 2, &observed, 4, 1),
+			},
+		}
+		if r.URL.Query().Get("continue") == "page-two" {
+			response["items"] = []any{
+				item("gamma", "unobserved", 2, &stale, 4, 7),
+				item("alpha", "a-blocked", 2, &observed, 4, 0),
+			}
+		} else {
+			response["metadata"] = map[string]any{"continue": "page-two"}
+		}
+		writeTestJSON(t, w, response)
+	}))
+	t.Cleanup(server.Close)
+
+	budgets, err := newBatchTestClient(t, server).DisruptionBudgets(context.Background())
+	if err != nil {
+		t.Fatalf("DisruptionBudgets() error = %v", err)
+	}
+	if len(budgets) != 4 {
+		t.Fatalf("budgets = %#v", budgets)
+	}
+	want := []struct {
+		namespace string
+		name      string
+		status    domain.KubernetesDisruptionBudgetStatus
+	}{
+		{namespace: "alpha", name: "a-blocked", status: domain.DisruptionBudgetBlocked},
+		{namespace: "alpha", name: "z-available", status: domain.DisruptionBudgetAvailable},
+		{namespace: "beta", name: "inactive", status: domain.DisruptionBudgetInactive},
+		{namespace: "gamma", name: "unobserved", status: domain.DisruptionBudgetUnobserved},
+	}
+	for index, expected := range want {
+		budget := budgets[index]
+		if budget.Namespace != expected.namespace || budget.Name != expected.name || budget.DisruptionStatus != expected.status {
+			t.Errorf("budget[%d] = %#v", index, budget)
+		}
+	}
+	if budgets[3].Observed || budgets[3].DisruptionStatus != domain.DisruptionBudgetUnobserved {
+		t.Fatalf("stale budget = %#v", budgets[3])
+	}
+	if len(requests) != 2 || requests[0] != "/apis/policy/v1/poddisruptionbudgets?limit=250" ||
+		requests[1] != "/apis/policy/v1/poddisruptionbudgets?continue=page-two&limit=250" {
+		t.Fatalf("requests = %#v", requests)
+	}
+}
+
+func TestClientRejectsClusterDisruptionBudgetWithoutNamespace(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeTestJSON(t, w, map[string]any{
+			"apiVersion": "policy/v1", "kind": "PodDisruptionBudgetList", "metadata": map[string]any{},
+			"items": []any{map[string]any{
+				"apiVersion": "policy/v1", "kind": "PodDisruptionBudget",
+				"metadata": map[string]any{
+					"name": "unscoped", "generation": 1, "creationTimestamp": "2026-07-30T03:00:00Z",
+				},
+				"spec":   map[string]any{"maxUnavailable": 1},
+				"status": map[string]any{"observedGeneration": 1},
+			}},
+		})
+	}))
+	t.Cleanup(server.Close)
+
+	_, err := newBatchTestClient(t, server).DisruptionBudgets(context.Background())
+	if !errors.Is(err, domain.ErrUpstream) || !strings.Contains(err.Error(), "namespace scope") {
+		t.Fatalf("DisruptionBudgets() error = %v", err)
+	}
+}
+
 func TestClientBoundsAvailabilityConditionProjection(t *testing.T) {
 	conditions := make([]any, maxAvailabilityConditionsPerObject)
 	for index := range conditions {
