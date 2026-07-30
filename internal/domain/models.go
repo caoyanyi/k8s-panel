@@ -593,6 +593,41 @@ type KubernetesCustomResourceDefinition struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+type KubernetesCertificateSigningRequest struct {
+	Name      string    `json:"name"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type KubernetesCertificateSigningRequestState string
+
+const (
+	CertificateSigningRequestPending  KubernetesCertificateSigningRequestState = "pending"
+	CertificateSigningRequestApproved KubernetesCertificateSigningRequestState = "approved"
+	CertificateSigningRequestDenied   KubernetesCertificateSigningRequestState = "denied"
+	CertificateSigningRequestFailed   KubernetesCertificateSigningRequestState = "failed"
+	CertificateSigningRequestIssued   KubernetesCertificateSigningRequestState = "issued"
+)
+
+type KubernetesCertificateSigningRequestCondition struct {
+	Type               string     `json:"type"`
+	Status             string     `json:"status"`
+	Reason             string     `json:"reason,omitempty"`
+	LastUpdateTime     *time.Time `json:"last_update_time,omitempty"`
+	LastTransitionTime *time.Time `json:"last_transition_time,omitempty"`
+}
+
+type KubernetesCertificateSigningRequestDetail struct {
+	KubernetesCertificateSigningRequest
+	Requester                  string                                         `json:"requester"`
+	SignerName                 string                                         `json:"signer_name"`
+	RequestedExpirationSeconds *int32                                         `json:"requested_expiration_seconds,omitempty"`
+	Usages                     []string                                       `json:"usages"`
+	State                      KubernetesCertificateSigningRequestState       `json:"state"`
+	CertificateIssued          bool                                           `json:"certificate_issued"`
+	Conditions                 []KubernetesCertificateSigningRequestCondition `json:"conditions"`
+	ConditionCount             int                                            `json:"condition_count"`
+}
+
 type KubernetesAPIService struct {
 	Name                       string     `json:"name"`
 	Group                      string     `json:"group"`

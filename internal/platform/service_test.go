@@ -688,6 +688,14 @@ func TestServiceRejectsKubernetesReadsDuringCriticalResourcePressure(t *testing.
 			_, err := service.CustomResourceDefinition(context.Background(), cluster.ID, "widgets.platform.example.com")
 			return err
 		}},
+		{name: "certificate signing requests", call: func() error {
+			_, err := service.CertificateSigningRequests(context.Background(), cluster.ID)
+			return err
+		}},
+		{name: "certificate signing request detail", call: func() error {
+			_, err := service.CertificateSigningRequest(context.Background(), cluster.ID, "worker-01")
+			return err
+		}},
 		{name: "API services", call: func() error {
 			_, err := service.APIServices(context.Background(), cluster.ID)
 			return err
@@ -1409,6 +1417,48 @@ func TestServiceListsCustomResourceDefinitionsAndValidatesDetailNameBeforeGatewa
 	}
 	if gateway.crdDetailCalls.Load() != 1 {
 		t.Fatal("invalid CRD name reached Kubernetes gateway")
+	}
+}
+
+func TestServiceListsCertificateSigningRequestsAndValidatesDetailNameBeforeGateway(t *testing.T) {
+	t.Parallel()
+
+	const name = "worker-01"
+	gateway := &fakeKubeGateway{
+		probe: domain.ClusterProbe{Version: "v1.36.2"},
+		csrs:  []domain.KubernetesCertificateSigningRequest{{Name: name}},
+		csrDetail: domain.KubernetesCertificateSigningRequestDetail{
+			KubernetesCertificateSigningRequest: domain.KubernetesCertificateSigningRequest{Name: name},
+			Requester:                           "system:node:worker-01", SignerName: "example.com/node-client",
+			Usages: []string{"client auth"}, State: domain.CertificateSigningRequestPending,
+		},
+	}
+	service, _, _ := newTestService(t, serviceFakes{kube: gateway})
+	cluster, err := service.CreateCluster(context.Background(), "admin", "req_cluster", domain.ClusterInput{
+		Name: "cluster", Environment: domain.EnvironmentDevelopment, Server: "https://api.example.com", BearerToken: "token",
+	})
+	if err != nil {
+		t.Fatalf("CreateCluster() error = %v", err)
+	}
+
+	items, err := service.CertificateSigningRequests(context.Background(), cluster.ID)
+	if err != nil || len(items) != 1 || items[0].Name != name {
+		t.Fatalf("CertificateSigningRequests() = %#v, %v", items, err)
+	}
+	detail, err := service.CertificateSigningRequest(context.Background(), cluster.ID, name)
+	if err != nil || detail.Name != name || detail.Requester != "system:node:worker-01" {
+		t.Fatalf("CertificateSigningRequest() = %#v, %v", detail, err)
+	}
+	if gateway.csrName != name || gateway.csrListCalls.Load() != 1 || gateway.csrDetailCalls.Load() != 1 {
+		t.Fatalf("CSR gateway inputs = name %q, list calls %d, detail calls %d",
+			gateway.csrName, gateway.csrListCalls.Load(), gateway.csrDetailCalls.Load())
+	}
+
+	if _, err := service.CertificateSigningRequest(context.Background(), cluster.ID, "../certificatesigningrequests"); err == nil {
+		t.Fatal("CertificateSigningRequest() accepted an invalid name")
+	}
+	if gateway.csrDetailCalls.Load() != 1 {
+		t.Fatal("invalid CSR name reached Kubernetes gateway")
 	}
 }
 
@@ -2429,6 +2479,11 @@ type fakeKubeGateway struct {
 	crdName                          string
 	crdListCalls                     atomic.Int64
 	crdDetailCalls                   atomic.Int64
+	csrs                             []domain.KubernetesCertificateSigningRequest
+	csrDetail                        domain.KubernetesCertificateSigningRequestDetail
+	csrName                          string
+	csrListCalls                     atomic.Int64
+	csrDetailCalls                   atomic.Int64
 	apiServices                      []domain.KubernetesAPIService
 	apiServiceCalls                  atomic.Int64
 	admissionWebhooks                []domain.KubernetesAdmissionWebhookConfiguration
@@ -2612,6 +2667,20 @@ func (g *fakeKubeGateway) CustomResourceDefinition(_ context.Context, name strin
 	g.crdName = name
 	g.mutationMu.Unlock()
 	return g.crdDetail, nil
+}
+func (g *fakeKubeGateway) CertificateSigningRequests(context.Context) ([]domain.KubernetesCertificateSigningRequest, error) {
+	g.csrListCalls.Add(1)
+	return append([]domain.KubernetesCertificateSigningRequest(nil), g.csrs...), nil
+}
+func (g *fakeKubeGateway) CertificateSigningRequest(
+	_ context.Context,
+	name string,
+) (domain.KubernetesCertificateSigningRequestDetail, error) {
+	g.csrDetailCalls.Add(1)
+	g.mutationMu.Lock()
+	g.csrName = name
+	g.mutationMu.Unlock()
+	return g.csrDetail, nil
 }
 func (g *fakeKubeGateway) APIServices(context.Context) ([]domain.KubernetesAPIService, error) {
 	g.apiServiceCalls.Add(1)

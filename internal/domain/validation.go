@@ -334,6 +334,13 @@ func ValidateCustomResourceDefinitionName(name string) error {
 	return nil
 }
 
+func ValidateCertificateSigningRequestName(name string) error {
+	if !validDNSSubdomain(name) {
+		return Invalid("name", "must be a valid Kubernetes CertificateSigningRequest name")
+	}
+	return nil
+}
+
 func ValidateAPIServiceName(name string) error {
 	version, group, found := strings.Cut(name, ".")
 	if !found || len(name) > 253 || !validDNSLabel(version) || (group != "" && !validDNSSubdomain(group)) {

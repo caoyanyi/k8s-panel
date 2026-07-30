@@ -181,6 +181,32 @@ export interface KubernetesCustomResourceDefinition {
   created_at: string
 }
 
+export interface KubernetesCertificateSigningRequest {
+  name: string
+  created_at: string
+}
+
+export type KubernetesCertificateSigningRequestState = 'pending' | 'approved' | 'denied' | 'failed' | 'issued'
+
+export interface KubernetesCertificateSigningRequestCondition {
+  type: string
+  status: 'True' | 'False' | 'Unknown'
+  reason?: string
+  last_update_time?: string
+  last_transition_time?: string
+}
+
+export interface KubernetesCertificateSigningRequestDetail extends KubernetesCertificateSigningRequest {
+  requester: string
+  signer_name: string
+  requested_expiration_seconds?: number
+  usages: string[]
+  state: KubernetesCertificateSigningRequestState
+  certificate_issued: boolean
+  conditions: KubernetesCertificateSigningRequestCondition[]
+  condition_count: number
+}
+
 export interface KubernetesAPIService {
   name: string
   group: string

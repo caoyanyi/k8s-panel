@@ -181,6 +181,47 @@ describe('ClusterResourcesPage', () => {
     expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/custom-resource-definitions'))).toBe(false)
   })
 
+  it('loads CSR metadata and one redacted detail only on demand', async () => {
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const path = String(input)
+      if (path.endsWith(`/certificate-signing-requests/${certificateSigningRequest.name}`)) {
+        return Promise.resolve(dataResponse(certificateSigningRequestDetail))
+      }
+      if (path.endsWith('/certificate-signing-requests')) return Promise.resolve(dataResponse([certificateSigningRequest]))
+      if (path.endsWith('/nodes')) return Promise.resolve(dataResponse([node]))
+      return Promise.resolve(errorResponse(404, 'not_found'))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const user = userEvent.setup()
+
+    renderPage(context)
+    await screen.findByText(node.name)
+    expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/certificate-signing-requests'))).toBe(false)
+    await user.click(screen.getByRole('button', { name: '证书请求' }))
+
+    expect(await screen.findByText(certificateSigningRequest.name)).toBeInTheDocument()
+    expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith(`/${certificateSigningRequest.name}`))).toBe(false)
+    expect(screen.queryByText(certificateSigningRequestDetail.requester)).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: `查看 ${certificateSigningRequest.name}` }))
+
+    const dialog = await screen.findByRole('dialog', { name: `证书请求 · ${certificateSigningRequest.name}` })
+    expect(within(dialog).getByText('已批准，等待签发')).toBeInTheDocument()
+    expect(within(dialog).getByText(certificateSigningRequestDetail.requester)).toBeInTheDocument()
+    expect(within(dialog).getByText(certificateSigningRequestDetail.signer_name)).toBeInTheDocument()
+    expect(within(dialog).getByText('1 天（请求值）')).toBeInTheDocument()
+    expect(within(dialog).getByText('client auth')).toBeInTheDocument()
+    expect(within(dialog).getByText('digital signature')).toBeInTheDocument()
+    expect(within(dialog).getByText('Approved')).toBeInTheDocument()
+    expect(within(dialog).getByText('AutoApproved')).toBeInTheDocument()
+    expect(within(dialog).queryByText('private-pkcs10')).not.toBeInTheDocument()
+    expect(within(dialog).queryByText('private-certificate')).not.toBeInTheDocument()
+    expect(within(dialog).queryByText('private-group')).not.toBeInTheDocument()
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/v1/clusters/clu_1/certificate-signing-requests/${certificateSigningRequest.name}`,
+      expect.objectContaining({ credentials: 'same-origin' }),
+    )
+  })
+
   it('loads one admission webhook kind and one redacted detail on demand', async () => {
     const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL) => {
       const path = String(input)
@@ -338,6 +379,25 @@ const apiService = {
   availability_reason: 'FailedDiscoveryCheck', availability_transition_time: '2026-07-26T08:02:00Z',
   condition_count: 1, insecure_skip_tls_verify: true, group_priority_minimum: 100,
   version_priority: 100, created_at: '2026-07-26T08:00:00Z',
+}
+
+const certificateSigningRequest = {
+  name: 'worker-01', created_at: '2026-07-30T09:00:00Z',
+}
+
+const certificateSigningRequestDetail = {
+  ...certificateSigningRequest,
+  requester: 'system:node:worker-01', signer_name: 'example.com/node-client',
+  requested_expiration_seconds: 86400, usages: ['client auth', 'digital signature'],
+  state: 'approved', certificate_issued: false,
+  conditions: [{
+    type: 'Approved', status: 'True', reason: 'AutoApproved',
+    last_update_time: '2026-07-30T09:01:00Z', last_transition_time: '2026-07-30T09:00:30Z',
+    message: 'private approval message',
+  }],
+  condition_count: 1,
+  request: 'private-pkcs10', certificate: 'private-certificate',
+  uid: 'private-uid', groups: ['private-group'], extra: { private: ['private-value'] },
 }
 
 const admissionWebhook = {

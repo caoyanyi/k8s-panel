@@ -607,6 +607,39 @@ func TestValidateCustomResourceDefinitionName(t *testing.T) {
 	}
 }
 
+func TestValidateCertificateSigningRequestName(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		value     string
+		wantField string
+	}{
+		{name: "dns label", value: "worker-01"},
+		{name: "dns subdomain", value: "worker-01.example.com"},
+		{name: "empty", value: "", wantField: "name"},
+		{name: "uppercase", value: "Worker-01", wantField: "name"},
+		{name: "path traversal", value: "../certificatesigningrequests", wantField: "name"},
+		{name: "too long", value: strings.Repeat("a", 254), wantField: "name"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := ValidateCertificateSigningRequestName(tt.value)
+			if tt.wantField == "" {
+				if err != nil {
+					t.Fatalf("ValidateCertificateSigningRequestName() error = %v", err)
+				}
+				return
+			}
+			var validationErr *ValidationError
+			if !errors.As(err, &validationErr) || validationErr.Field != tt.wantField {
+				t.Fatalf("ValidateCertificateSigningRequestName() error = %v, want field %q", err, tt.wantField)
+			}
+		})
+	}
+}
+
 func TestValidateAPIServiceName(t *testing.T) {
 	t.Parallel()
 

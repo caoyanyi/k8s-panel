@@ -239,6 +239,7 @@ td strong { color: var(--text); font-size: 12px; }
 .scheduling-disabled { color: var(--danger); font-size: 11px; font-weight: 650; white-space: nowrap; }
 .node-table { min-width: 1120px; }
 .crd-table { min-width: 920px; }
+.csr-table { min-width: 720px; }
 .api-service-table { min-width: 1240px; }
 .security-risk { color: var(--danger); font-size: 11px; font-weight: 650; white-space: nowrap; }
 .network-table { min-width: 1180px; }
@@ -429,6 +430,7 @@ select:disabled { cursor: not-allowed; background: #f3f5f4; color: #89938d; }
 .access-subject-table { min-width: 680px; }
 .crd-version-table { min-width: 760px; }
 .crd-condition-table { min-width: 820px; }
+.csr-condition-table { min-width: 820px; }
 .admission-webhook-detail-table { min-width: 1480px; }
 .admission-webhook-detail-table td { max-width: 260px; overflow-wrap: anywhere; }
 .access-list-cell { max-width: 320px; line-height: 1.45; overflow-wrap: anywhere; }

@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { api } from '../api'
 import { AdmissionPolicyResourceDetailModal } from '../components/AdmissionPolicyResourceDetailModal'
 import { AdmissionWebhookConfigurationDetailModal } from '../components/AdmissionWebhookConfigurationDetailModal'
+import { CertificateSigningRequestDetailModal } from '../components/CertificateSigningRequestDetailModal'
 import { EmptyState, ErrorState, LoadingState } from '../components/DataState'
 import { CustomResourceDefinitionDetailModal } from '../components/CustomResourceDefinitionDetailModal'
 import { NodeDetailModal } from '../components/NodeDetailModal'
@@ -16,12 +17,13 @@ import type {
   KubernetesAdmissionPolicyResource,
   KubernetesAdmissionWebhookConfiguration,
   KubernetesAPIService,
+  KubernetesCertificateSigningRequest,
   KubernetesCustomResourceDefinition,
   Namespace,
 } from '../types'
 import { formatDateTime } from '../utils'
 
-type ResourceView = 'nodes' | 'namespaces' | 'crds' | 'api-services' | 'admission-webhooks'
+type ResourceView = 'nodes' | 'namespaces' | 'crds' | 'certificate-signing-requests' | 'api-services' | 'admission-webhooks'
 type AdmissionResourceView = 'validating-webhooks' | 'mutating-webhooks' | 'policies' | 'bindings'
 
 export function ClusterResourcesPage() {
@@ -31,6 +33,7 @@ export function ClusterResourcesPage() {
   const [page, setPage] = useState(0)
   const [selectedNode, setSelectedNode] = useState('')
   const [selectedCRD, setSelectedCRD] = useState<KubernetesCustomResourceDefinition | null>(null)
+  const [selectedCertificateSigningRequest, setSelectedCertificateSigningRequest] = useState<KubernetesCertificateSigningRequest | null>(null)
   const [admissionView, setAdmissionView] = useState<AdmissionResourceView>('validating-webhooks')
   const [selectedAdmissionWebhook, setSelectedAdmissionWebhook] = useState<KubernetesAdmissionWebhookConfiguration | null>(null)
   const [selectedAdmissionPolicyResource, setSelectedAdmissionPolicyResource] = useState<KubernetesAdmissionPolicyResource | null>(null)
@@ -52,6 +55,12 @@ export function ClusterResourcesPage() {
   const apiServices = useResource(
     (signal) => selectedClusterId && view === 'api-services'
       ? api.get<KubernetesAPIService[]>(`/api/v1/clusters/${selectedClusterId}/api-services`, signal)
+      : Promise.resolve([]),
+    [selectedClusterId, view],
+  )
+  const certificateSigningRequests = useResource(
+    (signal) => selectedClusterId && view === 'certificate-signing-requests'
+      ? api.get<KubernetesCertificateSigningRequest[]>(`/api/v1/clusters/${selectedClusterId}/certificate-signing-requests`, signal)
       : Promise.resolve([]),
     [selectedClusterId, view],
   )
@@ -81,6 +90,7 @@ export function ClusterResourcesPage() {
   useEffect(() => {
     setSelectedNode('')
     setSelectedCRD(null)
+    setSelectedCertificateSigningRequest(null)
     setSelectedAdmissionWebhook(null)
     setSelectedAdmissionPolicyResource(null)
   }, [selectedClusterId, view])
@@ -102,6 +112,9 @@ export function ClusterResourcesPage() {
   const visibleAPIServices = useMemo(() => (apiServices.data ?? []).filter((resource) => (
     !normalizedSearch || `${resource.name} ${resource.group} ${resource.version} ${resource.service_namespace ?? ''} ${resource.service_name ?? ''} ${resource.availability_reason ?? ''}`.toLowerCase().includes(normalizedSearch)
   )), [apiServices.data, normalizedSearch])
+  const visibleCertificateSigningRequests = useMemo(() => (certificateSigningRequests.data ?? []).filter((resource) => (
+    !normalizedSearch || resource.name.toLowerCase().includes(normalizedSearch)
+  )), [certificateSigningRequests.data, normalizedSearch])
   const visibleAdmissionWebhooks = useMemo(() => (admissionWebhooks.data ?? []).filter((resource) => (
     !normalizedSearch || `${resource.name} ${resource.kind}`.toLowerCase().includes(normalizedSearch)
   )), [admissionWebhooks.data, normalizedSearch])
@@ -114,12 +127,13 @@ export function ClusterResourcesPage() {
   const activeAdmissionResource = admissionView === 'policies' ? admissionPolicies
     : admissionView === 'bindings' ? admissionPolicyBindings : admissionWebhooks
   const active = view === 'admission-webhooks' ? activeAdmissionResource
-    : { nodes, namespaces, crds: customResourceDefinitions, 'api-services': apiServices }[view]
+    : { nodes, namespaces, crds: customResourceDefinitions, 'certificate-signing-requests': certificateSigningRequests, 'api-services': apiServices }[view]
   const activeCount = active.data?.length ?? 0
   const visibleCount = {
     nodes: visibleNodes.length,
     namespaces: visibleNamespaces.length,
     crds: visibleCustomResourceDefinitions.length,
+    'certificate-signing-requests': visibleCertificateSigningRequests.length,
     'api-services': visibleAPIServices.length,
     'admission-webhooks': admissionView === 'policies' ? visibleAdmissionPolicies.length
       : admissionView === 'bindings' ? visibleAdmissionPolicyBindings.length : visibleAdmissionWebhooks.length,
@@ -131,17 +145,19 @@ export function ClusterResourcesPage() {
   const pageNamespaces = visibleNamespaces.slice(pageStart, pageStart + TABLE_PAGE_SIZE)
   const pageCustomResourceDefinitions = visibleCustomResourceDefinitions.slice(pageStart, pageStart + TABLE_PAGE_SIZE)
   const pageAPIServices = visibleAPIServices.slice(pageStart, pageStart + TABLE_PAGE_SIZE)
+  const pageCertificateSigningRequests = visibleCertificateSigningRequests.slice(pageStart, pageStart + TABLE_PAGE_SIZE)
   const pageAdmissionWebhooks = visibleAdmissionWebhooks.slice(pageStart, pageStart + TABLE_PAGE_SIZE)
   const pageAdmissionPolicies = visibleAdmissionPolicies.slice(pageStart, pageStart + TABLE_PAGE_SIZE)
   const pageAdmissionPolicyBindings = visibleAdmissionPolicyBindings.slice(pageStart, pageStart + TABLE_PAGE_SIZE)
   const admissionResourceLabel = admissionView === 'policies' ? '校验策略'
     : admissionView === 'bindings' ? '策略绑定' : 'Webhook 配置'
   const resourceLabel = view === 'admission-webhooks' ? admissionResourceLabel
-    : { nodes: '节点', namespaces: '命名空间', crds: 'CRD', 'api-services': '聚合 API' }[view]
+    : { nodes: '节点', namespaces: '命名空间', crds: 'CRD', 'certificate-signing-requests': '证书请求', 'api-services': '聚合 API' }[view]
   const searchPlaceholder = {
     nodes: '搜索节点、IP 或角色',
     namespaces: '搜索命名空间或标签',
     crds: '搜索资源或 API 组',
+    'certificate-signing-requests': '搜索证书请求名称',
     'api-services': '搜索 API、Service 或状态原因',
     'admission-webhooks': admissionView === 'policies' ? '搜索校验准入策略'
       : admissionView === 'bindings' ? '搜索准入策略绑定' : '搜索准入 Webhook 配置',
@@ -161,6 +177,7 @@ export function ClusterResourcesPage() {
             <button type="button" className={view === 'nodes' ? 'active' : ''} onClick={() => setView('nodes')}>节点</button>
             <button type="button" className={view === 'namespaces' ? 'active' : ''} onClick={() => setView('namespaces')}>命名空间</button>
             <button type="button" className={view === 'crds' ? 'active' : ''} onClick={() => setView('crds')}>CRD</button>
+            <button type="button" className={view === 'certificate-signing-requests' ? 'active' : ''} onClick={() => setView('certificate-signing-requests')}>证书请求</button>
             <button type="button" className={view === 'api-services' ? 'active' : ''} onClick={() => setView('api-services')}>聚合 API</button>
             <button type="button" className={view === 'admission-webhooks' ? 'active' : ''} onClick={() => setView('admission-webhooks')}>准入</button>
           </div>
@@ -194,6 +211,12 @@ export function ClusterResourcesPage() {
                   : visibleAPIServices.length === 0 ? <EmptyState title={normalizedSearch ? '没有匹配的聚合 API' : '当前集群没有聚合 API'} />
                     : <><APIServiceTable resources={pageAPIServices} /><TablePagination page={currentPage} totalItems={visibleAPIServices.length} onPage={setPage} /></>
             )}
+            {view === 'certificate-signing-requests' && (
+              certificateSigningRequests.loading ? <LoadingState label="正在读取证书请求元数据" />
+                : certificateSigningRequests.error ? <ErrorState error={certificateSigningRequests.error} onRetry={() => void certificateSigningRequests.refresh()} />
+                  : visibleCertificateSigningRequests.length === 0 ? <EmptyState title={normalizedSearch ? '没有匹配的证书请求' : '当前集群没有证书请求'} />
+                    : <><CertificateSigningRequestTable resources={pageCertificateSigningRequests} onSelect={setSelectedCertificateSigningRequest} /><TablePagination page={currentPage} totalItems={visibleCertificateSigningRequests.length} onPage={setPage} /></>
+            )}
             {view === 'admission-webhooks' && (
               admissionView === 'policies' ? (
                 admissionPolicies.loading ? <LoadingState label="正在读取校验准入策略元数据" />
@@ -217,8 +240,33 @@ export function ClusterResourcesPage() {
       )}
       {selectedNode && <NodeDetailModal clusterId={selectedClusterId} nodeName={selectedNode} open onClose={() => setSelectedNode('')} />}
       {selectedCRD && <CustomResourceDefinitionDetailModal clusterId={selectedClusterId} resource={selectedCRD} onClose={() => setSelectedCRD(null)} />}
+      {selectedCertificateSigningRequest && <CertificateSigningRequestDetailModal clusterId={selectedClusterId} resource={selectedCertificateSigningRequest} onClose={() => setSelectedCertificateSigningRequest(null)} />}
       {selectedAdmissionWebhook && <AdmissionWebhookConfigurationDetailModal clusterId={selectedClusterId} resource={selectedAdmissionWebhook} onClose={() => setSelectedAdmissionWebhook(null)} />}
       {selectedAdmissionPolicyResource && <AdmissionPolicyResourceDetailModal clusterId={selectedClusterId} resource={selectedAdmissionPolicyResource} onClose={() => setSelectedAdmissionPolicyResource(null)} />}
+    </div>
+  )
+}
+
+function CertificateSigningRequestTable({
+  resources,
+  onSelect,
+}: {
+  resources: KubernetesCertificateSigningRequest[]
+  onSelect: (resource: KubernetesCertificateSigningRequest) => void
+}) {
+  return (
+    <div className="table-wrap" role="region" aria-label="证书请求清单" tabIndex={0}>
+      <table className="csr-table">
+        <thead><tr><th>名称</th><th>作用域</th><th>创建时间</th><th className="actions-column">操作</th></tr></thead>
+        <tbody>{resources.map((resource) => (
+          <tr key={resource.name}>
+            <td className="mono"><strong>{resource.name}</strong></td>
+            <td><span className="kind-label">集群级</span></td>
+            <td>{formatDateTime(resource.created_at)}</td>
+            <td className="actions-column"><button type="button" className="icon-button" aria-label={`查看 ${resource.name}`} title="查看证书请求详情" onClick={() => onSelect(resource)}><Eye size={16} /></button></td>
+          </tr>
+        ))}</tbody>
+      </table>
     </div>
   )
 }

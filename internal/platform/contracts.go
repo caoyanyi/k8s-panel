@@ -57,6 +57,8 @@ type KubeGateway interface {
 	NodeEvents(context.Context, string, int) ([]domain.KubernetesEvent, error)
 	CustomResourceDefinitions(context.Context) ([]domain.KubernetesCustomResourceDefinition, error)
 	CustomResourceDefinition(context.Context, string) (domain.KubernetesCustomResourceDefinitionDetail, error)
+	CertificateSigningRequests(context.Context) ([]domain.KubernetesCertificateSigningRequest, error)
+	CertificateSigningRequest(context.Context, string) (domain.KubernetesCertificateSigningRequestDetail, error)
 	APIServices(context.Context) ([]domain.KubernetesAPIService, error)
 	AdmissionWebhookConfigurations(context.Context, domain.KubernetesAdmissionWebhookConfigurationKind) ([]domain.KubernetesAdmissionWebhookConfiguration, error)
 	AdmissionWebhookConfiguration(context.Context, domain.KubernetesAdmissionWebhookConfigurationKind, string) (domain.KubernetesAdmissionWebhookConfigurationDetail, error)

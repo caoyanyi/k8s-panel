@@ -504,6 +504,41 @@ func (s *Service) CustomResourceDefinition(
 	return gateway.CustomResourceDefinition(ctx, name)
 }
 
+func (s *Service) CertificateSigningRequests(
+	ctx context.Context,
+	clusterID string,
+) ([]domain.KubernetesCertificateSigningRequest, error) {
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	gateway, err := s.kubeGateway(ctx, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	return gateway.CertificateSigningRequests(ctx)
+}
+
+func (s *Service) CertificateSigningRequest(
+	ctx context.Context,
+	clusterID, name string,
+) (domain.KubernetesCertificateSigningRequestDetail, error) {
+	if err := domain.ValidateCertificateSigningRequestName(name); err != nil {
+		return domain.KubernetesCertificateSigningRequestDetail{}, err
+	}
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return domain.KubernetesCertificateSigningRequestDetail{}, err
+	}
+	defer release()
+	gateway, err := s.kubeGateway(ctx, clusterID)
+	if err != nil {
+		return domain.KubernetesCertificateSigningRequestDetail{}, err
+	}
+	return gateway.CertificateSigningRequest(ctx, name)
+}
+
 func (s *Service) APIServices(ctx context.Context, clusterID string) ([]domain.KubernetesAPIService, error) {
 	release, err := s.acquireKubernetesRead(ctx)
 	if err != nil {

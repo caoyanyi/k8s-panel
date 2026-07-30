@@ -56,6 +56,11 @@ func TestServerAuthenticationAndClusterLifecycle(t *testing.T) {
 	if unauthorizedCRDs.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthorized CRD status = %d, want 401", unauthorizedCRDs.Code)
 	}
+	unauthorizedCSRs := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorizedCSRs, httptest.NewRequest(http.MethodGet, "/api/v1/clusters/clu_1/certificate-signing-requests", nil))
+	if unauthorizedCSRs.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized CSR status = %d, want 401", unauthorizedCSRs.Code)
+	}
 	unauthorizedAPIServices := httptest.NewRecorder()
 	handler.ServeHTTP(unauthorizedAPIServices, httptest.NewRequest(http.MethodGet, "/api/v1/clusters/clu_1/api-services", nil))
 	if unauthorizedAPIServices.Code != http.StatusUnauthorized {
@@ -241,6 +246,26 @@ func TestServerAuthenticationAndClusterLifecycle(t *testing.T) {
 		t.Fatalf("invalid CRD name status = %d, body = %s", invalidCRDName.Code, invalidCRDName.Body.String())
 	}
 	assertErrorField(t, invalidCRDName.Body.Bytes(), "name")
+	csrPath := "/api/v1/clusters/" + created.Data.ID + "/certificate-signing-requests"
+	csrs := authenticatedRequest(t, handler, cookie, http.MethodGet, csrPath, "")
+	if csrs.Code != http.StatusOK || !strings.Contains(csrs.Body.String(), `"name":"worker-01"`) ||
+		strings.Contains(csrs.Body.String(), "private-pkcs10") {
+		t.Fatalf("CSRs status = %d, body = %s", csrs.Code, csrs.Body.String())
+	}
+	csrDetail := authenticatedRequest(t, handler, cookie, http.MethodGet, csrPath+"/worker-01", "")
+	if csrDetail.Code != http.StatusOK ||
+		!strings.Contains(csrDetail.Body.String(), `"requester":"system:node:worker-01"`) ||
+		!strings.Contains(csrDetail.Body.String(), `"signer_name":"example.com/node-client"`) ||
+		!strings.Contains(csrDetail.Body.String(), `"state":"approved"`) ||
+		strings.Contains(csrDetail.Body.String(), "private-pkcs10") ||
+		strings.Contains(csrDetail.Body.String(), "private-certificate") {
+		t.Fatalf("CSR detail status = %d, body = %s", csrDetail.Code, csrDetail.Body.String())
+	}
+	invalidCSRName := authenticatedRequest(t, handler, cookie, http.MethodGet, csrPath+"/..%2Fcertificatesigningrequests", "")
+	if invalidCSRName.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid CSR name status = %d, body = %s", invalidCSRName.Code, invalidCSRName.Body.String())
+	}
+	assertErrorField(t, invalidCSRName.Body.Bytes(), "name")
 	apiServicesPath := "/api/v1/clusters/" + created.Data.ID + "/api-services"
 	apiServices := authenticatedRequest(t, handler, cookie, http.MethodGet, apiServicesPath, "")
 	if apiServices.Code != http.StatusOK || !strings.Contains(apiServices.Body.String(), `"name":"v1beta1.metrics.k8s.io"`) ||
@@ -1190,6 +1215,21 @@ func (testKube) CustomResourceDefinition(_ context.Context, name string) (domain
 		Versions:     []domain.KubernetesCustomResourceDefinitionVersion{{Name: "v1", Served: true, Storage: true}},
 		VersionCount: 1, StoredVersions: []string{"v1"}, StoredVersionCount: 1,
 		ConversionStrategy: "None", Conditions: []domain.KubernetesCustomResourceDefinitionCondition{},
+	}, nil
+}
+func (testKube) CertificateSigningRequests(context.Context) ([]domain.KubernetesCertificateSigningRequest, error) {
+	return []domain.KubernetesCertificateSigningRequest{{Name: "worker-01"}}, nil
+}
+func (testKube) CertificateSigningRequest(
+	_ context.Context,
+	name string,
+) (domain.KubernetesCertificateSigningRequestDetail, error) {
+	return domain.KubernetesCertificateSigningRequestDetail{
+		KubernetesCertificateSigningRequest: domain.KubernetesCertificateSigningRequest{Name: name},
+		Requester:                           "system:node:worker-01", SignerName: "example.com/node-client",
+		Usages: []string{"client auth"}, State: domain.CertificateSigningRequestApproved,
+		Conditions:     []domain.KubernetesCertificateSigningRequestCondition{{Type: "Approved", Status: "True"}},
+		ConditionCount: 1,
 	}, nil
 }
 func (testKube) APIServices(context.Context) ([]domain.KubernetesAPIService, error) {

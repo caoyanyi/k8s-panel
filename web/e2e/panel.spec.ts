@@ -367,6 +367,28 @@ test('cluster resources show node diagnostics, bounded extensions and admission 
   await page.screenshot({ path: `test-results/${testInfo.project.name}-crd-detail.png` })
 
   await crdDialog.getByRole('button', { name: '关闭' }).click()
+  expect(requestedResources).not.toContain('csrs')
+  await page.getByRole('button', { name: '证书请求' }).click()
+  await expect(page.getByText('worker-01', { exact: true })).toBeVisible()
+  expect(requestedResources).toContain('csrs')
+  expect(requestedResources).not.toContain('csr-detail')
+  await page.getByRole('button', { name: '查看 worker-01' }).click()
+  const csrDialog = page.getByRole('dialog', { name: '证书请求 · worker-01' })
+  await expect(csrDialog.getByText('已批准，等待签发')).toBeVisible()
+  await expect(csrDialog.getByText('system:node:worker-01')).toBeVisible()
+  await expect(csrDialog.getByText('example.com/node-client')).toBeVisible()
+  await expect(csrDialog.getByText('1 天（请求值）')).toBeVisible()
+  await expect(csrDialog.getByText('private-pkcs10')).toHaveCount(0)
+  await expect(csrDialog.getByText('private-certificate')).toHaveCount(0)
+  await expect(csrDialog.getByText('private-group')).toHaveCount(0)
+  expect(requestedResources).toContain('csr-detail')
+  overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
+  expect(overflow).toBeLessThanOrEqual(1)
+  result = await new AxeBuilder({ page }).analyze()
+  expect(result.violations.filter((violation) => ['serious', 'critical'].includes(violation.impact ?? ''))).toEqual([])
+  await page.screenshot({ path: `test-results/${testInfo.project.name}-csr-detail.png` })
+
+  await csrDialog.getByRole('button', { name: '关闭' }).click()
   expect(requestedResources).not.toContain('api-services')
   await page.getByRole('button', { name: '聚合 API' }).click()
   await expect(page.getByText('metrics.k8s.io/v1beta1')).toBeVisible()
@@ -1493,6 +1515,24 @@ async function mockClusterResources(page: Page, requestedResources: string[]) {
           last_transition_time: '2026-07-26T08:01:00Z',
         }],
         condition_count: 1, conditions_truncated: false,
+      }
+    } else if (path === '/api/v1/clusters/clu_1/certificate-signing-requests') {
+      requestedResources.push('csrs')
+      data = [{ name: 'worker-01', created_at: '2026-07-30T09:00:00Z' }]
+    } else if (path === '/api/v1/clusters/clu_1/certificate-signing-requests/worker-01') {
+      requestedResources.push('csr-detail')
+      data = {
+        name: 'worker-01', created_at: '2026-07-30T09:00:00Z',
+        requester: 'system:node:worker-01', signer_name: 'example.com/node-client',
+        requested_expiration_seconds: 86400, usages: ['client auth', 'digital signature'],
+        state: 'approved', certificate_issued: false,
+        conditions: [{
+          type: 'Approved', status: 'True', reason: 'AutoApproved',
+          last_update_time: '2026-07-30T09:01:00Z', last_transition_time: '2026-07-30T09:00:30Z',
+          message: 'private approval message',
+        }],
+        condition_count: 1, request: 'private-pkcs10', certificate: 'private-certificate',
+        uid: 'private-uid', groups: ['private-group'], extra: { private: ['private-value'] },
       }
     } else if (path === '/api/v1/clusters/clu_1/api-services') {
       requestedResources.push('api-services')
