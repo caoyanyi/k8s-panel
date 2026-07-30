@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { type ReactNode, useState } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -25,9 +25,13 @@ describe('StoragePage', () => {
 
   it('loads one storage kind at a time and keeps cluster resources namespace independent', async () => {
     const requested: string[] = []
+    let namespaceRequests = 0
     const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL) => {
       const path = String(input)
-      if (path.endsWith('/namespaces')) return Promise.resolve(dataResponse([namespace]))
+      if (path.endsWith('/namespaces')) {
+        namespaceRequests++
+        return Promise.resolve(dataResponse([namespace]))
+      }
       if (path.includes('/persistent-volume-claims')) {
         requested.push(path)
         return Promise.resolve(dataResponse([claim]))
@@ -39,6 +43,19 @@ describe('StoragePage', () => {
       if (path.includes('/storage-classes')) {
         requested.push(path)
         return Promise.resolve(dataResponse([storageClass]))
+      }
+      if (path.endsWith('/csi-drivers/ebs.csi.example.com')) {
+        requested.push(path)
+        return Promise.resolve(dataResponse({
+          ...csiDrivers[0], attach_required: true, pod_info_on_mount: true, storage_capacity: true,
+          requires_republish: false, se_linux_mount: true, fs_group_policy: 'File',
+          volume_lifecycle_modes: ['Persistent', 'Ephemeral'], token_request_count: 2,
+          tokenRequests: [{ audience: 'private-storage-api' }], annotations: { private: 'value' },
+        }))
+      }
+      if (path.endsWith('/csi-drivers')) {
+        requested.push(path)
+        return Promise.resolve(dataResponse(csiDrivers))
       }
       return Promise.resolve(errorResponse(404, 'not_found'))
     })
@@ -58,6 +75,21 @@ describe('StoragePage', () => {
     expect(await screen.findByText('csi.example.com')).toBeInTheDocument()
     expect(screen.getByText('默认')).toBeInTheDocument()
     expect(requested.at(-1)).toBe('/api/v1/clusters/clu_1/storage-classes')
+
+    expect(requested.some((path) => path.includes('/csi-drivers'))).toBe(false)
+    await user.click(screen.getByRole('button', { name: 'CSIDriver' }))
+    expect(await screen.findByText('ebs.csi.example.com')).toBeInTheDocument()
+    expect(screen.getByLabelText('命名空间')).toBeDisabled()
+    expect(namespaceRequests).toBe(1)
+    expect(requested.filter((path) => path.endsWith('/csi-drivers'))).toHaveLength(1)
+
+    await user.click(screen.getByRole('button', { name: '查看 ebs.csi.example.com' }))
+    const dialog = await screen.findByRole('dialog', { name: 'CSIDriver · ebs.csi.example.com' })
+    expect(within(dialog).getByText('File')).toBeInTheDocument()
+    expect(within(dialog).getByText('Persistent · Ephemeral')).toBeInTheDocument()
+    expect(within(dialog).getByText('2 项')).toBeInTheDocument()
+    expect(screen.queryByText('private-storage-api')).not.toBeInTheDocument()
+    expect(requested.filter((path) => path.endsWith('/csi-drivers/ebs.csi.example.com'))).toHaveLength(1)
   })
 
   it('aborts an active claim refresh when the storage kind changes', async () => {
@@ -156,6 +188,11 @@ const storageClass = {
   name: 'standard', provisioner: 'csi.example.com', reclaim_policy: 'Delete', volume_binding_mode: 'WaitForFirstConsumer',
   allow_volume_expansion: true, default: true, created_at: '2026-07-22T08:00:00Z',
 }
+
+const csiDrivers = [
+  { name: 'ebs.csi.example.com', created_at: '2026-07-22T08:05:00Z' },
+  { name: 'local.csi.example.com', created_at: '2026-07-22T08:10:00Z' },
+]
 
 function renderPage(overrides: Partial<PanelContextValue> = {}) {
   return render(<ContextHarness overrides={overrides}><StoragePage /></ContextHarness>)

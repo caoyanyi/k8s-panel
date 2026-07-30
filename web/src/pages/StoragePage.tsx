@@ -1,12 +1,14 @@
-import { RefreshCw, Search } from 'lucide-react'
+import { Eye, RefreshCw, Search } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '../api'
+import { CSIDriverDetailModal } from '../components/CSIDriverDetailModal'
 import { EmptyState, ErrorState, LoadingState } from '../components/DataState'
 import { PageHeader } from '../components/PageHeader'
 import { TablePagination, TABLE_PAGE_SIZE } from '../components/TablePagination'
 import { usePanel } from '../context'
 import { useResource } from '../hooks'
 import type {
+  KubernetesCSIDriver,
   KubernetesPersistentVolume,
   KubernetesPersistentVolumeClaim,
   KubernetesStorageClass,
@@ -14,25 +16,35 @@ import type {
 } from '../types'
 import { formatDateTime } from '../utils'
 
-type StorageView = 'claims' | 'volumes' | 'classes'
+type StorageView = 'claims' | 'volumes' | 'classes' | 'drivers'
 type StorageInventory =
   | { kind: 'claims'; items: KubernetesPersistentVolumeClaim[] }
   | { kind: 'volumes'; items: KubernetesPersistentVolume[] }
   | { kind: 'classes'; items: KubernetesStorageClass[] }
-type StorageItem = KubernetesPersistentVolumeClaim | KubernetesPersistentVolume | KubernetesStorageClass
+  | { kind: 'drivers'; items: KubernetesCSIDriver[] }
+type StorageItem = KubernetesPersistentVolumeClaim | KubernetesPersistentVolume | KubernetesStorageClass | KubernetesCSIDriver
+
+const storageLabels: Record<StorageView, string> = {
+  claims: 'PVC',
+  volumes: 'PV',
+  classes: 'StorageClass',
+  drivers: 'CSIDriver',
+}
 
 export function StoragePage() {
   const { clusters, selectedClusterId, selectedNamespace, setSelectedNamespace } = usePanel()
   const [view, setView] = useState<StorageView>('claims')
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(0)
+  const [selectedCSIDriver, setSelectedCSIDriver] = useState<KubernetesCSIDriver | null>(null)
   const selectedCluster = clusters.find((cluster) => cluster.id === selectedClusterId)
-  const namespaceScope = view === 'claims' ? selectedNamespace : ''
+  const namespaceScoped = view === 'claims'
+  const namespaceScope = namespaceScoped ? selectedNamespace : ''
   const namespaces = useResource(
-    (signal) => selectedClusterId
+    (signal) => selectedClusterId && namespaceScoped
       ? api.get<Namespace[]>(`/api/v1/clusters/${selectedClusterId}/namespaces`, signal)
       : Promise.resolve([]),
-    [selectedClusterId],
+    [namespaceScoped, selectedClusterId],
   )
   const inventory = useResource<StorageInventory>(async (signal) => {
     if (!selectedClusterId) return emptyInventory(view)
@@ -51,18 +63,27 @@ export function StoragePage() {
       )
       return { kind: 'volumes', items }
     }
-    const items = await api.get<KubernetesStorageClass[]>(
-      `/api/v1/clusters/${selectedClusterId}/storage-classes`,
+    if (view === 'classes') {
+      const items = await api.get<KubernetesStorageClass[]>(
+        `/api/v1/clusters/${selectedClusterId}/storage-classes`,
+        signal,
+      )
+      return { kind: 'classes', items }
+    }
+    const items = await api.get<KubernetesCSIDriver[]>(
+      `/api/v1/clusters/${selectedClusterId}/csi-drivers`,
       signal,
     )
-    return { kind: 'classes', items }
+    return { kind: 'drivers', items }
   }, [selectedClusterId, namespaceScope, view])
 
   useEffect(() => {
+    if (!namespaceScoped) return
     if (selectedNamespace && namespaces.data && !namespaces.data.some((item) => item.name === selectedNamespace)) {
       setSelectedNamespace('')
     }
-  }, [namespaces.data, selectedNamespace, setSelectedNamespace])
+  }, [namespaceScoped, namespaces.data, selectedNamespace, setSelectedNamespace])
+  useEffect(() => setSelectedCSIDriver(null), [selectedClusterId, view])
 
   const normalizedSearch = search.trim().toLowerCase()
   const activeItems = inventory.data?.kind === view ? inventory.data.items : []
@@ -75,7 +96,7 @@ export function StoragePage() {
   const currentPage = Math.min(page, totalPages - 1)
   const pageStart = currentPage * TABLE_PAGE_SIZE
   const pageItems = visibleItems.slice(pageStart, pageStart + TABLE_PAGE_SIZE)
-  const resourceLabel = view === 'claims' ? 'PVC' : view === 'volumes' ? 'PV' : 'StorageClass'
+  const resourceLabel = storageLabels[view]
 
   return (
     <div className="page">
@@ -102,6 +123,7 @@ export function StoragePage() {
             <button type="button" className={view === 'claims' ? 'active' : ''} aria-pressed={view === 'claims'} onClick={() => setView('claims')}>PVC</button>
             <button type="button" className={view === 'volumes' ? 'active' : ''} aria-pressed={view === 'volumes'} onClick={() => setView('volumes')}>PV</button>
             <button type="button" className={view === 'classes' ? 'active' : ''} aria-pressed={view === 'classes'} onClick={() => setView('classes')}>StorageClass</button>
+            <button type="button" className={view === 'drivers' ? 'active' : ''} aria-pressed={view === 'drivers'} onClick={() => setView('drivers')}>CSIDriver</button>
           </div>
           <section className="toolbar" aria-label="存储资源筛选">
             <div className="toolbar-field">
@@ -135,12 +157,19 @@ export function StoragePage() {
                   : visibleItems.length === 0 ? <EmptyState title={normalizedSearch ? `没有匹配的 ${resourceLabel}` : `当前范围没有 ${resourceLabel}`} />
                     : (
                       <>
-                        <StorageTable view={view} items={pageItems} />
+                        <StorageTable view={view} items={pageItems} onSelectCSIDriver={setSelectedCSIDriver} />
                         <TablePagination page={currentPage} totalItems={visibleItems.length} onPage={setPage} />
                       </>
                     )}
           </section>
         </>
+      )}
+      {selectedCSIDriver && (
+        <CSIDriverDetailModal
+          clusterId={selectedClusterId}
+          resource={selectedCSIDriver}
+          onClose={() => setSelectedCSIDriver(null)}
+        />
       )}
     </div>
   )
@@ -149,12 +178,13 @@ export function StoragePage() {
 function emptyInventory(view: StorageView): StorageInventory {
   if (view === 'claims') return { kind: 'claims', items: [] }
   if (view === 'volumes') return { kind: 'volumes', items: [] }
-  return { kind: 'classes', items: [] }
+  if (view === 'classes') return { kind: 'classes', items: [] }
+  return { kind: 'drivers', items: [] }
 }
 
 function storageSearchText(
   view: StorageView,
-  item: KubernetesPersistentVolumeClaim | KubernetesPersistentVolume | KubernetesStorageClass,
+  item: StorageItem,
 ) {
   if (view === 'claims') {
     const claim = item as KubernetesPersistentVolumeClaim
@@ -164,14 +194,24 @@ function storageSearchText(
     const volume = item as KubernetesPersistentVolume
     return `${volume.name} ${volume.status} ${volume.claim ?? ''} ${volume.storage_class ?? ''}`
   }
+  if (view === 'drivers') return (item as KubernetesCSIDriver).name
   const storageClass = item as KubernetesStorageClass
   return `${storageClass.name} ${storageClass.provisioner} ${storageClass.reclaim_policy ?? ''} ${storageClass.volume_binding_mode ?? ''}`
 }
 
-function StorageTable({ view, items }: { view: StorageView; items: StorageItem[] }) {
+function StorageTable({
+  view,
+  items,
+  onSelectCSIDriver,
+}: {
+  view: StorageView
+  items: StorageItem[]
+  onSelectCSIDriver: (item: KubernetesCSIDriver) => void
+}) {
   if (view === 'claims') return <ClaimTable claims={items as KubernetesPersistentVolumeClaim[]} />
   if (view === 'volumes') return <VolumeTable volumes={items as KubernetesPersistentVolume[]} />
-  return <StorageClassTable storageClasses={items as KubernetesStorageClass[]} />
+  if (view === 'classes') return <StorageClassTable storageClasses={items as KubernetesStorageClass[]} />
+  return <CSIDriverTable drivers={items as KubernetesCSIDriver[]} onSelect={onSelectCSIDriver} />
 }
 
 function ClaimTable({ claims }: { claims: KubernetesPersistentVolumeClaim[] }) {
@@ -233,6 +273,38 @@ function StorageClassTable({ storageClasses }: { storageClasses: KubernetesStora
             <td>{displayValue(storageClass.volume_binding_mode)}</td>
             <td>{storageClass.allow_volume_expansion ? <span className="replica-ready">支持</span> : <span className="detail-muted">不支持</span>}</td>
             <td>{formatDateTime(storageClass.created_at)}</td>
+          </tr>
+        ))}</tbody>
+      </table>
+    </div>
+  )
+}
+
+function CSIDriverTable({
+  drivers,
+  onSelect,
+}: {
+  drivers: KubernetesCSIDriver[]
+  onSelect: (item: KubernetesCSIDriver) => void
+}) {
+  return (
+    <div className="table-wrap" role="region" aria-label="CSIDriver 清单" tabIndex={0}>
+      <table className="csi-driver-table">
+        <thead><tr><th>名称</th><th>作用域</th><th>创建时间</th><th className="actions-column">操作</th></tr></thead>
+        <tbody>{drivers.map((driver) => (
+          <tr key={driver.name}>
+            <td className="mono"><strong>{driver.name}</strong></td>
+            <td><span className="kind-label">集群级</span></td>
+            <td>{formatDateTime(driver.created_at)}</td>
+            <td className="actions-column">
+              <button
+                type="button"
+                className="icon-button"
+                aria-label={`查看 ${driver.name}`}
+                title="查看 CSIDriver 详情"
+                onClick={() => onSelect(driver)}
+              ><Eye size={16} /></button>
+            </td>
           </tr>
         ))}</tbody>
       </table>

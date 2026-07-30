@@ -718,6 +718,30 @@ func TestValidateRuntimeClassNameAndHandler(t *testing.T) {
 	}
 }
 
+func TestValidateCSIDriverName(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		value     string
+		wantField string
+	}{
+		{name: "dns subdomain", value: "csi.example.com"},
+		{name: "hyphenated", value: "storage-csi"},
+		{name: "empty", value: "", wantField: "name"},
+		{name: "uppercase", value: "CSI.example.com", wantField: "name"},
+		{name: "path traversal", value: "../csidrivers", wantField: "name"},
+		{name: "too long", value: strings.Repeat("a", 254), wantField: "name"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := ValidateCSIDriverName(tt.value)
+			assertValidationField(t, err, tt.wantField)
+		})
+	}
+}
+
 func assertValidationField(t *testing.T, err error, wantField string) {
 	t.Helper()
 	if wantField == "" {

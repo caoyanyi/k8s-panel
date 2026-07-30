@@ -527,6 +527,25 @@ export interface KubernetesStorageClass {
   created_at: string
 }
 
+export interface KubernetesCSIDriver {
+  name: string
+  created_at: string
+}
+
+export type KubernetesCSIFSGroupPolicy = 'ReadWriteOnceWithFSType' | 'File' | 'None'
+export type KubernetesCSIVolumeLifecycleMode = 'Persistent' | 'Ephemeral'
+
+export interface KubernetesCSIDriverDetail extends KubernetesCSIDriver {
+  attach_required: boolean
+  pod_info_on_mount: boolean
+  storage_capacity: boolean
+  requires_republish: boolean
+  se_linux_mount: boolean
+  fs_group_policy: KubernetesCSIFSGroupPolicy
+  volume_lifecycle_modes: KubernetesCSIVolumeLifecycleMode[]
+  token_request_count: number
+}
+
 export interface KubernetesQuotaResource {
   name: string
   hard?: string

@@ -561,6 +561,7 @@ test('storage inventory keeps cluster resources namespace independent', async ({
   expect(requestedKinds).toContain('claims:all')
   expect(requestedKinds.some((request) => request.startsWith('volumes:'))).toBe(false)
   expect(requestedKinds.some((request) => request.startsWith('classes:'))).toBe(false)
+  expect(requestedKinds.some((request) => request.startsWith('csidrivers:'))).toBe(false)
 
   await page.getByLabel('命名空间').selectOption('payments')
   await expect.poll(() => requestedKinds).toContain('claims:payments')
@@ -575,11 +576,24 @@ test('storage inventory keeps cluster resources namespace independent', async ({
   await expect(page.getByText('默认')).toBeVisible()
   await expect(page.getByText('支持')).toBeVisible()
 
+  await page.getByRole('button', { name: 'CSIDriver' }).click()
+  await expect(page.getByText('ebs.csi.example.com', { exact: true })).toBeVisible()
+  await expect(page.getByText('local.csi.example.com', { exact: true })).toBeVisible()
+  expect(requestedKinds).toContain('csidrivers:cluster')
+  expect(requestedKinds.filter((request) => request === 'namespaces')).toHaveLength(1)
+  await page.getByRole('button', { name: '查看 ebs.csi.example.com' }).click()
+  const dialog = page.getByRole('dialog', { name: 'CSIDriver · ebs.csi.example.com' })
+  await expect(dialog.getByText('File')).toBeVisible()
+  await expect(dialog.getByText('Persistent · Ephemeral')).toBeVisible()
+  await expect(dialog.getByText('2 项')).toBeVisible()
+  await expect(dialog.getByText('private-storage-api')).toHaveCount(0)
+  expect(requestedKinds.at(-1)).toBe('csidriver-detail:ebs.csi.example.com')
+
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
   expect(overflow).toBeLessThanOrEqual(1)
   const result = await new AxeBuilder({ page }).analyze()
   expect(result.violations.filter((violation) => ['serious', 'critical'].includes(violation.impact ?? ''))).toEqual([])
-  await page.screenshot({ path: `test-results/${testInfo.project.name}-storage-inventory.png`, fullPage: true })
+  await page.screenshot({ path: `test-results/${testInfo.project.name}-csi-driver-storage.png`, fullPage: true })
   expect(consoleErrors).toEqual([])
 })
 
@@ -1011,6 +1025,7 @@ async function mockStorageResources(page: Page, requestedKinds: string[]) {
         created_at: '2026-07-20T08:00:00Z', updated_at: '2026-07-27T08:00:00Z',
       }]
     } else if (path === '/api/v1/clusters/clu_1/namespaces') {
+      requestedKinds.push('namespaces')
       data = [{ name: 'payments', status: 'Active', labels: {}, finalizers: [], created_at: '2026-07-20T08:00:00Z' }]
     } else if (path === '/api/v1/clusters/clu_1/persistent-volume-claims') {
       requestedKinds.push(`claims:${url.searchParams.get('namespace') ?? 'all'}`)
@@ -1031,6 +1046,20 @@ async function mockStorageResources(page: Page, requestedKinds: string[]) {
         volume_binding_mode: 'WaitForFirstConsumer', allow_volume_expansion: true, default: true,
         created_at: '2026-07-22T08:00:00Z',
       }]
+    } else if (path === '/api/v1/clusters/clu_1/csi-drivers/ebs.csi.example.com') {
+      requestedKinds.push('csidriver-detail:ebs.csi.example.com')
+      data = {
+        name: 'ebs.csi.example.com', created_at: '2026-07-22T08:05:00Z',
+        attach_required: true, pod_info_on_mount: true, storage_capacity: true, requires_republish: false,
+        se_linux_mount: true, fs_group_policy: 'File', volume_lifecycle_modes: ['Persistent', 'Ephemeral'],
+        token_request_count: 2, tokenRequests: [{ audience: 'private-storage-api', expirationSeconds: 3600 }],
+      }
+    } else if (path === '/api/v1/clusters/clu_1/csi-drivers') {
+      requestedKinds.push('csidrivers:cluster')
+      data = [
+        { name: 'ebs.csi.example.com', created_at: '2026-07-22T08:05:00Z' },
+        { name: 'local.csi.example.com', created_at: '2026-07-22T08:10:00Z' },
+      ]
     } else {
       data = []
     }

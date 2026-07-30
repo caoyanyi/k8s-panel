@@ -481,6 +481,38 @@ type KubernetesStorageClass struct {
 	CreatedAt            time.Time `json:"created_at"`
 }
 
+type KubernetesCSIDriver struct {
+	Name      string    `json:"name"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type KubernetesCSIFSGroupPolicy string
+
+const (
+	CSIFSGroupPolicyReadWriteOnceWithFSType KubernetesCSIFSGroupPolicy = "ReadWriteOnceWithFSType"
+	CSIFSGroupPolicyFile                    KubernetesCSIFSGroupPolicy = "File"
+	CSIFSGroupPolicyNone                    KubernetesCSIFSGroupPolicy = "None"
+)
+
+type KubernetesCSIVolumeLifecycleMode string
+
+const (
+	CSIVolumeLifecyclePersistent KubernetesCSIVolumeLifecycleMode = "Persistent"
+	CSIVolumeLifecycleEphemeral  KubernetesCSIVolumeLifecycleMode = "Ephemeral"
+)
+
+type KubernetesCSIDriverDetail struct {
+	KubernetesCSIDriver
+	AttachRequired       bool                               `json:"attach_required"`
+	PodInfoOnMount       bool                               `json:"pod_info_on_mount"`
+	StorageCapacity      bool                               `json:"storage_capacity"`
+	RequiresRepublish    bool                               `json:"requires_republish"`
+	SELinuxMount         bool                               `json:"se_linux_mount"`
+	FSGroupPolicy        KubernetesCSIFSGroupPolicy         `json:"fs_group_policy"`
+	VolumeLifecycleModes []KubernetesCSIVolumeLifecycleMode `json:"volume_lifecycle_modes"`
+	TokenRequestCount    int                                `json:"token_request_count"`
+}
+
 type KubernetesQuotaResource struct {
 	Name     string `json:"name"`
 	Hard     string `json:"hard,omitempty"`

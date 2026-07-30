@@ -158,6 +158,8 @@ func (s *Server) routes() {
 	s.mux.Handle("GET /api/v1/clusters/{id}/persistent-volume-claims", s.protected(http.HandlerFunc(s.listPersistentVolumeClaims)))
 	s.mux.Handle("GET /api/v1/clusters/{id}/persistent-volumes", s.protected(http.HandlerFunc(s.listPersistentVolumes)))
 	s.mux.Handle("GET /api/v1/clusters/{id}/storage-classes", s.protected(http.HandlerFunc(s.listStorageClasses)))
+	s.mux.Handle("GET /api/v1/clusters/{id}/csi-drivers", s.protected(http.HandlerFunc(s.listCSIDrivers)))
+	s.mux.Handle("GET /api/v1/clusters/{id}/csi-drivers/{name}", s.protected(http.HandlerFunc(s.getCSIDriver)))
 	s.mux.Handle("GET /api/v1/clusters/{id}/resource-quotas", s.protected(http.HandlerFunc(s.listResourceQuotas)))
 	s.mux.Handle("GET /api/v1/clusters/{id}/limit-ranges", s.protected(http.HandlerFunc(s.listLimitRanges)))
 	s.mux.Handle("GET /api/v1/clusters/{id}/horizontal-pod-autoscalers", s.protected(http.HandlerFunc(s.listHorizontalPodAutoscalers)))

@@ -142,6 +142,11 @@ func TestServerAuthenticationAndClusterLifecycle(t *testing.T) {
 	if unauthorizedStorage.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthorized storage status = %d, want 401", unauthorizedStorage.Code)
 	}
+	unauthorizedCSIDrivers := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorizedCSIDrivers, httptest.NewRequest(http.MethodGet, "/api/v1/clusters/clu_1/csi-drivers", nil))
+	if unauthorizedCSIDrivers.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized CSIDriver status = %d, want 401", unauthorizedCSIDrivers.Code)
+	}
 	unauthorizedEvents := httptest.NewRecorder()
 	handler.ServeHTTP(unauthorizedEvents, httptest.NewRequest(http.MethodGet, "/api/v1/clusters/clu_1/events", nil))
 	if unauthorizedEvents.Code != http.StatusUnauthorized {
@@ -476,6 +481,30 @@ func TestServerAuthenticationAndClusterLifecycle(t *testing.T) {
 		!strings.Contains(classes.Body.String(), `"default":true`) || strings.Contains(classes.Body.String(), "storage-account") {
 		t.Fatalf("storage classes status = %d, body = %s", classes.Code, classes.Body.String())
 	}
+	csiDriverPath := "/api/v1/clusters/" + created.Data.ID + "/csi-drivers"
+	csiDrivers := authenticatedRequest(t, handler, cookie, http.MethodGet, csiDriverPath, "")
+	if csiDrivers.Code != http.StatusOK || !strings.Contains(csiDrivers.Body.String(), `"name":"ebs.csi.example.com"`) ||
+		strings.Contains(csiDrivers.Body.String(), "private-audience") {
+		t.Fatalf("CSI drivers status = %d, body = %s", csiDrivers.Code, csiDrivers.Body.String())
+	}
+	missingCSIDrivers := authenticatedRequest(t, handler, cookie, http.MethodGet, "/api/v1/clusters/clu_missing/csi-drivers", "")
+	if missingCSIDrivers.Code != http.StatusNotFound {
+		t.Fatalf("missing cluster CSI drivers status = %d, body = %s", missingCSIDrivers.Code, missingCSIDrivers.Body.String())
+	}
+	csiDriverDetail := authenticatedRequest(t, handler, cookie, http.MethodGet, csiDriverPath+"/ebs.csi.example.com", "")
+	if csiDriverDetail.Code != http.StatusOK ||
+		!strings.Contains(csiDriverDetail.Body.String(), `"attach_required":true`) ||
+		!strings.Contains(csiDriverDetail.Body.String(), `"fs_group_policy":"File"`) ||
+		!strings.Contains(csiDriverDetail.Body.String(), `"token_request_count":2`) ||
+		strings.Contains(csiDriverDetail.Body.String(), "private-audience") ||
+		strings.Contains(csiDriverDetail.Body.String(), `"tokenRequests"`) {
+		t.Fatalf("CSI driver detail status = %d, body = %s", csiDriverDetail.Code, csiDriverDetail.Body.String())
+	}
+	invalidCSIDriverName := authenticatedRequest(t, handler, cookie, http.MethodGet, csiDriverPath+"/..%2Fcsidrivers", "")
+	if invalidCSIDriverName.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid CSI driver name status = %d, body = %s", invalidCSIDriverName.Code, invalidCSIDriverName.Body.String())
+	}
+	assertErrorField(t, invalidCSIDriverName.Body.Bytes(), "name")
 	accessPath := "/api/v1/clusters/" + created.Data.ID + "/access-resources"
 	clusterRoles := authenticatedRequest(t, handler, cookie, http.MethodGet, accessPath+"?kind=clusterroles", "")
 	if clusterRoles.Code != http.StatusOK || !strings.Contains(clusterRoles.Body.String(), `"kind":"ClusterRole"`) ||
@@ -1445,6 +1474,20 @@ func (testKube) StorageClasses(context.Context) ([]domain.KubernetesStorageClass
 		Name: "standard", Provisioner: "csi.example.com", ReclaimPolicy: "Delete",
 		VolumeBindingMode: "WaitForFirstConsumer", AllowVolumeExpansion: true, Default: true,
 	}}, nil
+}
+func (testKube) CSIDrivers(context.Context) ([]domain.KubernetesCSIDriver, error) {
+	return []domain.KubernetesCSIDriver{{Name: "ebs.csi.example.com"}}, nil
+}
+func (testKube) CSIDriver(_ context.Context, name string) (domain.KubernetesCSIDriverDetail, error) {
+	return domain.KubernetesCSIDriverDetail{
+		KubernetesCSIDriver: domain.KubernetesCSIDriver{Name: name},
+		AttachRequired:      true, PodInfoOnMount: true, StorageCapacity: true, RequiresRepublish: true,
+		SELinuxMount: true, FSGroupPolicy: domain.CSIFSGroupPolicyFile,
+		VolumeLifecycleModes: []domain.KubernetesCSIVolumeLifecycleMode{
+			domain.CSIVolumeLifecyclePersistent, domain.CSIVolumeLifecycleEphemeral,
+		},
+		TokenRequestCount: 2,
+	}, nil
 }
 func (testKube) ResourceQuotas(_ context.Context, namespace string) ([]domain.KubernetesResourceQuota, error) {
 	return []domain.KubernetesResourceQuota{{

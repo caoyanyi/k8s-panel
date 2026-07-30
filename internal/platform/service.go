@@ -932,6 +932,38 @@ func (s *Service) StorageClasses(ctx context.Context, clusterID string) ([]domai
 	return gateway.StorageClasses(ctx)
 }
 
+func (s *Service) CSIDrivers(ctx context.Context, clusterID string) ([]domain.KubernetesCSIDriver, error) {
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	gateway, err := s.kubeGateway(ctx, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	return gateway.CSIDrivers(ctx)
+}
+
+func (s *Service) CSIDriver(
+	ctx context.Context,
+	clusterID, name string,
+) (domain.KubernetesCSIDriverDetail, error) {
+	if err := domain.ValidateCSIDriverName(name); err != nil {
+		return domain.KubernetesCSIDriverDetail{}, err
+	}
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return domain.KubernetesCSIDriverDetail{}, err
+	}
+	defer release()
+	gateway, err := s.kubeGateway(ctx, clusterID)
+	if err != nil {
+		return domain.KubernetesCSIDriverDetail{}, err
+	}
+	return gateway.CSIDriver(ctx, name)
+}
+
 func (s *Service) ResourceQuotas(
 	ctx context.Context,
 	clusterID, namespace string,

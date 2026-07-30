@@ -81,6 +81,8 @@ type KubeGateway interface {
 	PersistentVolumeClaims(context.Context, string) ([]domain.KubernetesPersistentVolumeClaim, error)
 	PersistentVolumes(context.Context) ([]domain.KubernetesPersistentVolume, error)
 	StorageClasses(context.Context) ([]domain.KubernetesStorageClass, error)
+	CSIDrivers(context.Context) ([]domain.KubernetesCSIDriver, error)
+	CSIDriver(context.Context, string) (domain.KubernetesCSIDriverDetail, error)
 	ResourceQuotas(context.Context, string) ([]domain.KubernetesResourceQuota, error)
 	LimitRanges(context.Context, string) ([]domain.KubernetesLimitRange, error)
 	HorizontalPodAutoscalers(context.Context, string) ([]domain.KubernetesHorizontalPodAutoscaler, error)

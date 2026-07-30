@@ -248,6 +248,7 @@ td strong { color: var(--text); font-size: 12px; }
 .configuration-table { min-width: 760px; }
 .storage-table { min-width: 1180px; }
 .storage-class-table { min-width: 900px; }
+.csi-driver-table { min-width: 720px; }
 .governance-quota-table { min-width: 1080px; }
 .governance-limit-table { min-width: 1320px; }
 .governance-hpa-table { min-width: 1340px; }

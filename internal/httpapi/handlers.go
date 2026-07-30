@@ -531,6 +531,24 @@ func (s *Server) listStorageClasses(w http.ResponseWriter, r *http.Request) {
 	writeData(w, http.StatusOK, items)
 }
 
+func (s *Server) listCSIDrivers(w http.ResponseWriter, r *http.Request) {
+	items, err := s.service.CSIDrivers(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeData(w, http.StatusOK, items)
+}
+
+func (s *Server) getCSIDriver(w http.ResponseWriter, r *http.Request) {
+	item, err := s.service.CSIDriver(r.Context(), r.PathValue("id"), r.PathValue("name"))
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeData(w, http.StatusOK, item)
+}
+
 func (s *Server) listResourceQuotas(w http.ResponseWriter, r *http.Request) {
 	items, err := s.service.ResourceQuotas(r.Context(), r.PathValue("id"), r.URL.Query().Get("namespace"))
 	if err != nil {
