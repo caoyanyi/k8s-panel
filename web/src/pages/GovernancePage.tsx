@@ -1,8 +1,9 @@
-import { RefreshCw, Search } from 'lucide-react'
+import { Eye, RefreshCw, Search } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '../api'
 import { EmptyState, ErrorState, LoadingState } from '../components/DataState'
 import { PageHeader } from '../components/PageHeader'
+import { PriorityClassDetailModal } from '../components/PriorityClassDetailModal'
 import { TablePagination, TABLE_PAGE_SIZE } from '../components/TablePagination'
 import { usePanel } from '../context'
 import { useResource } from '../hooks'
@@ -13,18 +14,20 @@ import type {
   KubernetesPodDisruptionBudget,
   KubernetesPolicyCondition,
   KubernetesQuotaResource,
+  KubernetesPriorityClass,
   KubernetesResourceQuota,
   KubernetesSelectorMode,
   Namespace,
 } from '../types'
 import { formatDateTime } from '../utils'
 
-type GovernanceView = 'quotas' | 'limits' | 'autoscalers' | 'budgets'
+type GovernanceView = 'quotas' | 'limits' | 'autoscalers' | 'budgets' | 'priority-classes'
 type GovernanceInventory =
   | { kind: 'quotas'; items: KubernetesResourceQuota[] }
   | { kind: 'limits'; items: KubernetesLimitRange[] }
   | { kind: 'autoscalers'; items: KubernetesHorizontalPodAutoscaler[] }
   | { kind: 'budgets'; items: KubernetesPodDisruptionBudget[] }
+  | { kind: 'priority-classes'; items: KubernetesPriorityClass[] }
 
 interface QuotaRow {
   quota: KubernetesResourceQuota
@@ -41,6 +44,7 @@ const resourceLabels: Record<GovernanceView, string> = {
   limits: 'LimitRange',
   autoscalers: 'HPA',
   budgets: 'PDB',
+  'priority-classes': 'PriorityClass',
 }
 
 export function GovernancePage() {
@@ -48,15 +52,27 @@ export function GovernancePage() {
   const [view, setView] = useState<GovernanceView>('quotas')
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(0)
+  const [selectedPriorityClass, setSelectedPriorityClass] = useState<KubernetesPriorityClass | null>(null)
   const selectedCluster = clusters.find((cluster) => cluster.id === selectedClusterId)
+  const namespaceScoped = view !== 'priority-classes'
   const namespaces = useResource(
-    (signal) => selectedClusterId
+    (signal) => selectedClusterId && namespaceScoped
       ? api.get<Namespace[]>(`/api/v1/clusters/${selectedClusterId}/namespaces`, signal)
       : Promise.resolve([]),
-    [selectedClusterId],
+    [namespaceScoped, selectedClusterId],
   )
   const inventory = useResource<GovernanceInventory>(async (signal) => {
-    if (!selectedClusterId || !selectedNamespace) return emptyInventory(view)
+    if (!selectedClusterId) return emptyInventory(view)
+    if (view === 'priority-classes') {
+      return {
+        kind: 'priority-classes',
+        items: await api.get<KubernetesPriorityClass[]>(
+          `/api/v1/clusters/${selectedClusterId}/priority-classes`,
+          signal,
+        ),
+      }
+    }
+    if (!selectedNamespace) return emptyInventory(view)
     const query = new URLSearchParams({ namespace: selectedNamespace })
     switch (view) {
       case 'quotas':
@@ -95,15 +111,19 @@ export function GovernancePage() {
   }, [selectedClusterId, selectedNamespace, view])
 
   useEffect(() => {
-    if (selectedNamespace && namespaces.data && !namespaces.data.some((item) => item.name === selectedNamespace)) {
+    if (namespaceScoped && selectedNamespace && namespaces.data &&
+      !namespaces.data.some((item) => item.name === selectedNamespace)) {
       setSelectedNamespace('')
     }
-  }, [namespaces.data, selectedNamespace, setSelectedNamespace])
+  }, [namespaceScoped, namespaces.data, selectedNamespace, setSelectedNamespace])
+
+  useEffect(() => setSelectedPriorityClass(null), [selectedClusterId, selectedNamespace, view])
 
   const quotaItems = inventory.data?.kind === 'quotas' ? inventory.data.items : []
   const limitItems = inventory.data?.kind === 'limits' ? inventory.data.items : []
   const autoscalerItems = inventory.data?.kind === 'autoscalers' ? inventory.data.items : []
   const budgetItems = inventory.data?.kind === 'budgets' ? inventory.data.items : []
+  const priorityClassItems = inventory.data?.kind === 'priority-classes' ? inventory.data.items : []
   const quotaRows = useMemo(() => flattenQuotas(quotaItems), [quotaItems])
   const limitRows = useMemo(() => flattenLimitRanges(limitItems), [limitItems])
   const normalizedSearch = search.trim().toLowerCase()
@@ -121,14 +141,19 @@ export function GovernancePage() {
     !normalizedSearch || `${item.name} ${item.selector_mode} ${item.unhealthy_pod_eviction_policy} ${conditionSearchText(item.conditions)}`
       .toLowerCase().includes(normalizedSearch)
   )), [budgetItems, normalizedSearch])
+  const visiblePriorityClasses = useMemo(() => priorityClassItems.filter((item) => (
+    !normalizedSearch || item.name.toLowerCase().includes(normalizedSearch)
+  )), [normalizedSearch, priorityClassItems])
   useEffect(() => setPage(0), [normalizedSearch, selectedClusterId, selectedNamespace, view])
 
   const activeItemCount = activeInventoryCount(inventory.data, view)
-  const visibleRowCount = visibleInventoryCount(view, visibleQuotaRows, visibleLimitRows, visibleAutoscalers, visibleBudgets)
+  const visibleRowCount = visibleInventoryCount(
+    view, visibleQuotaRows, visibleLimitRows, visibleAutoscalers, visibleBudgets, visiblePriorityClasses,
+  )
   const totalPages = Math.max(1, Math.ceil(visibleRowCount / TABLE_PAGE_SIZE))
   const currentPage = Math.min(page, totalPages - 1)
   const pageStart = currentPage * TABLE_PAGE_SIZE
-  const namespaceMissing = !selectedNamespace
+  const namespaceMissing = namespaceScoped && !selectedNamespace
   const resourceLabel = resourceLabels[view]
   const truncated = inventoryIsTruncated(inventory.data)
 
@@ -158,27 +183,30 @@ export function GovernancePage() {
             <button type="button" className={view === 'limits' ? 'active' : ''} aria-pressed={view === 'limits'} onClick={() => setView('limits')}>LimitRange</button>
             <button type="button" className={view === 'autoscalers' ? 'active' : ''} aria-pressed={view === 'autoscalers'} onClick={() => setView('autoscalers')}>HPA</button>
             <button type="button" className={view === 'budgets' ? 'active' : ''} aria-pressed={view === 'budgets'} onClick={() => setView('budgets')}>PDB</button>
+            <button type="button" className={view === 'priority-classes' ? 'active' : ''} aria-pressed={view === 'priority-classes'} onClick={() => setView('priority-classes')}>PriorityClass</button>
           </div>
           <section className="toolbar" aria-label="资源治理筛选">
-            <div className="toolbar-field">
-              <label htmlFor="governance-namespace">命名空间</label>
-              <select
-                id="governance-namespace"
-                value={selectedNamespace}
-                onChange={(event) => setSelectedNamespace(event.target.value)}
-                disabled={namespaces.loading}
-              >
-                <option value="">请选择</option>
-                {namespaces.data?.map((item) => <option key={item.name} value={item.name}>{item.name}</option>)}
-              </select>
-            </div>
+            {namespaceScoped && (
+              <div className="toolbar-field">
+                <label htmlFor="governance-namespace">命名空间</label>
+                <select
+                  id="governance-namespace"
+                  value={selectedNamespace}
+                  onChange={(event) => setSelectedNamespace(event.target.value)}
+                  disabled={namespaces.loading}
+                >
+                  <option value="">请选择</option>
+                  {namespaces.data?.map((item) => <option key={item.name} value={item.name}>{item.name}</option>)}
+                </select>
+              </div>
+            )}
             <div className="search-field">
               <Search size={16} aria-hidden="true" />
               <label className="sr-only" htmlFor="governance-search">搜索资源治理策略</label>
               <input
                 id="governance-search"
                 type="search"
-                placeholder={`搜索 ${resourceLabel} 或资源`}
+                placeholder={view === 'priority-classes' ? '搜索 PriorityClass 名称' : `搜索 ${resourceLabel} 或资源`}
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
               />
@@ -186,11 +214,13 @@ export function GovernancePage() {
           </section>
           {truncated && <div className="inventory-alert" role="status">结果已按安全上限截断</div>}
           <section className="section-block table-section">
-            {namespaces.error ? <ErrorState error={namespaces.error} onRetry={() => void namespaces.refresh()} />
+            {namespaceScoped && namespaces.error ? <ErrorState error={namespaces.error} onRetry={() => void namespaces.refresh()} />
               : namespaceMissing ? <EmptyState title="请选择命名空间" />
                 : inventory.loading ? <LoadingState label={`正在读取 ${resourceLabel}`} />
                   : inventory.error ? <ErrorState error={inventory.error} onRetry={() => void inventory.refresh()} />
-                    : visibleRowCount === 0 ? <EmptyState title={normalizedSearch ? `没有匹配的 ${resourceLabel}` : `当前命名空间没有 ${resourceLabel}`} />
+                    : visibleRowCount === 0 ? <EmptyState title={normalizedSearch
+                      ? `没有匹配的 ${resourceLabel}`
+                      : namespaceScoped ? `当前命名空间没有 ${resourceLabel}` : `当前集群没有 ${resourceLabel}`} />
                       : view === 'quotas' ? (
                         <>
                           <QuotaTable rows={visibleQuotaRows.slice(pageStart, pageStart + TABLE_PAGE_SIZE)} />
@@ -206,15 +236,62 @@ export function GovernancePage() {
                           <AutoscalerTable items={visibleAutoscalers.slice(pageStart, pageStart + TABLE_PAGE_SIZE)} />
                           <TablePagination page={currentPage} totalItems={visibleAutoscalers.length} onPage={setPage} />
                         </>
-                      ) : (
+                      ) : view === 'budgets' ? (
                         <>
                           <DisruptionBudgetTable items={visibleBudgets.slice(pageStart, pageStart + TABLE_PAGE_SIZE)} />
                           <TablePagination page={currentPage} totalItems={visibleBudgets.length} onPage={setPage} />
+                        </>
+                      ) : (
+                        <>
+                          <PriorityClassTable
+                            items={visiblePriorityClasses.slice(pageStart, pageStart + TABLE_PAGE_SIZE)}
+                            onSelect={setSelectedPriorityClass}
+                          />
+                          <TablePagination page={currentPage} totalItems={visiblePriorityClasses.length} onPage={setPage} />
                         </>
                       )}
           </section>
         </>
       )}
+      {selectedPriorityClass && (
+        <PriorityClassDetailModal
+          clusterId={selectedClusterId}
+          resource={selectedPriorityClass}
+          onClose={() => setSelectedPriorityClass(null)}
+        />
+      )}
+    </div>
+  )
+}
+
+function PriorityClassTable({
+  items,
+  onSelect,
+}: {
+  items: KubernetesPriorityClass[]
+  onSelect: (item: KubernetesPriorityClass) => void
+}) {
+  return (
+    <div className="table-wrap" role="region" aria-label="PriorityClass 清单" tabIndex={0}>
+      <table className="governance-table governance-priority-class-table">
+        <thead><tr><th>名称</th><th>作用域</th><th>创建时间</th><th className="actions-column">操作</th></tr></thead>
+        <tbody>{items.map((item) => (
+          <tr key={item.name}>
+            <td className="mono"><strong>{item.name}</strong></td>
+            <td><span className="kind-label">集群级</span></td>
+            <td>{formatDateTime(item.created_at)}</td>
+            <td className="actions-column">
+              <button
+                type="button"
+                className="icon-button"
+                aria-label={`查看 ${item.name}`}
+                title="查看 PriorityClass 详情"
+                onClick={() => onSelect(item)}
+              ><Eye size={16} /></button>
+            </td>
+          </tr>
+        ))}</tbody>
+      </table>
     </div>
   )
 }
@@ -225,6 +302,7 @@ function emptyInventory(view: GovernanceView): GovernanceInventory {
     case 'limits': return { kind: 'limits', items: [] }
     case 'autoscalers': return { kind: 'autoscalers', items: [] }
     case 'budgets': return { kind: 'budgets', items: [] }
+    case 'priority-classes': return { kind: 'priority-classes', items: [] }
   }
 }
 
@@ -239,6 +317,7 @@ function inventoryIsTruncated(inventory: GovernanceInventory | null): boolean {
     case 'limits': return inventory.items.some((item) => item.constraints_truncated)
     case 'autoscalers': return inventory.items.some((item) => item.conditions_truncated)
     case 'budgets': return inventory.items.some((item) => item.conditions_truncated)
+    case 'priority-classes': return false
   }
 }
 
@@ -248,12 +327,14 @@ function visibleInventoryCount(
   limits: LimitRow[],
   autoscalers: KubernetesHorizontalPodAutoscaler[],
   budgets: KubernetesPodDisruptionBudget[],
+  priorityClasses: KubernetesPriorityClass[],
 ): number {
   switch (view) {
     case 'quotas': return quotas.length
     case 'limits': return limits.length
     case 'autoscalers': return autoscalers.length
     case 'budgets': return budgets.length
+    case 'priority-classes': return priorityClasses.length
   }
 }
 

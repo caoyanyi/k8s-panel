@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { type ReactNode, useState } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -84,6 +84,47 @@ describe('GovernancePage', () => {
     expect(screen.getByText('DisruptionAllowed=True')).toBeInTheDocument()
     expect(requested.at(-1)).toBe('/api/v1/clusters/clu_1/pod-disruption-budgets?namespace=payments')
     expect(requested).toHaveLength(4)
+  })
+
+  it('loads PriorityClass metadata and detail only after the cluster-scoped view is selected', async () => {
+    const requested: string[] = []
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const path = String(input)
+      requested.push(path)
+      if (path.endsWith('/namespaces')) return Promise.resolve(dataResponse([namespace]))
+      if (path.includes('/resource-quotas')) return Promise.resolve(dataResponse([quota]))
+      if (path.endsWith('/priority-classes/workload-high')) {
+        return Promise.resolve(dataResponse({
+          ...priorityClasses[1], value: 1000000, global_default: true,
+          preemption_policy: 'PreemptLowerPriority', preemption_policy_defaulted: true,
+          description: 'private scheduling guidance', labels: { private: 'value' },
+        }))
+      }
+      if (path.endsWith('/priority-classes')) return Promise.resolve(dataResponse(priorityClasses))
+      return Promise.resolve(errorResponse(404, 'not_found'))
+    }))
+    const user = userEvent.setup()
+
+    renderPage()
+
+    expect(await screen.findAllByText('compute-quota')).toHaveLength(2)
+    expect(requested.some((path) => path.includes('/priority-classes'))).toBe(false)
+    await user.click(screen.getByRole('button', { name: 'PriorityClass' }))
+
+    expect(await screen.findByText('workload-high')).toBeInTheDocument()
+    expect(screen.getByText('system-cluster-critical')).toBeInTheDocument()
+    expect(screen.queryByLabelText('命名空间')).not.toBeInTheDocument()
+    expect(requested.filter((path) => path.endsWith('/namespaces'))).toHaveLength(1)
+    expect(requested.filter((path) => path.endsWith('/priority-classes'))).toHaveLength(1)
+
+    await user.click(screen.getByRole('button', { name: '查看 workload-high' }))
+    const dialog = await screen.findByRole('dialog', { name: 'PriorityClass · workload-high' })
+    expect(within(dialog).getByText('1,000,000')).toBeInTheDocument()
+    expect(within(dialog).getByText('是')).toBeInTheDocument()
+    expect(within(dialog).getByText('PreemptLowerPriority（默认）')).toBeInTheDocument()
+    expect(screen.queryByText('private scheduling guidance')).not.toBeInTheDocument()
+    expect(screen.queryByText('value')).not.toBeInTheDocument()
+    expect(requested.filter((path) => path.endsWith('/priority-classes/workload-high'))).toHaveLength(1)
   })
 
   it('requires an explicit namespace before reading policy objects', async () => {
@@ -270,6 +311,11 @@ const disruptionBudget = {
   conditions: [{ type: 'DisruptionAllowed', status: 'True', reason: 'SufficientPods' }],
   condition_count: 1, conditions_truncated: false, created_at: '2026-07-28T03:12:00Z',
 }
+
+const priorityClasses = [
+  { name: 'system-cluster-critical', created_at: '2026-07-20T08:00:00Z' },
+  { name: 'workload-high', created_at: '2026-07-28T03:15:00Z' },
+]
 
 function renderPage(overrides: Partial<PanelContextValue> = {}) {
   return render(<ContextHarness overrides={overrides}><GovernancePage /></ContextHarness>)

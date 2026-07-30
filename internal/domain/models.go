@@ -628,6 +628,26 @@ type KubernetesCertificateSigningRequestDetail struct {
 	ConditionCount             int                                            `json:"condition_count"`
 }
 
+type KubernetesPriorityClass struct {
+	Name      string    `json:"name"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type KubernetesPriorityClassPreemptionPolicy string
+
+const (
+	PriorityClassPreemptNever KubernetesPriorityClassPreemptionPolicy = "Never"
+	PriorityClassPreemptLower KubernetesPriorityClassPreemptionPolicy = "PreemptLowerPriority"
+)
+
+type KubernetesPriorityClassDetail struct {
+	KubernetesPriorityClass
+	Value                     int32                                   `json:"value"`
+	GlobalDefault             bool                                    `json:"global_default"`
+	PreemptionPolicy          KubernetesPriorityClassPreemptionPolicy `json:"preemption_policy"`
+	PreemptionPolicyDefaulted bool                                    `json:"preemption_policy_defaulted"`
+}
+
 type KubernetesAPIService struct {
 	Name                       string     `json:"name"`
 	Group                      string     `json:"group"`

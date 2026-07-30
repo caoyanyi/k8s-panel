@@ -640,6 +640,40 @@ func TestValidateCertificateSigningRequestName(t *testing.T) {
 	}
 }
 
+func TestValidatePriorityClassName(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		value     string
+		wantField string
+	}{
+		{name: "dns label", value: "workload-high"},
+		{name: "dns subdomain", value: "batch.platform.example.com"},
+		{name: "system class", value: "system-cluster-critical"},
+		{name: "empty", value: "", wantField: "name"},
+		{name: "uppercase", value: "Workload-High", wantField: "name"},
+		{name: "path traversal", value: "../priorityclasses", wantField: "name"},
+		{name: "too long", value: strings.Repeat("a", 254), wantField: "name"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := ValidatePriorityClassName(tt.value)
+			if tt.wantField == "" {
+				if err != nil {
+					t.Fatalf("ValidatePriorityClassName() error = %v", err)
+				}
+				return
+			}
+			var validationErr *ValidationError
+			if !errors.As(err, &validationErr) || validationErr.Field != tt.wantField {
+				t.Fatalf("ValidatePriorityClassName() error = %v, want field %q", err, tt.wantField)
+			}
+		})
+	}
+}
+
 func TestValidateAPIServiceName(t *testing.T) {
 	t.Parallel()
 

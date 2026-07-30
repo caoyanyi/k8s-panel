@@ -539,6 +539,38 @@ func (s *Service) CertificateSigningRequest(
 	return gateway.CertificateSigningRequest(ctx, name)
 }
 
+func (s *Service) PriorityClasses(ctx context.Context, clusterID string) ([]domain.KubernetesPriorityClass, error) {
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	gateway, err := s.kubeGateway(ctx, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	return gateway.PriorityClasses(ctx)
+}
+
+func (s *Service) PriorityClass(
+	ctx context.Context,
+	clusterID, name string,
+) (domain.KubernetesPriorityClassDetail, error) {
+	if err := domain.ValidatePriorityClassName(name); err != nil {
+		return domain.KubernetesPriorityClassDetail{}, err
+	}
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return domain.KubernetesPriorityClassDetail{}, err
+	}
+	defer release()
+	gateway, err := s.kubeGateway(ctx, clusterID)
+	if err != nil {
+		return domain.KubernetesPriorityClassDetail{}, err
+	}
+	return gateway.PriorityClass(ctx, name)
+}
+
 func (s *Service) APIServices(ctx context.Context, clusterID string) ([]domain.KubernetesAPIService, error) {
 	release, err := s.acquireKubernetesRead(ctx)
 	if err != nil {

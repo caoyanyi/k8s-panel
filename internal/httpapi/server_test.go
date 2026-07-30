@@ -61,6 +61,11 @@ func TestServerAuthenticationAndClusterLifecycle(t *testing.T) {
 	if unauthorizedCSRs.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthorized CSR status = %d, want 401", unauthorizedCSRs.Code)
 	}
+	unauthorizedPriorityClasses := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorizedPriorityClasses, httptest.NewRequest(http.MethodGet, "/api/v1/clusters/clu_1/priority-classes", nil))
+	if unauthorizedPriorityClasses.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized PriorityClass status = %d, want 401", unauthorizedPriorityClasses.Code)
+	}
 	unauthorizedAPIServices := httptest.NewRecorder()
 	handler.ServeHTTP(unauthorizedAPIServices, httptest.NewRequest(http.MethodGet, "/api/v1/clusters/clu_1/api-services", nil))
 	if unauthorizedAPIServices.Code != http.StatusUnauthorized {
@@ -266,6 +271,25 @@ func TestServerAuthenticationAndClusterLifecycle(t *testing.T) {
 		t.Fatalf("invalid CSR name status = %d, body = %s", invalidCSRName.Code, invalidCSRName.Body.String())
 	}
 	assertErrorField(t, invalidCSRName.Body.Bytes(), "name")
+	priorityClassPath := "/api/v1/clusters/" + created.Data.ID + "/priority-classes"
+	priorityClasses := authenticatedRequest(t, handler, cookie, http.MethodGet, priorityClassPath, "")
+	if priorityClasses.Code != http.StatusOK || !strings.Contains(priorityClasses.Body.String(), `"name":"workload-high"`) ||
+		strings.Contains(priorityClasses.Body.String(), "private scheduling guidance") {
+		t.Fatalf("PriorityClasses status = %d, body = %s", priorityClasses.Code, priorityClasses.Body.String())
+	}
+	priorityClassDetail := authenticatedRequest(t, handler, cookie, http.MethodGet, priorityClassPath+"/workload-high", "")
+	if priorityClassDetail.Code != http.StatusOK ||
+		!strings.Contains(priorityClassDetail.Body.String(), `"value":1000000`) ||
+		!strings.Contains(priorityClassDetail.Body.String(), `"preemption_policy":"PreemptLowerPriority"`) ||
+		strings.Contains(priorityClassDetail.Body.String(), "private scheduling guidance") ||
+		strings.Contains(priorityClassDetail.Body.String(), "description") {
+		t.Fatalf("PriorityClass detail status = %d, body = %s", priorityClassDetail.Code, priorityClassDetail.Body.String())
+	}
+	invalidPriorityClassName := authenticatedRequest(t, handler, cookie, http.MethodGet, priorityClassPath+"/..%2Fpriorityclasses", "")
+	if invalidPriorityClassName.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid PriorityClass name status = %d, body = %s", invalidPriorityClassName.Code, invalidPriorityClassName.Body.String())
+	}
+	assertErrorField(t, invalidPriorityClassName.Body.Bytes(), "name")
 	apiServicesPath := "/api/v1/clusters/" + created.Data.ID + "/api-services"
 	apiServices := authenticatedRequest(t, handler, cookie, http.MethodGet, apiServicesPath, "")
 	if apiServices.Code != http.StatusOK || !strings.Contains(apiServices.Body.String(), `"name":"v1beta1.metrics.k8s.io"`) ||
@@ -1230,6 +1254,15 @@ func (testKube) CertificateSigningRequest(
 		Usages: []string{"client auth"}, State: domain.CertificateSigningRequestApproved,
 		Conditions:     []domain.KubernetesCertificateSigningRequestCondition{{Type: "Approved", Status: "True"}},
 		ConditionCount: 1,
+	}, nil
+}
+func (testKube) PriorityClasses(context.Context) ([]domain.KubernetesPriorityClass, error) {
+	return []domain.KubernetesPriorityClass{{Name: "workload-high"}}, nil
+}
+func (testKube) PriorityClass(_ context.Context, name string) (domain.KubernetesPriorityClassDetail, error) {
+	return domain.KubernetesPriorityClassDetail{
+		KubernetesPriorityClass: domain.KubernetesPriorityClass{Name: name},
+		Value:                   1000000, PreemptionPolicy: domain.PriorityClassPreemptLower,
 	}, nil
 }
 func (testKube) APIServices(context.Context) ([]domain.KubernetesAPIService, error) {

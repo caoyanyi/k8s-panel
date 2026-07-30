@@ -583,7 +583,7 @@ test('storage inventory keeps cluster resources namespace independent', async ({
   expect(consoleErrors).toEqual([])
 })
 
-test('namespace governance reads one bounded policy kind at a time', async ({ page }, testInfo) => {
+test('governance reads one bounded policy kind at a time', async ({ page }, testInfo) => {
   const consoleErrors: string[] = []
   const requestedKinds: string[] = []
   page.on('console', (message) => {
@@ -621,11 +621,26 @@ test('namespace governance reads one bounded policy kind at a time', async ({ pa
   await expect(page.getByText('75%')).toBeVisible()
   await expect(page.getByText('DisruptionAllowed=True')).toBeVisible()
 
+  await page.getByRole('button', { name: 'PriorityClass' }).click()
+  await expect(page.getByText('workload-high', { exact: true })).toBeVisible()
+  await expect(page.getByText('system-cluster-critical', { exact: true })).toBeVisible()
+  await expect(page.getByLabel('命名空间')).toHaveCount(0)
+  expect(requestedKinds).toEqual([
+    'resourcequotas:payments', 'limitranges:payments', 'hpa:payments', 'pdb:payments', 'priorityclasses:cluster',
+  ])
+  await page.getByRole('button', { name: '查看 workload-high' }).click()
+  const dialog = page.getByRole('dialog', { name: 'PriorityClass · workload-high' })
+  await expect(dialog.getByText('1,000,000')).toBeVisible()
+  await expect(dialog.getByText('PreemptLowerPriority（默认）')).toBeVisible()
+  await expect(dialog.getByText('是')).toBeVisible()
+  await expect(dialog.getByText('private scheduling guidance')).toHaveCount(0)
+  expect(requestedKinds.at(-1)).toBe('priorityclass-detail:workload-high')
+
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
   expect(overflow).toBeLessThanOrEqual(1)
   const result = await new AxeBuilder({ page }).analyze()
   expect(result.violations.filter((violation) => ['serious', 'critical'].includes(violation.impact ?? ''))).toEqual([])
-  await page.screenshot({ path: `test-results/${testInfo.project.name}-namespace-governance.png`, fullPage: true })
+  await page.screenshot({ path: `test-results/${testInfo.project.name}-priority-class-governance.png`, fullPage: true })
   expect(consoleErrors).toEqual([])
 })
 
@@ -1064,6 +1079,19 @@ async function mockGovernanceResources(page: Page, requestedKinds: string[]) {
         conditions: [{ type: 'DisruptionAllowed', status: 'True', reason: 'SufficientPods' }],
         condition_count: 1, conditions_truncated: false, created_at: '2026-07-28T03:12:00Z',
       }]
+    } else if (path === '/api/v1/clusters/clu_1/priority-classes/workload-high') {
+      requestedKinds.push('priorityclass-detail:workload-high')
+      data = {
+        name: 'workload-high', created_at: '2026-07-28T03:15:00Z', value: 1000000,
+        global_default: true, preemption_policy: 'PreemptLowerPriority', preemption_policy_defaulted: true,
+        description: 'private scheduling guidance', annotations: { private: 'value' },
+      }
+    } else if (path === '/api/v1/clusters/clu_1/priority-classes') {
+      requestedKinds.push('priorityclasses:cluster')
+      data = [
+        { name: 'system-cluster-critical', created_at: '2026-07-20T08:00:00Z' },
+        { name: 'workload-high', created_at: '2026-07-28T03:15:00Z' },
+      ]
     } else {
       data = []
     }

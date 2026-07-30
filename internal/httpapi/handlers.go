@@ -320,6 +320,24 @@ func (s *Server) getCertificateSigningRequest(w http.ResponseWriter, r *http.Req
 	writeData(w, http.StatusOK, item)
 }
 
+func (s *Server) listPriorityClasses(w http.ResponseWriter, r *http.Request) {
+	items, err := s.service.PriorityClasses(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeData(w, http.StatusOK, items)
+}
+
+func (s *Server) getPriorityClass(w http.ResponseWriter, r *http.Request) {
+	item, err := s.service.PriorityClass(r.Context(), r.PathValue("id"), r.PathValue("name"))
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeData(w, http.StatusOK, item)
+}
+
 func (s *Server) listAPIServices(w http.ResponseWriter, r *http.Request) {
 	items, err := s.service.APIServices(r.Context(), r.PathValue("id"))
 	if err != nil {

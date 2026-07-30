@@ -696,6 +696,14 @@ func TestServiceRejectsKubernetesReadsDuringCriticalResourcePressure(t *testing.
 			_, err := service.CertificateSigningRequest(context.Background(), cluster.ID, "worker-01")
 			return err
 		}},
+		{name: "priority classes", call: func() error {
+			_, err := service.PriorityClasses(context.Background(), cluster.ID)
+			return err
+		}},
+		{name: "priority class detail", call: func() error {
+			_, err := service.PriorityClass(context.Background(), cluster.ID, "workload-high")
+			return err
+		}},
 		{name: "API services", call: func() error {
 			_, err := service.APIServices(context.Background(), cluster.ID)
 			return err
@@ -1459,6 +1467,48 @@ func TestServiceListsCertificateSigningRequestsAndValidatesDetailNameBeforeGatew
 	}
 	if gateway.csrDetailCalls.Load() != 1 {
 		t.Fatal("invalid CSR name reached Kubernetes gateway")
+	}
+}
+
+func TestServiceListsPriorityClassesAndValidatesDetailNameBeforeGateway(t *testing.T) {
+	t.Parallel()
+
+	const name = "workload-high"
+	gateway := &fakeKubeGateway{
+		probe:           domain.ClusterProbe{Version: "v1.36.2"},
+		priorityClasses: []domain.KubernetesPriorityClass{{Name: name}},
+		priorityClassDetail: domain.KubernetesPriorityClassDetail{
+			KubernetesPriorityClass: domain.KubernetesPriorityClass{Name: name},
+			Value:                   1000000, PreemptionPolicy: domain.PriorityClassPreemptLower,
+		},
+	}
+	service, _, _ := newTestService(t, serviceFakes{kube: gateway})
+	cluster, err := service.CreateCluster(context.Background(), "admin", "req_cluster", domain.ClusterInput{
+		Name: "cluster", Environment: domain.EnvironmentDevelopment, Server: "https://api.example.com", BearerToken: "token",
+	})
+	if err != nil {
+		t.Fatalf("CreateCluster() error = %v", err)
+	}
+
+	items, err := service.PriorityClasses(context.Background(), cluster.ID)
+	if err != nil || len(items) != 1 || items[0].Name != name {
+		t.Fatalf("PriorityClasses() = %#v, %v", items, err)
+	}
+	detail, err := service.PriorityClass(context.Background(), cluster.ID, name)
+	if err != nil || detail.Name != name || detail.Value != 1000000 {
+		t.Fatalf("PriorityClass() = %#v, %v", detail, err)
+	}
+	if gateway.priorityClassName != name || gateway.priorityClassListCalls.Load() != 1 ||
+		gateway.priorityClassDetailCalls.Load() != 1 {
+		t.Fatalf("PriorityClass gateway inputs = name %q, list calls %d, detail calls %d",
+			gateway.priorityClassName, gateway.priorityClassListCalls.Load(), gateway.priorityClassDetailCalls.Load())
+	}
+
+	if _, err := service.PriorityClass(context.Background(), cluster.ID, "../priorityclasses"); err == nil {
+		t.Fatal("PriorityClass() accepted an invalid name")
+	}
+	if gateway.priorityClassDetailCalls.Load() != 1 {
+		t.Fatal("invalid PriorityClass name reached Kubernetes gateway")
 	}
 }
 
@@ -2484,6 +2534,11 @@ type fakeKubeGateway struct {
 	csrName                          string
 	csrListCalls                     atomic.Int64
 	csrDetailCalls                   atomic.Int64
+	priorityClasses                  []domain.KubernetesPriorityClass
+	priorityClassDetail              domain.KubernetesPriorityClassDetail
+	priorityClassName                string
+	priorityClassListCalls           atomic.Int64
+	priorityClassDetailCalls         atomic.Int64
 	apiServices                      []domain.KubernetesAPIService
 	apiServiceCalls                  atomic.Int64
 	admissionWebhooks                []domain.KubernetesAdmissionWebhookConfiguration
@@ -2681,6 +2736,20 @@ func (g *fakeKubeGateway) CertificateSigningRequest(
 	g.csrName = name
 	g.mutationMu.Unlock()
 	return g.csrDetail, nil
+}
+func (g *fakeKubeGateway) PriorityClasses(context.Context) ([]domain.KubernetesPriorityClass, error) {
+	g.priorityClassListCalls.Add(1)
+	return append([]domain.KubernetesPriorityClass(nil), g.priorityClasses...), nil
+}
+func (g *fakeKubeGateway) PriorityClass(
+	_ context.Context,
+	name string,
+) (domain.KubernetesPriorityClassDetail, error) {
+	g.priorityClassDetailCalls.Add(1)
+	g.mutationMu.Lock()
+	g.priorityClassName = name
+	g.mutationMu.Unlock()
+	return g.priorityClassDetail, nil
 }
 func (g *fakeKubeGateway) APIServices(context.Context) ([]domain.KubernetesAPIService, error) {
 	g.apiServiceCalls.Add(1)

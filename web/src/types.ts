@@ -207,6 +207,20 @@ export interface KubernetesCertificateSigningRequestDetail extends KubernetesCer
   condition_count: number
 }
 
+export interface KubernetesPriorityClass {
+  name: string
+  created_at: string
+}
+
+export type KubernetesPriorityClassPreemptionPolicy = 'Never' | 'PreemptLowerPriority'
+
+export interface KubernetesPriorityClassDetail extends KubernetesPriorityClass {
+  value: number
+  global_default: boolean
+  preemption_policy: KubernetesPriorityClassPreemptionPolicy
+  preemption_policy_defaulted: boolean
+}
+
 export interface KubernetesAPIService {
   name: string
   group: string
