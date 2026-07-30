@@ -83,6 +83,7 @@ type KubeGateway interface {
 	StorageClasses(context.Context) ([]domain.KubernetesStorageClass, error)
 	CSIDrivers(context.Context) ([]domain.KubernetesCSIDriver, error)
 	CSIDriver(context.Context, string) (domain.KubernetesCSIDriverDetail, error)
+	HelmReleaseHistory(context.Context, string, string) (domain.HelmReleaseHistory, error)
 	ResourceQuotas(context.Context, string) ([]domain.KubernetesResourceQuota, error)
 	LimitRanges(context.Context, string) ([]domain.KubernetesLimitRange, error)
 	HorizontalPodAutoscalers(context.Context, string) ([]domain.KubernetesHorizontalPodAutoscaler, error)

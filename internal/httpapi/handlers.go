@@ -906,6 +906,22 @@ func (s *Server) listHelmReleases(w http.ResponseWriter, r *http.Request) {
 	writeData(w, http.StatusOK, items)
 }
 
+func (s *Server) getHelmReleaseHistory(w http.ResponseWriter, r *http.Request) {
+	clusterID := r.URL.Query().Get("cluster_id")
+	if clusterID == "" {
+		writeError(w, r, domain.Invalid("cluster_id", "is required"))
+		return
+	}
+	item, err := s.service.HelmReleaseHistory(
+		r.Context(), clusterID, r.URL.Query().Get("namespace"), r.PathValue("name"),
+	)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeData(w, http.StatusOK, item)
+}
+
 type helmWriteInput struct {
 	ClusterID    string `json:"cluster_id"`
 	Namespace    string `json:"namespace"`

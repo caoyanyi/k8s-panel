@@ -798,6 +798,19 @@ export interface HelmRelease {
   updated_at?: string
 }
 
+export interface HelmReleaseRevision {
+  revision: number
+  status: string
+  created_at: string
+}
+
+export interface HelmReleaseHistory {
+  name: string
+  namespace: string
+  revisions: HelmReleaseRevision[]
+  truncated: boolean
+}
+
 export interface Operation {
   id: string
   request_id: string

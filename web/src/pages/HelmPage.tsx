@@ -2,6 +2,7 @@ import { ArrowDownToLine, History, LoaderCircle, Plus, Power, RefreshCw, RotateC
 import { type FormEvent, useEffect, useState } from 'react'
 import { api, errorMessage } from '../api'
 import { EmptyState, ErrorState, LoadingState } from '../components/DataState'
+import { HelmReleaseHistoryModal } from '../components/HelmReleaseHistoryModal'
 import { Modal } from '../components/Modal'
 import { PageHeader } from '../components/PageHeader'
 import { StatusBadge } from '../components/StatusBadge'
@@ -23,6 +24,7 @@ export function HelmPage({ notify, openOperations }: HelmPageProps) {
   const [repositoryOpen, setRepositoryOpen] = useState(false)
   const [installOpen, setInstallOpen] = useState(false)
   const [releaseAction, setReleaseAction] = useState<ReleaseAction>(null)
+  const [historyRelease, setHistoryRelease] = useState<HelmRelease | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [formError, setFormError] = useState('')
   const [repositoryForm, setRepositoryForm] = useState({ name: '', url: '', username: '', password: '' })
@@ -43,6 +45,8 @@ export function HelmPage({ notify, openOperations }: HelmPageProps) {
   useEffect(() => {
     if (!selectedNamespace && namespaces.data?.length) setSelectedNamespace(namespaces.data[0].name)
   }, [namespaces.data, selectedNamespace, setSelectedNamespace])
+
+  useEffect(() => setHistoryRelease(null), [selectedClusterId, selectedNamespace])
 
   const closeRepository = () => {
     setRepositoryOpen(false)
@@ -114,7 +118,7 @@ export function HelmPage({ notify, openOperations }: HelmPageProps) {
     }
   }
 
-  const openReleaseAction = (type: NonNullable<ReleaseAction>['type'], release: HelmRelease) => {
+  const openReleaseAction = (type: NonNullable<ReleaseAction>['type'], release: HelmRelease, revision?: number) => {
     setReleaseAction({ type, release })
     setReleaseForm({
       release_name: release.name,
@@ -122,7 +126,7 @@ export function HelmPage({ notify, openOperations }: HelmPageProps) {
       repository_id: repositories.data?.find((item) => item.enabled)?.id ?? '',
       version: '',
       values: '',
-      revision: Math.max(1, release.revision - 1),
+      revision: revision ?? Math.max(1, release.revision - 1),
     })
     setFormError('')
   }
@@ -174,9 +178,9 @@ export function HelmPage({ notify, openOperations }: HelmPageProps) {
           {selectedClusterId && <section className="toolbar"><div className="toolbar-field"><label htmlFor="helm-namespace">命名空间</label><select id="helm-namespace" value={selectedNamespace} onChange={(event) => setSelectedNamespace(event.target.value)}><option value="">全部命名空间</option>{namespaces.data?.map((item) => <option key={item.name} value={item.name}>{item.name}</option>)}</select></div><button className="icon-button toolbar-refresh" title="刷新" aria-label="刷新 Release" onClick={() => void releases.refresh()}><RefreshCw size={17} className={releases.loading ? 'spin' : ''} /></button></section>}
           <section className="section-block table-section">
             {!selectedClusterId ? <EmptyState title="尚未选择集群" /> : releases.loading ? <LoadingState label="正在读取 Helm Release" /> : releases.error ? <ErrorState error={releases.error} onRetry={() => void releases.refresh()} /> : !releases.data?.length ? <EmptyState title="当前范围没有 Helm Release" action={<button className="button button-primary" onClick={openInstall}>安装 Release</button>} /> : (
-              <div className="table-wrap"><table><thead><tr><th>Release</th><th>命名空间</th><th>状态</th><th>Chart</th><th>Revision</th><th>更新时间</th><th className="actions-column">操作</th></tr></thead><tbody>{releases.data.map((release) => <tr key={`${release.namespace}:${release.name}`}>
+              <div className="table-wrap"><table><thead><tr><th>Release</th><th>命名空间</th><th>状态</th><th>Chart</th><th>Revision</th><th>更新时间</th><th className="actions-column helm-actions-column">操作</th></tr></thead><tbody>{releases.data.map((release) => <tr key={`${release.namespace}:${release.name}`}>
                 <td><strong>{release.name}</strong></td><td className="mono">{release.namespace}</td><td><StatusBadge status={release.status} /></td><td className="mono">{release.chart || '-'}</td><td>{release.revision}</td><td>{formatDateTime(release.updated_at)}</td>
-                <td><div className="row-actions"><button className="icon-button" title="升级" aria-label={`升级 ${release.name}`} onClick={() => openReleaseAction('upgrade', release)}><RefreshCw size={16} /></button><button className="icon-button" title="回滚" aria-label={`回滚 ${release.name}`} onClick={() => openReleaseAction('rollback', release)}><RotateCcw size={16} /></button><button className="icon-button icon-danger" title="卸载" aria-label={`卸载 ${release.name}`} onClick={() => openReleaseAction('uninstall', release)}><Trash2 size={16} /></button></div></td>
+                <td><div className="row-actions"><button className="icon-button" title="升级" aria-label={`升级 ${release.name}`} onClick={() => openReleaseAction('upgrade', release)}><RefreshCw size={16} /></button><button className="icon-button" title="修订历史" aria-label={`查看 ${release.name} 修订历史`} onClick={() => setHistoryRelease(release)}><History size={16} /></button><button className="icon-button" title="回滚" aria-label={`回滚 ${release.name}`} onClick={() => openReleaseAction('rollback', release)}><RotateCcw size={16} /></button><button className="icon-button icon-danger" title="卸载" aria-label={`卸载 ${release.name}`} onClick={() => openReleaseAction('uninstall', release)}><Trash2 size={16} /></button></div></td>
               </tr>)}</tbody></table></div>
             )}
           </section>
@@ -191,6 +195,17 @@ export function HelmPage({ notify, openOperations }: HelmPageProps) {
           )}
         </section>
       )}
+
+      {historyRelease && <HelmReleaseHistoryModal
+        clusterId={selectedClusterId}
+        release={historyRelease}
+        onClose={() => setHistoryRelease(null)}
+        onRollback={(revision) => {
+          const release = historyRelease
+          setHistoryRelease(null)
+          openReleaseAction('rollback', release, revision)
+        }}
+      />}
 
       <Modal title="添加 Chart 仓库" open={repositoryOpen} onClose={closeRepository}>
         <form onSubmit={createRepository} className="form-grid">

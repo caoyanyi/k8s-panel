@@ -840,6 +840,10 @@ func TestServiceRejectsKubernetesReadsDuringCriticalResourcePressure(t *testing.
 			_, err := service.ListHelmReleases(context.Background(), cluster.ID, "payments")
 			return err
 		}},
+		{name: "Helm release history", call: func() error {
+			_, err := service.HelmReleaseHistory(context.Background(), cluster.ID, "payments", "gateway")
+			return err
+		}},
 	}
 	for _, check := range checks {
 		if err := check.call(); !errors.Is(err, domain.ErrBusy) {
@@ -879,12 +883,66 @@ func TestServiceRejectsKubernetesReadsDuringCriticalResourcePressure(t *testing.
 	if listCalls, detailCalls, reviewCalls := gateway.accessListCalls.Load(), gateway.accessDetailCalls.Load(), gateway.accessReviewCalls.Load(); listCalls != 0 || detailCalls != 0 || reviewCalls != 0 {
 		t.Fatalf("access reads reached Kubernetes under critical pressure: lists=%d details=%d reviews=%d", listCalls, detailCalls, reviewCalls)
 	}
+	if calls := gateway.helmHistoryCalls.Load(); calls != 0 {
+		t.Fatalf("Helm release history reached Kubernetes %d times under critical pressure", calls)
+	}
 	if listCalls, detailCalls := gateway.admissionWebhookListCalls.Load(), gateway.admissionWebhookDetailCalls.Load(); listCalls != 0 || detailCalls != 0 {
 		t.Fatalf("admission webhook reads reached Kubernetes under critical pressure: lists=%d details=%d", listCalls, detailCalls)
 	}
 	capacity := service.OperationCapacity().KubernetesReads
 	if !capacity.Adaptive || capacity.Pressure != resourceguard.PressureCritical || capacity.Limit != 0 || capacity.Maximum != 4 {
 		t.Fatalf("Kubernetes read capacity = %#v", capacity)
+	}
+}
+
+func TestServiceReadsHelmReleaseHistoryAndValidatesBeforeGateway(t *testing.T) {
+	t.Parallel()
+
+	createdAt := time.Date(2026, 7, 30, 9, 4, 0, 0, time.UTC)
+	gateway := &fakeKubeGateway{
+		probe: domain.ClusterProbe{Version: "v1.36.2"},
+		helmHistory: domain.HelmReleaseHistory{
+			Name: "gateway", Namespace: "payments",
+			Revisions: []domain.HelmReleaseRevision{{Revision: 4, Status: "deployed", CreatedAt: createdAt}},
+		},
+	}
+	service, _, _ := newTestService(t, serviceFakes{kube: gateway})
+	cluster, err := service.CreateCluster(context.Background(), "admin", "req_cluster", domain.ClusterInput{
+		Name: "cluster", Environment: domain.EnvironmentDevelopment, Server: "https://api.example.com", BearerToken: "token",
+	})
+	if err != nil {
+		t.Fatalf("CreateCluster() error = %v", err)
+	}
+
+	history, err := service.HelmReleaseHistory(context.Background(), cluster.ID, "payments", "gateway")
+	if err != nil {
+		t.Fatalf("HelmReleaseHistory() error = %v", err)
+	}
+	if history.Name != "gateway" || len(history.Revisions) != 1 || history.Revisions[0].Revision != 4 {
+		t.Fatalf("HelmReleaseHistory() = %#v", history)
+	}
+	if gateway.helmHistoryCalls.Load() != 1 || gateway.helmHistoryNamespace != "payments" || gateway.helmHistoryName != "gateway" {
+		t.Fatalf("gateway history call = %d, %q, %q", gateway.helmHistoryCalls.Load(), gateway.helmHistoryNamespace, gateway.helmHistoryName)
+	}
+
+	for _, input := range []struct {
+		clusterID   string
+		namespace   string
+		releaseName string
+		field       string
+	}{
+		{clusterID: "", namespace: "payments", releaseName: "gateway", field: "cluster_id"},
+		{clusterID: cluster.ID, namespace: "PAYMENTS", releaseName: "gateway", field: "namespace"},
+		{clusterID: cluster.ID, namespace: "payments", releaseName: "../gateway", field: "release_name"},
+	} {
+		_, err := service.HelmReleaseHistory(context.Background(), input.clusterID, input.namespace, input.releaseName)
+		var validationErr *domain.ValidationError
+		if !errors.As(err, &validationErr) || validationErr.Field != input.field {
+			t.Errorf("HelmReleaseHistory(%q, %q, %q) error = %v", input.clusterID, input.namespace, input.releaseName, err)
+		}
+	}
+	if gateway.helmHistoryCalls.Load() != 1 {
+		t.Fatalf("invalid inputs reached gateway; calls = %d", gateway.helmHistoryCalls.Load())
 	}
 }
 
@@ -2676,6 +2734,10 @@ type fakeKubeGateway struct {
 	csiDriverName                    string
 	csiDriverListCalls               atomic.Int64
 	csiDriverDetailCalls             atomic.Int64
+	helmHistory                      domain.HelmReleaseHistory
+	helmHistoryNamespace             string
+	helmHistoryName                  string
+	helmHistoryCalls                 atomic.Int64
 	resourceQuotas                   []domain.KubernetesResourceQuota
 	limitRanges                      []domain.KubernetesLimitRange
 	horizontalPodAutoscalers         []domain.KubernetesHorizontalPodAutoscaler
@@ -2999,6 +3061,16 @@ func (g *fakeKubeGateway) CSIDriver(_ context.Context, name string) (domain.Kube
 	g.csiDriverName = name
 	g.mutationMu.Unlock()
 	return g.csiDriverDetail, nil
+}
+func (g *fakeKubeGateway) HelmReleaseHistory(_ context.Context, namespace, name string) (domain.HelmReleaseHistory, error) {
+	g.helmHistoryCalls.Add(1)
+	g.mutationMu.Lock()
+	g.helmHistoryNamespace = namespace
+	g.helmHistoryName = name
+	g.mutationMu.Unlock()
+	history := g.helmHistory
+	history.Revisions = append([]domain.HelmReleaseRevision(nil), history.Revisions...)
+	return history, nil
 }
 func (g *fakeKubeGateway) ResourceQuotas(_ context.Context, namespace string) ([]domain.KubernetesResourceQuota, error) {
 	g.resourceQuotaCalls.Add(1)

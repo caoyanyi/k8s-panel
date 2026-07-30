@@ -515,6 +515,35 @@ func (s *Service) ListHelmReleases(ctx context.Context, clusterID, namespace str
 	return s.helm.List(ctx, connection, namespace)
 }
 
+func (s *Service) HelmReleaseHistory(
+	ctx context.Context,
+	clusterID, namespace, releaseName string,
+) (domain.HelmReleaseHistory, error) {
+	if strings.TrimSpace(clusterID) == "" {
+		return domain.HelmReleaseHistory{}, domain.Invalid("cluster_id", "is required")
+	}
+	if err := domain.ValidateHelmReleaseReference(namespace, releaseName); err != nil {
+		return domain.HelmReleaseHistory{}, err
+	}
+	cluster, err := s.store.GetCluster(ctx, clusterID)
+	if err != nil {
+		return domain.HelmReleaseHistory{}, err
+	}
+	if cluster.Status == domain.ClusterDisabled {
+		return domain.HelmReleaseHistory{}, domain.ErrInvalidState
+	}
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return domain.HelmReleaseHistory{}, err
+	}
+	defer release()
+	gateway, err := s.gatewayForCluster(ctx, cluster)
+	if err != nil {
+		return domain.HelmReleaseHistory{}, err
+	}
+	return gateway.HelmReleaseHistory(ctx, namespace, releaseName)
+}
+
 func (s *Service) GetOperation(ctx context.Context, id string) (domain.Operation, error) {
 	return s.store.GetOperation(ctx, id)
 }

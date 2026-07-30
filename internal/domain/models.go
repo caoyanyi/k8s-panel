@@ -1051,3 +1051,16 @@ type HelmRelease struct {
 	AppVersion string    `json:"app_version,omitempty"`
 	UpdatedAt  time.Time `json:"updated_at,omitempty"`
 }
+
+type HelmReleaseRevision struct {
+	Revision  int       `json:"revision"`
+	Status    string    `json:"status"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type HelmReleaseHistory struct {
+	Name      string                `json:"name"`
+	Namespace string                `json:"namespace"`
+	Revisions []HelmReleaseRevision `json:"revisions"`
+	Truncated bool                  `json:"truncated"`
+}

@@ -842,6 +842,47 @@ test('access inventory loads metadata by kind and fetches details on demand', as
   expect(consoleErrors).toEqual([])
 })
 
+test('Helm release history is metadata-only, on demand and rollback-confirmed', async ({ page }, testInfo) => {
+  const consoleErrors: string[] = []
+  const requestedHistory: string[] = []
+  page.on('console', (message) => {
+    if (message.type() === 'error') consoleErrors.push(message.text())
+  })
+  page.on('pageerror', (error) => consoleErrors.push(error.message))
+  await mockHelmResources(page, requestedHistory)
+
+  await page.goto('/#helm')
+  await expect(page.getByRole('heading', { name: 'Helm' })).toBeVisible()
+  await expect(page.getByText('gateway-1.4.0', { exact: true })).toBeVisible()
+  await expect(page.getByLabel('命名空间')).toHaveValue('payments')
+  expect(requestedHistory).toEqual([])
+
+  await page.getByRole('button', { name: '查看 gateway 修订历史' }).click()
+  const dialog = page.getByRole('dialog', { name: '修订历史 · gateway' })
+  await expect(dialog.getByText('仅显示最近 10 个修订')).toBeVisible()
+  await expect(dialog.getByText('当前')).toBeVisible()
+  await expect(dialog.getByText('失败')).toBeVisible()
+  await expect(dialog.getByText('已替代')).toBeVisible()
+  await expect(dialog.getByText('private-release-values')).toHaveCount(0)
+  await expect(dialog.getByText('private-release-manifest')).toHaveCount(0)
+  await expect(dialog.getByText('sh.helm.release.v1.gateway.v4')).toHaveCount(0)
+  await expect(dialog.getByRole('button', { name: '选择 revision 2 回滚' })).toBeInViewport()
+  expect(requestedHistory).toEqual(['clu_1:payments:gateway'])
+
+  let overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
+  expect(overflow).toBeLessThanOrEqual(1)
+  const modalAccessibility = await new AxeBuilder({ page }).include('.modal').analyze()
+  expect(modalAccessibility.violations.filter((violation) => ['serious', 'critical'].includes(violation.impact ?? ''))).toEqual([])
+  await page.screenshot({ path: `test-results/${testInfo.project.name}-helm-release-history.png`, fullPage: true })
+
+  await dialog.getByRole('button', { name: '选择 revision 2 回滚' }).click()
+  const rollbackDialog = page.getByRole('dialog', { name: '回滚 gateway' })
+  await expect(rollbackDialog.getByLabel('目标 Revision')).toHaveValue('2')
+  overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
+  expect(overflow).toBeLessThanOrEqual(1)
+  expect(consoleErrors).toEqual([])
+})
+
 test('event center defaults to bounded Warning events and supports scoped inspection', async ({ page }, testInfo) => {
   const consoleErrors: string[] = []
   const requestedEvents: string[] = []
@@ -1255,6 +1296,48 @@ async function mockSecurityPosture(page: Page, requestedResources: string[]) {
         body: JSON.stringify({ error: { code: 'not_found', message: `No mock for ${path}` } }),
       })
       return
+    }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data }) })
+  })
+}
+
+async function mockHelmResources(page: Page, requestedHistory: string[]) {
+  await page.route('**/api/v1/**', async (route) => {
+    const url = new URL(route.request().url())
+    const path = url.pathname
+    let data: unknown
+    if (path === '/api/v1/session') {
+      data = { username: 'helm-admin', role: 'admin', expires_at: '2026-07-30T16:00:00Z' }
+    } else if (path === '/api/v1/clusters') {
+      data = [{
+        id: 'clu_1', name: 'development', environment: 'development', server: 'https://api.example.com',
+        status: 'connected', version: 'v1.36.2', credentials_configured: true,
+        created_at: '2026-07-20T08:00:00Z', updated_at: '2026-07-30T08:00:00Z',
+      }]
+    } else if (path === '/api/v1/clusters/clu_1/namespaces') {
+      data = [{ name: 'payments', status: 'Active', labels: {}, finalizers: [], created_at: '2026-07-20T08:00:00Z' }]
+    } else if (path === '/api/v1/chart-repositories') {
+      data = []
+    } else if (path === '/api/v1/helm-releases/gateway/history') {
+      requestedHistory.push(`clu_1:${url.searchParams.get('namespace')}:gateway`)
+      data = {
+        name: 'gateway', namespace: 'payments', truncated: true,
+        revisions: [
+          { revision: 4, status: 'deployed', created_at: '2026-07-30T09:04:00Z' },
+          { revision: 3, status: 'failed', created_at: '2026-07-30T09:03:00Z' },
+          { revision: 2, status: 'superseded', created_at: '2026-07-30T09:02:00Z' },
+        ],
+        storage_secret: 'sh.helm.release.v1.gateway.v4',
+        values: 'private-release-values',
+        manifest: 'private-release-manifest',
+      }
+    } else if (path === '/api/v1/helm-releases') {
+      data = [{
+        name: 'gateway', namespace: 'payments', revision: 4, status: 'deployed', chart: 'gateway-1.4.0',
+        app_version: '1.4.0', updated_at: '2026-07-30T09:04:00Z',
+      }]
+    } else {
+      data = []
     }
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data }) })
   })

@@ -440,6 +440,40 @@ func TestValidateHelmOperationInput(t *testing.T) {
 	}
 }
 
+func TestValidateHelmReleaseReference(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		namespace   string
+		releaseName string
+		wantField   string
+	}{
+		{name: "valid", namespace: "payments", releaseName: "gateway"},
+		{name: "empty namespace", releaseName: "gateway", wantField: "namespace"},
+		{name: "invalid namespace", namespace: "PAYMENTS", releaseName: "gateway", wantField: "namespace"},
+		{name: "empty release", namespace: "payments", wantField: "release_name"},
+		{name: "unsafe release", namespace: "payments", releaseName: "../gateway", wantField: "release_name"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := ValidateHelmReleaseReference(tt.namespace, tt.releaseName)
+			if tt.wantField == "" && err != nil {
+				t.Fatalf("ValidateHelmReleaseReference() error = %v", err)
+			}
+			if tt.wantField == "" {
+				return
+			}
+			var validationErr *ValidationError
+			if !errors.As(err, &validationErr) || validationErr.Field != tt.wantField {
+				t.Fatalf("expected validation field %q, got %v", tt.wantField, err)
+			}
+		})
+	}
+}
+
 func TestValidateWorkloadReference(t *testing.T) {
 	t.Parallel()
 

@@ -183,6 +183,7 @@ func (s *Server) routes() {
 
 	s.mux.Handle("GET /api/v1/helm-releases", s.protected(http.HandlerFunc(s.listHelmReleases)))
 	s.mux.Handle("POST /api/v1/helm-releases", s.protected(http.HandlerFunc(s.installHelmRelease)))
+	s.mux.Handle("GET /api/v1/helm-releases/{name}/history", s.protected(http.HandlerFunc(s.getHelmReleaseHistory)))
 	s.mux.Handle("POST /api/v1/helm-releases/{name}/upgrades", s.protected(http.HandlerFunc(s.upgradeHelmRelease)))
 	s.mux.Handle("POST /api/v1/helm-releases/{name}/rollbacks", s.protected(http.HandlerFunc(s.rollbackHelmRelease)))
 	s.mux.Handle("DELETE /api/v1/helm-releases/{name}", s.protected(http.HandlerFunc(s.uninstallHelmRelease)))

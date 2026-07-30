@@ -95,6 +95,16 @@ func ValidateHelmOperationInput(input HelmOperationInput) error {
 	return nil
 }
 
+func ValidateHelmReleaseReference(namespace, releaseName string) error {
+	if !validDNSLabel(namespace) {
+		return Invalid("namespace", "must be a valid Kubernetes namespace")
+	}
+	if !validDNSLabel(releaseName) {
+		return Invalid("release_name", "must be a valid Helm release name")
+	}
+	return nil
+}
+
 func ValidateWorkloadReference(reference WorkloadReference) error {
 	kind := strings.ToLower(strings.TrimSpace(reference.Kind))
 	if !validWorkloadKind(kind) {
