@@ -14,6 +14,7 @@ K8s Panel 是一个独立实现的 Kubernetes 与 Helm 管理面板。后端使�
 - 节点 Kubelet 与已观测 API Server 的版本偏差态势，标记政策范围、升级阻塞、超限和主版本不一致
 - 当前 API Server 实例报告的废弃 API 请求证据，按 API、资源和计划移除版本展示
 - 当前连接端点经验证的 TLS 叶证书有效期证据，区分有效、临近到期、紧急和已到期状态
+- 当前连接命中的 API Server 就绪检查证据，只展示检查名称和通过/失败状态
 - 集群级 PodDisruptionBudget 中断证据，区分允许中断、当前受阻、未匹配 Pod 和控制器待同步状态
 - ServiceAccount、Role、RoleBinding、ClusterRole、ClusterRoleBinding 元数据清单与按需规则/主体详情，支持 ServiceAccount 单动作权限模拟
 - 按集群或命名空间查看事件，默认聚焦 Warning，支持本地搜索和分页
@@ -71,6 +72,8 @@ Kubernetes 单类资源清单最多读取 5,000 项、20 页和 32 MiB 原始数
 集群级中断预算证据只在用户切换视图后占用一个 Kubernetes 读取槽，并串行读取一次 `policy/v1` PDB 清单；最多 4 页、1,000 个对象、单页 2 MiB、总计 4 MiB 和 4,096 条投影条件。该视图不读取 Pod、Node 或工作负载，不执行 Eviction 或排空模拟；“当前受阻”仅表示已同步且匹配 Pod 的 PDB 当前不允许健康 Pod 自愿中断，不代表节点一定无法排空。
 
 TLS 证书证据只在用户切换视图后占用一个 Kubernetes 读取槽，复用一次 `/version` 请求已经完成验证的 TLS 握手状态，并将最多 64 KiB 的响应体流式丢弃。面板只返回 UTC 有效期、剩余秒数和固定状态，不返回 Subject、Issuer、SAN、Serial、指纹或证书内容；该证据可能来自负载均衡器或反向代理，仅代表当前连接命中的 TLS 终止端点，不扫描宿主机 PKI、其他控制面实例或执行证书续期。
+
+API Server 就绪证据只在用户切换视图后占用一个 Kubernetes 读取槽，并对当前连接端点执行一次 `/readyz?verbose` 请求；响应最多 64 KiB、单行最多 8 KiB、最多投影 256 个检查项。面板只返回 UTC 观测时间、整体就绪状态、通过/失败数量和检查名称，不返回失败详情、原始正文或端点身份；该结果是一次非聚合观测，不代表整个高可用控制面或集群持续健康，也不会自动轮询、请求 `/livez` 或访问指标端点。
 
 CertificateSigningRequest 清单只在用户切换视图后读取 PartialObjectMetadata，最多 4 页、1,000 个对象和 4 MiB；单对象详情只在用户选择后读取且最多 2 MiB。响应仅保留请求者、签名器、请求有效期、用途和有界状态条件，不返回或解析 PKCS#10 请求、已签发证书、UID、用户组、额外身份属性、标签、注解或条件消息，也不提供审批、拒绝和签发操作。
 

@@ -1047,6 +1047,22 @@ func (s *Service) EndpointCertificate(
 	return gateway.EndpointCertificate(ctx)
 }
 
+func (s *Service) APIServerReadiness(
+	ctx context.Context,
+	clusterID string,
+) (domain.KubernetesAPIServerReadiness, error) {
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return domain.KubernetesAPIServerReadiness{}, err
+	}
+	defer release()
+	gateway, err := s.kubeGateway(ctx, clusterID)
+	if err != nil {
+		return domain.KubernetesAPIServerReadiness{}, err
+	}
+	return gateway.APIServerReadiness(ctx)
+}
+
 func (s *Service) DisruptionBudgets(
 	ctx context.Context,
 	clusterID string,

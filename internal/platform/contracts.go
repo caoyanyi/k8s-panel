@@ -51,6 +51,7 @@ type KubeGateway interface {
 	NodeVersionSkew(context.Context) (domain.KubernetesNodeVersionSkewReport, error)
 	DeprecatedAPIRequests(context.Context) ([]domain.KubernetesDeprecatedAPIRequest, error)
 	EndpointCertificate(context.Context) (domain.KubernetesEndpointCertificate, error)
+	APIServerReadiness(context.Context) (domain.KubernetesAPIServerReadiness, error)
 	DisruptionBudgets(context.Context) ([]domain.KubernetesPodDisruptionBudget, error)
 	Nodes(context.Context) ([]domain.Node, error)
 	NodeDetail(context.Context, string) (domain.NodeDetail, error)

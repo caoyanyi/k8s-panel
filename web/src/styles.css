@@ -265,6 +265,7 @@ td strong { color: var(--text); font-size: 12px; }
 .security-skew-value { min-width: 150px; }
 .security-deprecated-api-table { min-width: 680px; }
 .security-certificate-table { min-width: 820px; }
+.security-readiness-table { min-width: 520px; }
 .security-disruption-budget-table { min-width: 1380px; }
 .event-table { min-width: 1320px; }
 .access-table { min-width: 820px; }
@@ -283,7 +284,7 @@ td strong { color: var(--text); font-size: 12px; }
 
 .status-badge { min-height: 24px; padding: 0 8px; display: inline-flex; align-items: center; gap: 6px; border: 1px solid #d9dfdb; border-radius: 999px; background: #f6f8f7; color: #536159; font-size: 11px; font-weight: 630; white-space: nowrap; }
 .status-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
-.status-connected, .status-succeeded, .status-ready, .status-active, .status-deployed, .status-true, .status-normal, .status-same-minor, .status-valid, .status-available { color: var(--success); background: #eff9f3; border-color: #c5e6d3; }
+.status-connected, .status-succeeded, .status-passed, .status-ready, .status-active, .status-deployed, .status-true, .status-normal, .status-same-minor, .status-valid, .status-available { color: var(--success); background: #eff9f3; border-color: #c5e6d3; }
 .status-degraded, .status-pending, .status-queued, .status-progressing, .status-retrying, .status-suspended, .status-submitted, .status-warning, .status-constrained, .status-upgrade-blocking, .status-expiring, .status-unobserved { color: var(--warning); background: #fff8ea; border-color: #efd9aa; }
 .status-unreachable, .status-failed, .status-unavailable, .status-uninstalled, .status-critical, .status-expired, .status-outside-policy, .status-newer-than-server, .status-major-mismatch, .status-blocked { color: var(--danger); background: #fff1f1; border-color: #edc6c6; }
 .status-notready { color: var(--danger); background: #fff1f1; border-color: #edc6c6; }

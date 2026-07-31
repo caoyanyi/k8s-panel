@@ -11,6 +11,7 @@ const labels: Record<string, string> = {
   queued: '排队中',
   running: '执行中',
   succeeded: '成功',
+  passed: '通过',
   failed: '失败',
   canceled: '已取消',
   unknown: '待确认',

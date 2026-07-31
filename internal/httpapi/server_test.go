@@ -125,6 +125,13 @@ func TestServerAuthenticationAndClusterLifecycle(t *testing.T) {
 	if unauthorizedEndpointCertificate.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthorized endpoint certificate status = %d, want 401", unauthorizedEndpointCertificate.Code)
 	}
+	unauthorizedAPIServerReadiness := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorizedAPIServerReadiness, httptest.NewRequest(
+		http.MethodGet, "/api/v1/clusters/clu_1/control-plane/readiness", nil,
+	))
+	if unauthorizedAPIServerReadiness.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized API Server readiness status = %d, want 401", unauthorizedAPIServerReadiness.Code)
+	}
 	unauthorizedDisruptionBudgets := httptest.NewRecorder()
 	handler.ServeHTTP(unauthorizedDisruptionBudgets, httptest.NewRequest(
 		http.MethodGet, "/api/v1/clusters/clu_1/upgrade-readiness/disruption-budgets", nil,
@@ -902,6 +909,16 @@ func TestServerExposesAuthenticatedClusterResources(t *testing.T) {
 		strings.Contains(strings.ToLower(endpointCertificate.Body.String()), "issuer") {
 		t.Fatalf("endpoint certificate response exposed identity fields: %s", endpointCertificate.Body.String())
 	}
+	apiServerReadiness := authenticatedRequest(t, handler, cookie, http.MethodGet, base+"/control-plane/readiness", "")
+	if apiServerReadiness.Code != http.StatusOK ||
+		!strings.Contains(apiServerReadiness.Body.String(), `"observed_at":"2026-07-31T08:00:00Z"`) ||
+		!strings.Contains(apiServerReadiness.Body.String(), `"ready":false`) ||
+		!strings.Contains(apiServerReadiness.Body.String(), `"passed_checks":1`) ||
+		!strings.Contains(apiServerReadiness.Body.String(), `"failed_checks":1`) ||
+		!strings.Contains(apiServerReadiness.Body.String(), `"name":"etcd","status":"failed"`) ||
+		strings.Contains(apiServerReadiness.Body.String(), "private-etcd") {
+		t.Fatalf("API Server readiness status = %d, body = %s", apiServerReadiness.Code, apiServerReadiness.Body.String())
+	}
 	disruptionBudgets := authenticatedRequest(t, handler, cookie, http.MethodGet, base+"/upgrade-readiness/disruption-budgets", "")
 	if disruptionBudgets.Code != http.StatusOK ||
 		!strings.Contains(disruptionBudgets.Body.String(), `"namespace":"payments"`) ||
@@ -1366,6 +1383,18 @@ func (testKube) EndpointCertificate(context.Context) (domain.KubernetesEndpointC
 	return domain.KubernetesEndpointCertificate{
 		ObservedAt: observedAt, NotBefore: observedAt.Add(-24 * time.Hour), NotAfter: observedAt.Add(30 * 24 * time.Hour),
 		RemainingSeconds: 2592000, Status: domain.EndpointCertificateExpiring,
+	}, nil
+}
+func (testKube) APIServerReadiness(context.Context) (domain.KubernetesAPIServerReadiness, error) {
+	return domain.KubernetesAPIServerReadiness{
+		ObservedAt:   time.Date(2026, 7, 31, 8, 0, 0, 0, time.UTC),
+		Ready:        false,
+		PassedChecks: 1,
+		FailedChecks: 1,
+		Checks: []domain.KubernetesAPIServerReadinessCheck{
+			{Name: "ping", Status: domain.APIServerReadinessCheckPassed},
+			{Name: "etcd", Status: domain.APIServerReadinessCheckFailed},
+		},
 	}, nil
 }
 func (testKube) DisruptionBudgets(context.Context) ([]domain.KubernetesPodDisruptionBudget, error) {

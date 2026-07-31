@@ -805,6 +805,30 @@ test('security posture loads each bounded projection only when selected', async 
   expect(browserPaths).not.toContain('/api')
   expect(browserPaths).not.toContain('/apis')
 
+  await page.getByRole('button', { name: 'API 就绪' }).click()
+  await expect(page.getByText('当前连接端点未就绪', { exact: true })).toBeVisible()
+  await expect(page.getByText('当前 API Server 连接端点', { exact: true })).toBeVisible()
+  await expect(page.getByText('单次 /readyz 观测', { exact: true })).toBeVisible()
+  await expect(page.getByText('1 项检查失败', { exact: true })).toBeVisible()
+  await expect(page.getByText('ping', { exact: true })).toBeVisible()
+  await expect(page.getByText('etcd', { exact: true })).toBeVisible()
+  await expect(page.getByText('private-etcd.example.com:2379', { exact: true })).toHaveCount(0)
+  expect(requestedResources).toEqual([
+    '/api/v1/clusters/clu_1/pod-security-admission/namespaces',
+    '/api/v1/clusters/clu_1/upgrade-readiness/node-versions',
+    '/api/v1/clusters/clu_1/upgrade-readiness/deprecated-apis',
+    '/api/v1/clusters/clu_1/upgrade-readiness/disruption-budgets',
+    '/api/v1/clusters/clu_1/upgrade-readiness/endpoint-certificate',
+    '/api/v1/clusters/clu_1/control-plane/readiness',
+  ])
+  expect(browserPaths).not.toContain('/readyz')
+  expect(browserPaths).not.toContain('/livez')
+  expect(browserPaths).not.toContain('/healthz')
+
+  await page.getByLabel('搜索 API Server 就绪检查').fill('etcd 失败')
+  await expect(page.getByText('etcd', { exact: true })).toBeVisible()
+  await expect(page.getByText('ping', { exact: true })).toHaveCount(0)
+
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
   expect(overflow).toBeLessThanOrEqual(1)
   const result = await new AxeBuilder({ page }).analyze()
@@ -1323,6 +1347,18 @@ async function mockSecurityPosture(page: Page, requestedResources: string[]) {
         not_after: '2026-08-28T08:00:00Z',
         remaining_seconds: 2592000,
         status: 'expiring',
+      }
+    } else if (path === '/api/v1/clusters/clu_1/control-plane/readiness') {
+      requestedResources.push(path)
+      data = {
+        observed_at: '2026-07-31T08:00:00Z',
+        ready: false,
+        passed_checks: 1,
+        failed_checks: 1,
+        checks: [
+          { name: 'ping', status: 'passed' },
+          { name: 'etcd', status: 'failed' },
+        ],
       }
     } else {
       requestedResources.push(path)

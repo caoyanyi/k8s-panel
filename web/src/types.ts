@@ -112,6 +112,21 @@ export interface KubernetesEndpointCertificate {
   status: KubernetesEndpointCertificateStatus
 }
 
+export type KubernetesAPIServerReadinessCheckStatus = 'passed' | 'failed'
+
+export interface KubernetesAPIServerReadinessCheck {
+  name: string
+  status: KubernetesAPIServerReadinessCheckStatus
+}
+
+export interface KubernetesAPIServerReadiness {
+  observed_at: string
+  ready: boolean
+  passed_checks: number
+  failed_checks: number
+  checks: KubernetesAPIServerReadinessCheck[]
+}
+
 export interface NodeResources {
   cpu?: string
   memory?: string

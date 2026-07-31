@@ -169,6 +169,47 @@ describe('SecurityPage', () => {
     expect(requests.some((path) => path.endsWith('/metrics') || path.endsWith('/nodes') || path.endsWith('/api') || path.endsWith('/apis'))).toBe(false)
   })
 
+  it('loads redacted API Server readiness checks only after its view is selected and searches locally', async () => {
+    const requests: string[] = []
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const path = String(input)
+      requests.push(path)
+      if (path.endsWith('/control-plane/readiness')) {
+        return Promise.resolve(dataResponse(apiServerReadiness))
+      }
+      return Promise.resolve(dataResponse(postures))
+    }))
+    const user = userEvent.setup()
+
+    renderPage()
+
+    expect(await screen.findByText('payments')).toBeInTheDocument()
+    expect(requests).toEqual(['/api/v1/clusters/clu_1/pod-security-admission/namespaces'])
+
+    await user.click(screen.getByRole('button', { name: 'API 就绪' }))
+
+    expect(await screen.findByText('当前连接端点未就绪')).toBeInTheDocument()
+    expect(screen.getByText('当前 API Server 连接端点')).toBeInTheDocument()
+    expect(screen.getByText('单次 /readyz 观测')).toBeInTheDocument()
+    expect(screen.getByText('1 项检查失败')).toBeInTheDocument()
+    expect(screen.getByText('不代表整个高可用控制面状态')).toBeInTheDocument()
+    expect(screen.getByText('ping')).toBeInTheDocument()
+    expect(screen.getByText('etcd')).toBeInTheDocument()
+    expect(screen.getByText('通过')).toBeInTheDocument()
+    expect(screen.getByText('失败')).toBeInTheDocument()
+    expect(screen.getByText('2026-07-31 08:00 UTC')).toBeInTheDocument()
+    expect(screen.queryByText('private-etcd.example.com:2379')).not.toBeInTheDocument()
+    expect(requests).toEqual([
+      '/api/v1/clusters/clu_1/pod-security-admission/namespaces',
+      '/api/v1/clusters/clu_1/control-plane/readiness',
+    ])
+    expect(requests.some((path) => path.endsWith('/livez') || path.endsWith('/healthz') || path.endsWith('/metrics'))).toBe(false)
+
+    await user.type(screen.getByLabelText('搜索 API Server 就绪检查'), 'etcd 失败')
+    expect(screen.getByText('etcd')).toBeInTheDocument()
+    expect(screen.queryByText('ping')).not.toBeInTheDocument()
+  })
+
   it('loads cluster disruption budget evidence only after its view is selected and searches locally', async () => {
     const requests: string[] = []
     vi.stubGlobal('fetch', vi.fn().mockImplementation((input: RequestInfo | URL) => {
@@ -307,6 +348,17 @@ const endpointCertificate = {
   not_after: '2026-08-28T08:00:00Z',
   remaining_seconds: 30 * 24 * 60 * 60,
   status: 'expiring' as const,
+}
+
+const apiServerReadiness = {
+  observed_at: '2026-07-31T08:00:00Z',
+  ready: false,
+  passed_checks: 1,
+  failed_checks: 1,
+  checks: [
+    { name: 'ping', status: 'passed' as const },
+    { name: 'etcd', status: 'failed' as const },
+  ],
 }
 
 const disruptionBudgetBase = {

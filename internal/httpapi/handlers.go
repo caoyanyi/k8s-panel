@@ -243,6 +243,15 @@ func (s *Server) endpointCertificate(w http.ResponseWriter, r *http.Request) {
 	writeData(w, http.StatusOK, evidence)
 }
 
+func (s *Server) apiServerReadiness(w http.ResponseWriter, r *http.Request) {
+	evidence, err := s.service.APIServerReadiness(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeData(w, http.StatusOK, evidence)
+}
+
 func (s *Server) listDisruptionBudgetEvidence(w http.ResponseWriter, r *http.Request) {
 	items, err := s.service.DisruptionBudgets(r.Context(), r.PathValue("id"))
 	if err != nil {

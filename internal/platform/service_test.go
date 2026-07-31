@@ -725,6 +725,10 @@ func TestServiceRejectsKubernetesReadsDuringCriticalResourcePressure(t *testing.
 			_, err := service.EndpointCertificate(context.Background(), cluster.ID)
 			return err
 		}},
+		{name: "API Server readiness", call: func() error {
+			_, err := service.APIServerReadiness(context.Background(), cluster.ID)
+			return err
+		}},
 		{name: "disruption budget evidence", call: func() error {
 			_, err := service.DisruptionBudgets(context.Background(), cluster.ID)
 			return err
@@ -918,6 +922,9 @@ func TestServiceRejectsKubernetesReadsDuringCriticalResourcePressure(t *testing.
 	}
 	if calls := gateway.endpointCertificateCalls.Load(); calls != 0 {
 		t.Fatalf("EndpointCertificate() reached Kubernetes %d times under critical pressure", calls)
+	}
+	if calls := gateway.apiServerReadinessCalls.Load(); calls != 0 {
+		t.Fatalf("APIServerReadiness() reached Kubernetes %d times under critical pressure", calls)
 	}
 	if calls := gateway.disruptionBudgetEvidenceCalls.Load(); calls != 0 {
 		t.Fatalf("DisruptionBudgets() reached Kubernetes %d times under critical pressure", calls)
@@ -1373,6 +1380,41 @@ func TestServiceReadsEndpointCertificateThroughReadGovernor(t *testing.T) {
 		t.Fatalf("EndpointCertificate() = %#v, %v", evidence, err)
 	}
 	if calls := gateway.endpointCertificateCalls.Load(); calls != 1 {
+		t.Fatalf("gateway calls = %d, want 1", calls)
+	}
+}
+
+func TestServiceReadsAPIServerReadinessThroughReadGovernor(t *testing.T) {
+	t.Parallel()
+
+	observedAt := time.Date(2026, 7, 31, 8, 0, 0, 0, time.UTC)
+	gateway := &fakeKubeGateway{
+		probe: domain.ClusterProbe{Version: "v1.36.2"},
+		apiServerReadiness: domain.KubernetesAPIServerReadiness{
+			ObservedAt:   observedAt,
+			Ready:        false,
+			PassedChecks: 1,
+			FailedChecks: 1,
+			Checks: []domain.KubernetesAPIServerReadinessCheck{
+				{Name: "ping", Status: domain.APIServerReadinessCheckPassed},
+				{Name: "etcd", Status: domain.APIServerReadinessCheckFailed},
+			},
+		},
+	}
+	service, _, _ := newTestService(t, serviceFakes{kube: gateway})
+	cluster, err := service.CreateCluster(context.Background(), "admin", "req_cluster", domain.ClusterInput{
+		Name: "cluster", Environment: domain.EnvironmentDevelopment, Server: "https://api.example.com", BearerToken: "token",
+	})
+	if err != nil {
+		t.Fatalf("CreateCluster() error = %v", err)
+	}
+
+	evidence, err := service.APIServerReadiness(context.Background(), cluster.ID)
+	if err != nil || evidence.Ready || evidence.PassedChecks != 1 || evidence.FailedChecks != 1 ||
+		len(evidence.Checks) != 2 || !evidence.ObservedAt.Equal(observedAt) {
+		t.Fatalf("APIServerReadiness() = %#v, %v", evidence, err)
+	}
+	if calls := gateway.apiServerReadinessCalls.Load(); calls != 1 {
 		t.Fatalf("gateway calls = %d, want 1", calls)
 	}
 }
@@ -2726,6 +2768,8 @@ type fakeKubeGateway struct {
 	deprecatedAPIRequestCalls        atomic.Int64
 	endpointCertificate              domain.KubernetesEndpointCertificate
 	endpointCertificateCalls         atomic.Int64
+	apiServerReadiness               domain.KubernetesAPIServerReadiness
+	apiServerReadinessCalls          atomic.Int64
 	disruptionBudgetEvidence         []domain.KubernetesPodDisruptionBudget
 	disruptionBudgetEvidenceCalls    atomic.Int64
 	detail                           domain.WorkloadDetail
@@ -2927,6 +2971,12 @@ func (g *fakeKubeGateway) DeprecatedAPIRequests(context.Context) ([]domain.Kuber
 func (g *fakeKubeGateway) EndpointCertificate(context.Context) (domain.KubernetesEndpointCertificate, error) {
 	g.endpointCertificateCalls.Add(1)
 	return g.endpointCertificate, nil
+}
+func (g *fakeKubeGateway) APIServerReadiness(context.Context) (domain.KubernetesAPIServerReadiness, error) {
+	g.apiServerReadinessCalls.Add(1)
+	evidence := g.apiServerReadiness
+	evidence.Checks = append([]domain.KubernetesAPIServerReadinessCheck(nil), evidence.Checks...)
+	return evidence, nil
 }
 func (g *fakeKubeGateway) DisruptionBudgets(context.Context) ([]domain.KubernetesPodDisruptionBudget, error) {
 	g.disruptionBudgetEvidenceCalls.Add(1)

@@ -295,6 +295,26 @@ type KubernetesEndpointCertificate struct {
 	Status           KubernetesEndpointCertificateStatus `json:"status"`
 }
 
+type KubernetesAPIServerReadinessCheckStatus string
+
+const (
+	APIServerReadinessCheckPassed KubernetesAPIServerReadinessCheckStatus = "passed"
+	APIServerReadinessCheckFailed KubernetesAPIServerReadinessCheckStatus = "failed"
+)
+
+type KubernetesAPIServerReadinessCheck struct {
+	Name   string                                  `json:"name"`
+	Status KubernetesAPIServerReadinessCheckStatus `json:"status"`
+}
+
+type KubernetesAPIServerReadiness struct {
+	ObservedAt   time.Time                           `json:"observed_at"`
+	Ready        bool                                `json:"ready"`
+	PassedChecks int                                 `json:"passed_checks"`
+	FailedChecks int                                 `json:"failed_checks"`
+	Checks       []KubernetesAPIServerReadinessCheck `json:"checks"`
+}
+
 type NodeResources struct {
 	CPU              string `json:"cpu,omitempty"`
 	Memory           string `json:"memory,omitempty"`

@@ -8,6 +8,8 @@ import { TablePagination, TABLE_PAGE_SIZE } from '../components/TablePagination'
 import { usePanel } from '../context'
 import { useResource } from '../hooks'
 import type {
+  KubernetesAPIServerReadiness,
+  KubernetesAPIServerReadinessCheck,
   KubernetesDeprecatedAPIRequest,
   KubernetesEndpointCertificate,
   KubernetesEndpointCertificateStatus,
@@ -20,15 +22,17 @@ import type {
 } from '../types'
 import { formatDateTime } from '../utils'
 
-type SecurityView = 'pod-security' | 'version-skew' | 'deprecated-api' | 'disruption-budget' | 'endpoint-certificate'
+type SecurityView = 'pod-security' | 'version-skew' | 'deprecated-api' | 'disruption-budget' | 'endpoint-certificate' | 'api-readiness'
 type SecurityInventory =
   | { kind: 'pod-security'; items: KubernetesPodSecurityAdmissionNamespace[] }
   | { kind: 'version-skew'; report: KubernetesNodeVersionSkewReport }
   | { kind: 'deprecated-api'; items: KubernetesDeprecatedAPIRequest[] }
   | { kind: 'disruption-budget'; items: KubernetesPodDisruptionBudget[] }
   | { kind: 'endpoint-certificate'; evidence: KubernetesEndpointCertificate | null }
+  | { kind: 'api-readiness'; evidence: KubernetesAPIServerReadiness | null }
 
 const emptyNodeVersionReport: KubernetesNodeVersionSkewReport = { api_server_version: '', nodes: [] }
+const emptyReadinessChecks: KubernetesAPIServerReadinessCheck[] = []
 const attentionStatuses = new Set<KubernetesNodeVersionSkewStatus>([
   'upgrade-blocking',
   'outside-policy',
@@ -74,6 +78,13 @@ const securityViewCopy: Record<SecurityView, {
     loadingLabel: '正在读取当前连接端点 TLS 证书',
     resourceLabel: '项证书证据',
   },
+  'api-readiness': {
+    filterLabel: 'API Server 就绪检查筛选',
+    loadingLabel: '正在读取当前 API Server 就绪检查',
+    placeholder: '搜索检查项或状态',
+    resourceLabel: '项检查',
+    searchLabel: '搜索 API Server 就绪检查',
+  },
 }
 
 export function SecurityPage() {
@@ -88,7 +99,8 @@ export function SecurityPage() {
       if (view === 'version-skew') return { kind: 'version-skew', report: emptyNodeVersionReport }
       if (view === 'deprecated-api') return { kind: 'deprecated-api', items: [] }
       if (view === 'disruption-budget') return { kind: 'disruption-budget', items: [] }
-      return { kind: 'endpoint-certificate', evidence: null }
+      if (view === 'endpoint-certificate') return { kind: 'endpoint-certificate', evidence: null }
+      return { kind: 'api-readiness', evidence: null }
     }
     if (view === 'pod-security') {
       const items = await api.get<KubernetesPodSecurityAdmissionNamespace[]>(
@@ -118,17 +130,26 @@ export function SecurityPage() {
       )
       return { kind: 'disruption-budget', items }
     }
-    const evidence = await api.get<KubernetesEndpointCertificate>(
-      `/api/v1/clusters/${selectedClusterId}/upgrade-readiness/endpoint-certificate`,
+    if (view === 'endpoint-certificate') {
+      const evidence = await api.get<KubernetesEndpointCertificate>(
+        `/api/v1/clusters/${selectedClusterId}/upgrade-readiness/endpoint-certificate`,
+        signal,
+      )
+      return { kind: 'endpoint-certificate', evidence }
+    }
+    const evidence = await api.get<KubernetesAPIServerReadiness>(
+      `/api/v1/clusters/${selectedClusterId}/control-plane/readiness`,
       signal,
     )
-    return { kind: 'endpoint-certificate', evidence }
+    return { kind: 'api-readiness', evidence }
   }, [selectedClusterId, view])
   const postureItems = inventory.data?.kind === 'pod-security' ? inventory.data.items : []
   const nodeVersionReport = inventory.data?.kind === 'version-skew' ? inventory.data.report : emptyNodeVersionReport
   const deprecatedAPIRequests = inventory.data?.kind === 'deprecated-api' ? inventory.data.items : []
   const disruptionBudgets = inventory.data?.kind === 'disruption-budget' ? inventory.data.items : []
   const endpointCertificate = inventory.data?.kind === 'endpoint-certificate' ? inventory.data.evidence : null
+  const apiServerReadiness = inventory.data?.kind === 'api-readiness' ? inventory.data.evidence : null
+  const readinessChecks = apiServerReadiness?.checks ?? emptyReadinessChecks
   const normalizedSearch = search.trim().toLowerCase()
   const visiblePostureItems = useMemo(() => postureItems.filter((item) => (
     !normalizedSearch || podSecurityAdmissionSearchText(item).includes(normalizedSearch)
@@ -142,6 +163,9 @@ export function SecurityPage() {
   const visibleDisruptionBudgets = useMemo(() => disruptionBudgets.filter((item) => (
     disruptionBudgetMatchesSearch(item, normalizedSearch)
   )), [disruptionBudgets, normalizedSearch])
+  const visibleReadinessChecks = useMemo(() => readinessChecks.filter((item) => (
+    apiServerReadinessCheckMatchesSearch(item, normalizedSearch)
+  )), [normalizedSearch, readinessChecks])
   useEffect(() => setPage(0), [normalizedSearch, selectedClusterId, view])
 
   const visibleCount = view === 'pod-security'
@@ -150,14 +174,18 @@ export function SecurityPage() {
       ? visibleNodeVersions.length
       : view === 'deprecated-api'
         ? visibleDeprecatedAPIRequests.length
-        : view === 'disruption-budget' ? visibleDisruptionBudgets.length : endpointCertificate ? 1 : 0
+        : view === 'disruption-budget'
+          ? visibleDisruptionBudgets.length
+          : view === 'endpoint-certificate' ? endpointCertificate ? 1 : 0 : visibleReadinessChecks.length
   const activeCount = view === 'pod-security'
     ? postureItems.length
     : view === 'version-skew'
       ? nodeVersionReport.nodes.length
       : view === 'deprecated-api'
         ? deprecatedAPIRequests.length
-        : view === 'disruption-budget' ? disruptionBudgets.length : endpointCertificate ? 1 : 0
+        : view === 'disruption-budget'
+          ? disruptionBudgets.length
+          : view === 'endpoint-certificate' ? endpointCertificate ? 1 : 0 : readinessChecks.length
 
   const totalPages = Math.max(1, Math.ceil(visibleCount / TABLE_PAGE_SIZE))
   const currentPage = Math.min(page, totalPages - 1)
@@ -166,6 +194,7 @@ export function SecurityPage() {
   const pageNodeVersions = visibleNodeVersions.slice(pageStart, pageStart + TABLE_PAGE_SIZE)
   const pageDeprecatedAPIRequests = visibleDeprecatedAPIRequests.slice(pageStart, pageStart + TABLE_PAGE_SIZE)
   const pageDisruptionBudgets = visibleDisruptionBudgets.slice(pageStart, pageStart + TABLE_PAGE_SIZE)
+  const pageReadinessChecks = visibleReadinessChecks.slice(pageStart, pageStart + TABLE_PAGE_SIZE)
   const attentionCount = nodeVersionReport.nodes.filter((node) => attentionStatuses.has(node.status)).length
   const blockedDisruptionBudgetCount = disruptionBudgets.filter((budget) => budget.disruption_status === 'blocked').length
   const selectView = (nextView: SecurityView) => {
@@ -226,6 +255,12 @@ export function SecurityPage() {
               aria-pressed={view === 'endpoint-certificate'}
               onClick={() => selectView('endpoint-certificate')}
             >TLS 证书</button>
+            <button
+              type="button"
+              className={view === 'api-readiness' ? 'active' : ''}
+              aria-pressed={view === 'api-readiness'}
+              onClick={() => selectView('api-readiness')}
+            >API 就绪</button>
           </div>
           {securityViewCopy[view].filterLabel && (
             <section className="toolbar" aria-label={securityViewCopy[view].filterLabel}>
@@ -285,15 +320,84 @@ export function SecurityPage() {
                       page={currentPage}
                       onPage={setPage}
                     />
-                  ) : endpointCertificate ? (
-                    <EndpointCertificateView evidence={endpointCertificate} />
+                  ) : view === 'endpoint-certificate' ? (
+                    endpointCertificate
+                      ? <EndpointCertificateView evidence={endpointCertificate} />
+                      : <EmptyState title="当前连接端点未返回 TLS 证书证据" />
+                  ) : apiServerReadiness ? (
+                    <APIServerReadinessView
+                      evidence={apiServerReadiness}
+                      items={pageReadinessChecks}
+                      totalItems={visibleReadinessChecks.length}
+                      normalizedSearch={normalizedSearch}
+                      page={currentPage}
+                      onPage={setPage}
+                    />
                   ) : (
-                    <EmptyState title="当前连接端点未返回 TLS 证书证据" />
+                    <EmptyState title="当前连接端点未返回 API Server 就绪证据" />
                   )}
           </section>
         </>
       )}
     </div>
+  )
+}
+
+interface APIServerReadinessViewProps {
+  evidence: KubernetesAPIServerReadiness
+  items: KubernetesAPIServerReadinessCheck[]
+  totalItems: number
+  normalizedSearch: string
+  page: number
+  onPage: (page: number) => void
+}
+
+function APIServerReadinessView({
+  evidence,
+  items,
+  totalItems,
+  normalizedSearch,
+  page,
+  onPage,
+}: APIServerReadinessViewProps) {
+  return (
+    <>
+      <div className="security-evidence-summary">
+        <div>
+          <span>当前状态</span>
+          <strong className={evidence.ready ? 'replica-ready' : 'security-risk'}>
+            {evidence.ready ? '当前连接端点已就绪' : '当前连接端点未就绪'}
+          </strong>
+        </div>
+        {evidence.failed_checks > 0 && (
+          <div className="inventory-alert" role="status">{evidence.failed_checks} 项检查失败</div>
+        )}
+      </div>
+      <div className="security-evidence-scope">
+        <div><span>证据来源</span><strong>当前 API Server 连接端点</strong></div>
+        <div><span>证据类型</span><strong>单次 /readyz 观测</strong></div>
+        <div><span>观测时间</span><strong>{formatUTCDateTime(evidence.observed_at)}</strong></div>
+        <span className="detail-muted">不代表整个高可用控制面状态</span>
+      </div>
+      {totalItems === 0 ? (
+        <EmptyState title={normalizedSearch ? '没有匹配的 API Server 就绪检查' : '当前响应没有可展示的就绪检查'} />
+      ) : (
+        <>
+          <div className="table-wrap" role="region" aria-label="API Server 就绪检查证据" tabIndex={0}>
+            <table className="security-readiness-table">
+              <thead><tr><th>检查项</th><th>状态</th></tr></thead>
+              <tbody>{items.map((item) => (
+                <tr key={item.name}>
+                  <td className="mono"><strong>{item.name}</strong></td>
+                  <td><StatusBadge status={item.status} /></td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+          <TablePagination page={page} totalItems={totalItems} onPage={onPage} />
+        </>
+      )}
+    </>
   )
 }
 
@@ -608,6 +712,15 @@ function deprecatedAPISearchText(item: KubernetesDeprecatedAPIRequest): string {
     item.removed_release,
     `v${item.removed_release}`,
   ].join(' ').toLowerCase()
+}
+
+function apiServerReadinessCheckMatchesSearch(
+  item: KubernetesAPIServerReadinessCheck,
+  normalizedSearch: string,
+): boolean {
+  if (!normalizedSearch) return true
+  const text = [item.name, item.status, statusLabel(item.status)].join(' ').toLowerCase()
+  return normalizedSearch.split(/\s+/).every((term) => text.includes(term))
 }
 
 function disruptionBudgetMatchesSearch(item: KubernetesPodDisruptionBudget, normalizedSearch: string): boolean {
