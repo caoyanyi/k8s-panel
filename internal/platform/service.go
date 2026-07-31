@@ -1248,6 +1248,27 @@ func (s *Service) WorkloadDetail(ctx context.Context, clusterID string, referenc
 	return gateway.WorkloadDetail(ctx, reference)
 }
 
+func (s *Service) DeploymentRevisionHistory(
+	ctx context.Context,
+	clusterID string,
+	reference domain.WorkloadReference,
+) (domain.DeploymentRevisionHistory, error) {
+	reference.Kind = strings.ToLower(strings.TrimSpace(reference.Kind))
+	if err := domain.ValidateDeploymentReference(reference); err != nil {
+		return domain.DeploymentRevisionHistory{}, err
+	}
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return domain.DeploymentRevisionHistory{}, err
+	}
+	defer release()
+	gateway, err := s.kubeGateway(ctx, clusterID)
+	if err != nil {
+		return domain.DeploymentRevisionHistory{}, err
+	}
+	return gateway.DeploymentRevisionHistory(ctx, reference)
+}
+
 func (s *Service) WorkloadEvents(ctx context.Context, clusterID string, reference domain.WorkloadReference, limit int) ([]domain.KubernetesEvent, error) {
 	if err := domain.ValidateWorkloadReference(reference); err != nil {
 		return nil, err

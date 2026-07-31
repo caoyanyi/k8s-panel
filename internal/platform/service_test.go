@@ -591,6 +591,56 @@ func TestServiceReadsWorkloadDiagnosticsAndAuditsPodLogs(t *testing.T) {
 	}
 }
 
+func TestServiceReadsDeploymentRevisionHistoryAndValidatesBeforeGateway(t *testing.T) {
+	t.Parallel()
+
+	reference := domain.WorkloadReference{Kind: "deployment", Namespace: "payments", Name: "gateway"}
+	gateway := &fakeKubeGateway{
+		probe: domain.ClusterProbe{Version: "v1.36.2"},
+		deploymentRevisionHistory: domain.DeploymentRevisionHistory{
+			Namespace: "payments", Name: "gateway", CurrentRevision: 4,
+			Revisions: []domain.DeploymentRevision{{Revision: 4, ReplicaSet: "gateway-4", Current: true}},
+		},
+	}
+	service, _, _ := newTestService(t, serviceFakes{kube: gateway})
+	cluster, err := service.CreateCluster(context.Background(), "admin", "req_cluster", domain.ClusterInput{
+		Name: "cluster", Environment: domain.EnvironmentDevelopment, Server: "https://api.example.com", BearerToken: "token",
+	})
+	if err != nil {
+		t.Fatalf("CreateCluster() error = %v", err)
+	}
+
+	history, err := service.DeploymentRevisionHistory(context.Background(), cluster.ID, reference)
+	if err != nil {
+		t.Fatalf("DeploymentRevisionHistory() error = %v", err)
+	}
+	if history.CurrentRevision != 4 || len(history.Revisions) != 1 || history.Revisions[0].ReplicaSet != "gateway-4" {
+		t.Fatalf("DeploymentRevisionHistory() = %#v", history)
+	}
+	if gateway.deploymentRevisionHistoryCalls.Load() != 1 || gateway.deploymentRevisionReference != reference {
+		t.Fatalf("gateway revision call = %d, %#v", gateway.deploymentRevisionHistoryCalls.Load(), gateway.deploymentRevisionReference)
+	}
+
+	for _, input := range []struct {
+		clusterID string
+		reference domain.WorkloadReference
+		field     string
+	}{
+		{clusterID: cluster.ID, reference: domain.WorkloadReference{Kind: "statefulset", Namespace: "payments", Name: "gateway"}, field: "kind"},
+		{clusterID: cluster.ID, reference: domain.WorkloadReference{Kind: "deployment", Namespace: "PAYMENTS", Name: "gateway"}, field: "namespace"},
+		{clusterID: cluster.ID, reference: domain.WorkloadReference{Kind: "deployment", Namespace: "payments", Name: "../gateway"}, field: "name"},
+	} {
+		_, err := service.DeploymentRevisionHistory(context.Background(), input.clusterID, input.reference)
+		var validationErr *domain.ValidationError
+		if !errors.As(err, &validationErr) || validationErr.Field != input.field {
+			t.Errorf("DeploymentRevisionHistory(%q, %#v) error = %v", input.clusterID, input.reference, err)
+		}
+	}
+	if gateway.deploymentRevisionHistoryCalls.Load() != 1 {
+		t.Fatalf("invalid inputs reached gateway; calls = %d", gateway.deploymentRevisionHistoryCalls.Load())
+	}
+}
+
 func TestServiceReadsNodeDiagnostics(t *testing.T) {
 	t.Parallel()
 
@@ -817,6 +867,10 @@ func TestServiceRejectsKubernetesReadsDuringCriticalResourcePressure(t *testing.
 			_, err := service.WorkloadDetail(context.Background(), cluster.ID, reference)
 			return err
 		}},
+		{name: "deployment revision history", call: func() error {
+			_, err := service.DeploymentRevisionHistory(context.Background(), cluster.ID, reference)
+			return err
+		}},
 		{name: "workload events", call: func() error {
 			_, err := service.WorkloadEvents(context.Background(), cluster.ID, reference, 20)
 			return err
@@ -885,6 +939,9 @@ func TestServiceRejectsKubernetesReadsDuringCriticalResourcePressure(t *testing.
 	}
 	if calls := gateway.helmHistoryCalls.Load(); calls != 0 {
 		t.Fatalf("Helm release history reached Kubernetes %d times under critical pressure", calls)
+	}
+	if calls := gateway.deploymentRevisionHistoryCalls.Load(); calls != 0 {
+		t.Fatalf("Deployment revision history reached Kubernetes %d times under critical pressure", calls)
 	}
 	if listCalls, detailCalls := gateway.admissionWebhookListCalls.Load(), gateway.admissionWebhookDetailCalls.Load(); listCalls != 0 || detailCalls != 0 {
 		t.Fatalf("admission webhook reads reached Kubernetes under critical pressure: lists=%d details=%d", listCalls, detailCalls)
@@ -2672,6 +2729,9 @@ type fakeKubeGateway struct {
 	disruptionBudgetEvidence         []domain.KubernetesPodDisruptionBudget
 	disruptionBudgetEvidenceCalls    atomic.Int64
 	detail                           domain.WorkloadDetail
+	deploymentRevisionHistory        domain.DeploymentRevisionHistory
+	deploymentRevisionReference      domain.WorkloadReference
+	deploymentRevisionHistoryCalls   atomic.Int64
 	events                           []domain.KubernetesEvent
 	logs                             domain.PodLogs
 	detailReference                  domain.WorkloadReference
@@ -3134,6 +3194,13 @@ func (g *fakeKubeGateway) ReviewServiceAccountAccess(_ context.Context, input do
 func (g *fakeKubeGateway) WorkloadDetail(_ context.Context, reference domain.WorkloadReference) (domain.WorkloadDetail, error) {
 	g.detailReference = reference
 	return g.detail, nil
+}
+func (g *fakeKubeGateway) DeploymentRevisionHistory(_ context.Context, reference domain.WorkloadReference) (domain.DeploymentRevisionHistory, error) {
+	g.deploymentRevisionHistoryCalls.Add(1)
+	g.deploymentRevisionReference = reference
+	history := g.deploymentRevisionHistory
+	history.Revisions = append([]domain.DeploymentRevision(nil), history.Revisions...)
+	return history, nil
 }
 func (g *fakeKubeGateway) WorkloadEvents(_ context.Context, reference domain.WorkloadReference, limit int) ([]domain.KubernetesEvent, error) {
 	g.detailReference = reference

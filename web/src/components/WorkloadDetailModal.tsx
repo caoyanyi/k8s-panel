@@ -1,14 +1,14 @@
 import { ArrowLeft, Copy, Download, LoaderCircle, RefreshCw, RotateCw, Scaling, ScanSearch } from 'lucide-react'
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api, errorMessage } from '../api'
-import type { Environment, KubernetesEvent, Operation, PodLogs, Workload, WorkloadDetail, WorkloadImagePreview } from '../types'
+import type { DeploymentRevisionHistory, Environment, KubernetesEvent, Operation, PodLogs, Workload, WorkloadDetail, WorkloadImagePreview } from '../types'
 import { formatDateTime } from '../utils'
 import { EmptyState, ErrorState, LoadingState } from './DataState'
 import { KubernetesEvents } from './KubernetesEvents'
 import { Modal } from './Modal'
 import { StatusBadge } from './StatusBadge'
 
-type DetailTab = 'overview' | 'events' | 'yaml' | 'logs'
+type DetailTab = 'overview' | 'revisions' | 'events' | 'yaml' | 'logs'
 type BasicWorkloadAction = 'scale' | 'restart'
 type WorkloadAction = BasicWorkloadAction | 'image'
 
@@ -32,6 +32,10 @@ export function WorkloadDetailModal({ clusterId, clusterName, environment, workl
   const [eventsLoading, setEventsLoading] = useState(false)
   const [eventsError, setEventsError] = useState<unknown>(null)
   const [eventsLoaded, setEventsLoaded] = useState(false)
+  const [revisionHistory, setRevisionHistory] = useState<DeploymentRevisionHistory | null>(null)
+  const [revisionsLoading, setRevisionsLoading] = useState(false)
+  const [revisionsError, setRevisionsError] = useState<unknown>(null)
+  const [revisionsLoaded, setRevisionsLoaded] = useState(false)
   const [selectedContainer, setSelectedContainer] = useState('')
   const [tailLines, setTailLines] = useState(200)
   const [previous, setPrevious] = useState(false)
@@ -78,6 +82,10 @@ export function WorkloadDetailModal({ clusterId, clusterName, environment, workl
     setEventsLoading(false)
     setEventsError(null)
     setEventsLoaded(false)
+    setRevisionHistory(null)
+    setRevisionsLoading(false)
+    setRevisionsError(null)
+    setRevisionsLoaded(false)
     setLogs(null)
     setLogsError(null)
     setSelectedContainer('')
@@ -129,6 +137,29 @@ export function WorkloadDetailModal({ clusterId, clusterName, environment, workl
       controller.abort()
     }
   }, [eventsLoaded, open, resourcePath, tab])
+
+  useEffect(() => {
+    if (!open || !isDeployment || tab !== 'revisions' || revisionsLoaded) return
+    const controller = new AbortController()
+    let active = true
+    setRevisionsLoading(true)
+    setRevisionsError(null)
+    api.get<DeploymentRevisionHistory>(`${resourcePath}/revisions`, controller.signal)
+      .then((value) => { if (active) setRevisionHistory(value) })
+      .catch((error: unknown) => {
+        if (active && !(error instanceof DOMException && error.name === 'AbortError')) setRevisionsError(error)
+      })
+      .finally(() => {
+        if (active) {
+          setRevisionsLoading(false)
+          setRevisionsLoaded(true)
+        }
+      })
+    return () => {
+      active = false
+      controller.abort()
+    }
+  }, [isDeployment, open, resourcePath, revisionsLoaded, tab])
 
   useEffect(() => () => {
     logRequestRef.current?.abort()
@@ -190,6 +221,7 @@ export function WorkloadDetailModal({ clusterId, clusterName, environment, workl
     { id: 'events', label: '事件' },
     { id: 'yaml', label: 'YAML' },
   ]
+  if (isDeployment) tabs.splice(1, 0, { id: 'revisions', label: '发布历史' })
   if (isPod) tabs.push({ id: 'logs', label: '日志' })
 
   const openAction = (nextAction: WorkloadAction) => {
@@ -408,6 +440,11 @@ export function WorkloadDetailModal({ clusterId, clusterName, environment, workl
           )) : <><DeploymentActions visible={isDeployment} canUpdateImage={detail.containers.some((container) => container.type === 'container')} onAction={openAction} /><Overview detail={detail} /></>)}
           {tab === 'events' && (
             !eventsLoaded || eventsLoading ? <LoadingState label="正在读取事件" /> : eventsError ? <ErrorState error={eventsError} onRetry={() => setEventsLoaded(false)} /> : <KubernetesEvents events={events} />
+          )}
+          {tab === 'revisions' && (
+            !revisionsLoaded || revisionsLoading ? <LoadingState label="正在读取 Deployment 发布历史" />
+              : revisionsError ? <ErrorState error={revisionsError} onRetry={() => setRevisionsLoaded(false)} />
+                : revisionHistory ? <DeploymentRevisionHistoryView history={revisionHistory} /> : null
           )}
           {tab === 'yaml' && (
             <div className="code-panel">
@@ -667,6 +704,39 @@ function Overview({ detail }: { detail: WorkloadDetail }) {
           </div>
         ))}</div> : <span className="detail-muted">无条件记录</span>}
       </section>
+    </div>
+  )
+}
+
+function DeploymentRevisionHistoryView({ history }: { history: DeploymentRevisionHistory }) {
+  const currentObserved = history.current_revision !== undefined && history.revisions.some((revision) => revision.current)
+  return (
+    <div className="detail-overview">
+      {history.current_revision === undefined && (
+        <div className="inventory-alert" role="status">Deployment 当前修订尚未由控制器记录</div>
+      )}
+      {history.current_revision !== undefined && !currentObserved && (
+        <div className="inventory-alert" role="status">当前 revision {history.current_revision} 不在本次有界结果中</div>
+      )}
+      {history.truncated && <div className="inventory-alert" role="status">仅显示最近 20 个修订</div>}
+      {history.unassigned_replicaset_count > 0 && (
+        <div className="inventory-alert" role="status">{history.unassigned_replicaset_count} 个 ReplicaSet 尚未记录修订号</div>
+      )}
+      {!history.revisions.length ? <EmptyState title="没有可用的 Deployment 发布历史" /> : (
+        <div className="table-wrap" role="region" aria-label="Deployment 发布历史表格" tabIndex={0}>
+          <table className="detail-table">
+            <thead><tr><th>Revision</th><th>ReplicaSet</th><th>创建时间</th><th>标记</th></tr></thead>
+            <tbody>{history.revisions.map((revision) => (
+              <tr key={`${revision.revision}:${revision.replica_set}`}>
+                <td><strong>{revision.revision}</strong></td>
+                <td className="mono">{revision.replica_set}</td>
+                <td>{formatDateTime(revision.created_at)}</td>
+                <td>{revision.current ? <strong>当前</strong> : '-'}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
+      )}
     </div>
   )
 }

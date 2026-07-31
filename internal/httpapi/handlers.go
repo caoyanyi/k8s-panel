@@ -637,6 +637,15 @@ func (s *Server) getWorkloadDetail(w http.ResponseWriter, r *http.Request) {
 	writeData(w, http.StatusOK, item)
 }
 
+func (s *Server) getDeploymentRevisionHistory(w http.ResponseWriter, r *http.Request) {
+	item, err := s.service.DeploymentRevisionHistory(r.Context(), r.PathValue("id"), workloadReference(r))
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeData(w, http.StatusOK, item)
+}
+
 func (s *Server) listWorkloadEvents(w http.ResponseWriter, r *http.Request) {
 	limit, err := parseBoundedInt(r.URL.Query().Get("limit"), 50, 1, domain.MaxWorkloadEventLimit, "limit")
 	if err != nil {

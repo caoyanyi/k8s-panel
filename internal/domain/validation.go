@@ -119,6 +119,16 @@ func ValidateWorkloadReference(reference WorkloadReference) error {
 	return nil
 }
 
+func ValidateDeploymentReference(reference WorkloadReference) error {
+	if err := ValidateWorkloadReference(reference); err != nil {
+		return err
+	}
+	if strings.ToLower(strings.TrimSpace(reference.Kind)) != "deployment" {
+		return Invalid("kind", "must be deployment")
+	}
+	return nil
+}
+
 func ValidateWorkloadList(namespace, kind string) error {
 	if namespace != "" {
 		if err := ValidateNamespace(namespace); err != nil {

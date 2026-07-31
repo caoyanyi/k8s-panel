@@ -17,7 +17,7 @@ K8s Panel 是一个独立实现的 Kubernetes 与 Helm 管理面板。后端使�
 - 集群级 PodDisruptionBudget 中断证据，区分允许中断、当前受阻、未匹配 Pod 和控制器待同步状态
 - ServiceAccount、Role、RoleBinding、ClusterRole、ClusterRoleBinding 元数据清单与按需规则/主体详情，支持 ServiceAccount 单动作权限模拟
 - 按集群或命名空间查看事件，默认聚焦 Warning，支持本地搜索和分页
-- 工作负载详情、脱敏 YAML、关联事件与有界 Pod 日志快照
+- 工作负载详情、脱敏 YAML、关联事件与有界 Pod 日志快照，支持 Deployment 按需发布修订历史
 - Deployment 受控扩缩容、滚动重启与容器镜像更新，带预检、资源版本冲突保护和生产确认
 - Helm 仓库配置与连接测试
 - Helm Release 查询、按需修订历史、安装、升级、回滚和卸载
@@ -81,6 +81,8 @@ RuntimeClass 清单同样只在用户切换视图后读取 PartialObjectMetadata
 CSIDriver 清单只在用户切换到对应集群级存储视图后读取 PartialObjectMetadata，同时停止只供 PVC 使用的命名空间清单读取；最多 4 页、1,000 个对象和 4 MiB。单对象详情最多 1 MiB，只返回稳定 CSI 配置和 TokenRequest 数量，不返回 audience、有效期或对象元数据，不扫描 PV/PVC、VolumeAttachment、CSINode、CSIStorageCapacity、Pod、Node 或宿主机 CSI socket，也不验证驱动是否实际部署或健康。
 
 Helm Release 修订历史只在用户打开单个 Release 的历史弹窗后读取 Helm 3 默认 Secret 存储的 PartialObjectMetadata；一次最多 4 页、200 个对象和 2 MiB，并只返回最近 10 条 revision、状态和存储时间。面板不读取或解码 Chart、Values、Manifest、Hooks、Notes 和 Secret data，不回退完整 Secret，也不支持 ConfigMap 或 SQL 存储后端；选择历史修订只会预填现有回滚确认框，不会直接执行回滚。
+
+Deployment 发布修订历史只在用户切换到详情中的发布历史视图后读取。后端在一个资源感知读取槽内先读取 Deployment 元数据，再串行读取同命名空间 ReplicaSet 元数据；最多 4 页、1,000 个对象、单页 2 MiB 和总计 4 MiB，只保留 ownerReference 名称与 UID 均匹配的最近 20 条修订。响应不包含 Pod 模板、镜像、状态、标签、注解、UID 或变更原因，也不提供直接回滚。
 
 自适应资源控制默认在内存或归一化系统负载达到 80% 时，将后台操作、Kubernetes 读取并发和客户端缓存容量分别减半；达到 95% 时暂停启动新任务、快速拒绝新的集群读取、显式连接测试、权限能力检测和凭据轮换，并将客户端缓存收缩到 1。权限能力检测固定顺序执行 10 次轻量授权检查，单批次只占用一个读取槽，不轮询、不缓存结果；重复检测同一集群和命名空间时快速拒绝。凭据轮换先使用独立客户端验证候选凭据，成功后再原子替换，失败时保留原凭据和缓存连接。客户端按集群与凭据版本复用，闲置超时、LRU 淘汰、禁用/删除集群或服务关闭时释放空闲连接，不缓存 Kubernetes 对象和日志。指标暂不可用时按配置上限运行。低配置主机建议设置 `PANEL_HELM_WORKERS=1`、`PANEL_KUBERNETES_READ_CONCURRENCY=2`、`PANEL_KUBERNETES_CLIENT_CACHE_SIZE=4`、较小的 `PANEL_OPERATION_QUEUE_SIZE`，并按实际流量下调 `PANEL_MAX_CONCURRENT_REQUESTS`。
 

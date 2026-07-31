@@ -92,6 +92,7 @@ type KubeGateway interface {
 	AccessResourceDetail(context.Context, domain.KubernetesAccessResourceReference) (domain.KubernetesAccessResourceDetail, error)
 	ReviewServiceAccountAccess(context.Context, domain.KubernetesServiceAccountAccessReviewInput) (domain.KubernetesCapabilityState, error)
 	WorkloadDetail(context.Context, domain.WorkloadReference) (domain.WorkloadDetail, error)
+	DeploymentRevisionHistory(context.Context, domain.WorkloadReference) (domain.DeploymentRevisionHistory, error)
 	WorkloadEvents(context.Context, domain.WorkloadReference, int) ([]domain.KubernetesEvent, error)
 	PodLogs(context.Context, domain.PodLogRequest) (domain.PodLogs, error)
 	ScaleWorkload(context.Context, domain.WorkloadReference, string, int32) (domain.Workload, error)

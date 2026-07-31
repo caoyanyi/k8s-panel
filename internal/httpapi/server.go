@@ -168,6 +168,7 @@ func (s *Server) routes() {
 	s.mux.Handle("GET /api/v1/clusters/{id}/access-resources/{kind}/{name}", s.protected(http.HandlerFunc(s.getAccessResourceDetail)))
 	s.mux.Handle("POST /api/v1/clusters/{id}/service-account-access-reviews", s.protected(http.HandlerFunc(s.reviewServiceAccountAccess)))
 	s.mux.Handle("GET /api/v1/clusters/{id}/workloads/{kind}/{namespace}/{name}", s.protected(http.HandlerFunc(s.getWorkloadDetail)))
+	s.mux.Handle("GET /api/v1/clusters/{id}/workloads/{kind}/{namespace}/{name}/revisions", s.protected(http.HandlerFunc(s.getDeploymentRevisionHistory)))
 	s.mux.Handle("GET /api/v1/clusters/{id}/workloads/{kind}/{namespace}/{name}/events", s.protected(http.HandlerFunc(s.listWorkloadEvents)))
 	s.mux.Handle("GET /api/v1/clusters/{id}/pods/{namespace}/{name}/logs", s.protected(http.HandlerFunc(s.getPodLogs)))
 	s.mux.Handle("POST /api/v1/clusters/{id}/workloads/{kind}/{namespace}/{name}/scales", s.protected(http.HandlerFunc(s.scaleWorkload)))

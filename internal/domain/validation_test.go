@@ -510,6 +510,37 @@ func TestValidateWorkloadReference(t *testing.T) {
 	}
 }
 
+func TestValidateDeploymentReference(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		input     WorkloadReference
+		wantField string
+	}{
+		{name: "deployment", input: WorkloadReference{Kind: "Deployment", Namespace: "payments", Name: "gateway-api"}},
+		{name: "other workload", input: WorkloadReference{Kind: "statefulset", Namespace: "payments", Name: "gateway-api"}, wantField: "kind"},
+		{name: "invalid namespace", input: WorkloadReference{Kind: "deployment", Namespace: "PAYMENTS", Name: "gateway-api"}, wantField: "namespace"},
+		{name: "invalid name", input: WorkloadReference{Kind: "deployment", Namespace: "payments", Name: "Gateway"}, wantField: "name"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := ValidateDeploymentReference(tt.input)
+			if tt.wantField == "" {
+				if err != nil {
+					t.Fatalf("ValidateDeploymentReference() error = %v", err)
+				}
+				return
+			}
+			var validationErr *ValidationError
+			if !errors.As(err, &validationErr) || validationErr.Field != tt.wantField {
+				t.Fatalf("expected validation field %q, got %v", tt.wantField, err)
+			}
+		})
+	}
+}
+
 func TestValidateWorkloadList(t *testing.T) {
 	t.Parallel()
 

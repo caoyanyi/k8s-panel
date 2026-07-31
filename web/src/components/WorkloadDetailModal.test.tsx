@@ -2,7 +2,7 @@ import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { WorkloadDetailModal } from './WorkloadDetailModal'
-import type { Workload, WorkloadDetail } from '../types'
+import type { DeploymentRevisionHistory, Workload, WorkloadDetail } from '../types'
 
 describe('WorkloadDetailModal', () => {
   afterEach(() => {
@@ -89,6 +89,82 @@ describe('WorkloadDetailModal', () => {
 
     const dialog = await screen.findByRole('dialog', { name: 'Deployment · gateway' })
     expect(within(dialog).queryByRole('tab', { name: '日志' })).not.toBeInTheDocument()
+  })
+
+  it('loads bounded Deployment revisions only when the history tab is selected', async () => {
+    const workload: Workload = {
+      kind: 'Deployment', namespace: 'payments', name: 'gateway', ready: 2, desired: 3,
+      status: 'Progressing', images: ['gateway:1.4.0'], created_at: '2026-07-24T08:00:00Z',
+    }
+    const history: DeploymentRevisionHistory = {
+      namespace: 'payments',
+      name: 'gateway',
+      current_revision: 7,
+      unassigned_replicaset_count: 1,
+      truncated: true,
+      revisions: [
+        { revision: 7, replica_set: 'gateway-7f9d8', created_at: '2026-07-30T09:07:00Z', current: true },
+        { revision: 6, replica_set: 'gateway-6c8b7', created_at: '2026-07-29T09:06:00Z', current: false },
+      ],
+    }
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const path = String(input)
+      if (path.endsWith('/revisions')) return Promise.resolve(dataResponse(history))
+      if (path.endsWith('/events?limit=50')) return Promise.resolve(dataResponse([]))
+      return Promise.resolve(dataResponse({
+        ...workload, uid: 'uid-gateway', resource_version: '9', labels: {}, containers: [], conditions: [], yaml: 'kind: Deployment\n',
+      }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const user = userEvent.setup()
+
+    render(<WorkloadDetailModal clusterId="clu_1" clusterName="development" environment="development" workload={workload} open onClose={vi.fn()} notify={vi.fn()} openOperations={vi.fn()} />)
+    const dialog = await screen.findByRole('dialog', { name: 'Deployment · gateway' })
+    await within(dialog).findByText('uid-gateway')
+    expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/revisions'))).toBe(false)
+
+    await user.click(within(dialog).getByRole('tab', { name: '发布历史' }))
+    expect(await within(dialog).findByText('gateway-7f9d8')).toBeInTheDocument()
+    expect(within(dialog).getByText('gateway-6c8b7')).toBeInTheDocument()
+    expect(within(dialog).getByText('当前')).toBeInTheDocument()
+    expect(within(dialog).getByText('仅显示最近 20 个修订')).toBeInTheDocument()
+    expect(within(dialog).getByText('1 个 ReplicaSet 尚未记录修订号')).toBeInTheDocument()
+    expect(within(dialog).getByRole('region', { name: 'Deployment 发布历史表格' })).toHaveAttribute('tabindex', '0')
+    expect(fetchMock.mock.calls.filter(([input]) => String(input).endsWith('/revisions'))).toHaveLength(1)
+
+    await user.click(within(dialog).getByRole('tab', { name: '概览' }))
+    await user.click(within(dialog).getByRole('tab', { name: '发布历史' }))
+    expect(fetchMock.mock.calls.filter(([input]) => String(input).endsWith('/revisions'))).toHaveLength(1)
+  })
+
+  it('aborts an unfinished Deployment revision request when leaving the history tab', async () => {
+    const workload: Workload = {
+      kind: 'Deployment', namespace: 'payments', name: 'gateway', ready: 3, desired: 3,
+      status: 'Ready', images: ['gateway:1.4.0'], created_at: '2026-07-24T08:00:00Z',
+    }
+    let revisionSignal: AbortSignal | undefined
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input)
+      if (path.endsWith('/revisions')) {
+        revisionSignal = init?.signal ?? undefined
+        return new Promise<Response>(() => undefined)
+      }
+      return Promise.resolve(dataResponse({
+        ...workload, uid: 'uid-gateway', resource_version: '9', labels: {}, containers: [], conditions: [], yaml: 'kind: Deployment\n',
+      }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const user = userEvent.setup()
+
+    render(<WorkloadDetailModal clusterId="clu_1" clusterName="development" environment="development" workload={workload} open onClose={vi.fn()} notify={vi.fn()} openOperations={vi.fn()} />)
+    const dialog = await screen.findByRole('dialog', { name: 'Deployment · gateway' })
+    await within(dialog).findByText('uid-gateway')
+    await user.click(within(dialog).getByRole('tab', { name: '发布历史' }))
+    await waitFor(() => expect(revisionSignal).toBeDefined())
+    expect(revisionSignal?.aborted).toBe(false)
+
+    await user.click(within(dialog).getByRole('tab', { name: '概览' }))
+    expect(revisionSignal?.aborted).toBe(true)
   })
 
   it('shows a CronJob as a read-only scheduled workload', async () => {

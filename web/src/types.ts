@@ -733,6 +733,22 @@ export interface WorkloadDetail extends Workload {
   yaml: string
 }
 
+export interface DeploymentRevision {
+  revision: number
+  replica_set: string
+  created_at: string
+  current: boolean
+}
+
+export interface DeploymentRevisionHistory {
+  namespace: string
+  name: string
+  current_revision?: number
+  unassigned_replicaset_count: number
+  revisions: DeploymentRevision[]
+  truncated: boolean
+}
+
 export interface WorkloadFieldChange {
   field: string
   before: string

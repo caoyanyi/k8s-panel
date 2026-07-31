@@ -1128,6 +1128,56 @@ func TestServerHelmReleaseHistory(t *testing.T) {
 	}
 }
 
+func TestServerDeploymentRevisionHistory(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestHandler(t)
+	path := "/api/v1/clusters/clu_1/workloads/deployment/payments/gateway/revisions"
+	unauthorized := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, path, nil))
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized revision history status = %d, want 401", unauthorized.Code)
+	}
+
+	cookie := login(t, handler)
+	create := authenticatedRequest(t, handler, cookie, http.MethodPost, "/api/v1/clusters", `{
+		"name":"development","environment":"development","server":"https://api.example.com:6443","bearer_token":"token"
+	}`)
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, body = %s", create.Code, create.Body.String())
+	}
+	var created struct {
+		Data platform.ClusterView `json:"data"`
+	}
+	decodeTestJSON(t, create.Body.Bytes(), &created)
+	path = "/api/v1/clusters/" + created.Data.ID + "/workloads/deployment/payments/gateway/revisions"
+	history := authenticatedRequest(t, handler, cookie, http.MethodGet, path, "")
+	if history.Code != http.StatusOK || history.Header().Get("Cache-Control") != "no-store" ||
+		!strings.Contains(history.Body.String(), `"current_revision":4`) ||
+		!strings.Contains(history.Body.String(), `"replica_set":"gateway-4"`) ||
+		!strings.Contains(history.Body.String(), `"current":true`) ||
+		strings.Contains(history.Body.String(), "private") || strings.Contains(history.Body.String(), "ownerReferences") ||
+		strings.Contains(history.Body.String(), "uid-gateway") {
+		t.Fatalf("revision history status = %d, headers = %#v, body = %s", history.Code, history.Header(), history.Body.String())
+	}
+
+	for _, request := range []struct {
+		path  string
+		field string
+	}{
+		{path: "/api/v1/clusters/" + created.Data.ID + "/workloads/statefulset/payments/gateway/revisions", field: "kind"},
+		{path: "/api/v1/clusters/" + created.Data.ID + "/workloads/deployment/PAYMENTS/gateway/revisions", field: "namespace"},
+		{path: "/api/v1/clusters/" + created.Data.ID + "/workloads/deployment/payments/Gateway/revisions", field: "name"},
+	} {
+		response := authenticatedRequest(t, handler, cookie, http.MethodGet, request.path, "")
+		if response.Code != http.StatusUnprocessableEntity {
+			t.Errorf("%s status = %d, body = %s", request.path, response.Code, response.Body.String())
+			continue
+		}
+		assertErrorField(t, response.Body.Bytes(), request.field)
+	}
+}
+
 func newTestHandler(t *testing.T) http.Handler {
 	t.Helper()
 	now := time.Date(2026, 7, 24, 8, 0, 0, 0, time.UTC)
@@ -1594,6 +1644,14 @@ func (testKube) WorkloadDetail(_ context.Context, reference domain.WorkloadRefer
 	return domain.WorkloadDetail{
 		Workload: domain.Workload{Kind: "Pod", Namespace: reference.Namespace, Name: reference.Name, Status: "Ready"},
 		UID:      "uid-gateway-0", ResourceVersion: "42", YAML: "apiVersion: v1\nkind: Pod\n",
+	}, nil
+}
+func (testKube) DeploymentRevisionHistory(_ context.Context, reference domain.WorkloadReference) (domain.DeploymentRevisionHistory, error) {
+	return domain.DeploymentRevisionHistory{
+		Namespace: reference.Namespace, Name: reference.Name, CurrentRevision: 4,
+		Revisions: []domain.DeploymentRevision{{
+			Revision: 4, ReplicaSet: "gateway-4", CreatedAt: time.Date(2026, 7, 30, 9, 4, 0, 0, time.UTC), Current: true,
+		}},
 	}, nil
 }
 func (testKube) WorkloadEvents(context.Context, domain.WorkloadReference, int) ([]domain.KubernetesEvent, error) {

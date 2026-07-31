@@ -1006,6 +1006,22 @@ type WorkloadDetail struct {
 	YAML            string              `json:"yaml"`
 }
 
+type DeploymentRevision struct {
+	Revision   int       `json:"revision"`
+	ReplicaSet string    `json:"replica_set"`
+	CreatedAt  time.Time `json:"created_at"`
+	Current    bool      `json:"current"`
+}
+
+type DeploymentRevisionHistory struct {
+	Namespace                 string               `json:"namespace"`
+	Name                      string               `json:"name"`
+	CurrentRevision           int                  `json:"current_revision,omitempty"`
+	UnassignedReplicaSetCount int                  `json:"unassigned_replicaset_count"`
+	Revisions                 []DeploymentRevision `json:"revisions"`
+	Truncated                 bool                 `json:"truncated"`
+}
+
 type KubernetesEvent struct {
 	Namespace        string    `json:"namespace,omitempty"`
 	Name             string    `json:"name"`

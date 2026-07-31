@@ -14,6 +14,7 @@ import (
 )
 
 const (
+	kubernetesPartialMetadataAccept           = "application/json;as=PartialObjectMetadata;g=meta.k8s.io;v=v1"
 	kubernetesPartialMetadataListAccept       = "application/json;as=PartialObjectMetadataList;g=meta.k8s.io;v=v1"
 	accessListPageSize                        = "250"
 	accessMaxListPages                        = 8

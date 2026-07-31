@@ -179,6 +179,42 @@ test('workload diagnostics show details, events, YAML and bounded logs', async (
   expect(consoleErrors).toEqual([])
 })
 
+test('Deployment revision history loads on demand within a bounded detail view', async ({ page }, testInfo) => {
+  const consoleErrors: string[] = []
+  let revisionRequests = 0
+  page.on('console', (message) => {
+    if (message.type() === 'error') consoleErrors.push(message.text())
+  })
+  page.on('pageerror', (error) => consoleErrors.push(error.message))
+  page.on('request', (request) => {
+    if (new URL(request.url()).pathname.endsWith('/workloads/deployment/payments/gateway-api/revisions')) {
+      revisionRequests++
+    }
+  })
+  await mockWorkloadDiagnostics(page)
+
+  await page.goto('/#workloads')
+  await expect(page.getByText('gateway-api', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: '查看 gateway-api' }).click()
+  const dialog = page.getByRole('dialog', { name: 'Deployment · gateway-api' })
+  await expect(dialog.getByText('uid-gateway-api')).toBeVisible()
+  expect(revisionRequests).toBe(0)
+
+  await dialog.getByRole('tab', { name: '发布历史' }).click()
+  await expect(dialog.getByText('gateway-api-7f9d8')).toBeVisible()
+  await expect(dialog.getByText('gateway-api-6c8b7')).toBeVisible()
+  await expect(dialog.getByText('当前')).toBeVisible()
+  await expect(dialog.getByText('1 个 ReplicaSet 尚未记录修订号')).toBeVisible()
+  expect(revisionRequests).toBe(1)
+
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
+  expect(overflow).toBeLessThanOrEqual(1)
+  const result = await new AxeBuilder({ page }).include('.modal').analyze()
+  expect(result.violations.filter((violation) => ['serious', 'critical'].includes(violation.impact ?? ''))).toEqual([])
+  await page.screenshot({ path: `test-results/${testInfo.project.name}-deployment-revisions.png` })
+  expect(consoleErrors).toEqual([])
+})
+
 test('batch workloads stay scoped and expose read-only diagnostics', async ({ page }, testInfo) => {
   const consoleErrors: string[] = []
   page.on('console', (message) => {
@@ -1515,6 +1551,15 @@ async function mockWorkloadDiagnostics(page: Page) {
         id: operationID, request_id: 'req_image', kind: operationKind, state: 'queued',
         cluster_id: 'clu_1', namespace: 'payments', target: 'gateway-api', submitted_by: 'diagnostics-admin',
         summary: operationSummary, created_at: '2026-07-25T08:05:00Z', updated_at: '2026-07-25T08:05:00Z',
+      }
+    } else if (path.endsWith('/workloads/deployment/payments/gateway-api/revisions')) {
+      data = {
+        namespace: 'payments', name: 'gateway-api', current_revision: 7,
+        unassigned_replicaset_count: 1, truncated: false,
+        revisions: [
+          { revision: 7, replica_set: 'gateway-api-7f9d8', created_at: '2026-07-30T09:07:00Z', current: true },
+          { revision: 6, replica_set: 'gateway-api-6c8b7', created_at: '2026-07-29T09:06:00Z', current: false },
+        ],
       }
     } else if (path.endsWith('/workloads/deployment/payments/gateway-api')) {
       data = {
