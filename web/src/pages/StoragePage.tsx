@@ -12,6 +12,7 @@ import { useResource } from '../hooks'
 import type {
   KubernetesCSIDriver,
   KubernetesCSINode,
+  KubernetesCSIStorageCapacity,
   KubernetesPersistentVolume,
   KubernetesPersistentVolumeClaim,
   KubernetesStorageClass,
@@ -20,7 +21,7 @@ import type {
 } from '../types'
 import { formatDateTime } from '../utils'
 
-type StorageView = 'claims' | 'volumes' | 'classes' | 'drivers' | 'csiNodes' | 'attachments'
+type StorageView = 'claims' | 'volumes' | 'classes' | 'drivers' | 'csiNodes' | 'attachments' | 'capacities'
 type StorageInventory =
   | { kind: 'claims'; items: KubernetesPersistentVolumeClaim[] }
   | { kind: 'volumes'; items: KubernetesPersistentVolume[] }
@@ -28,8 +29,9 @@ type StorageInventory =
   | { kind: 'drivers'; items: KubernetesCSIDriver[] }
   | { kind: 'csiNodes'; items: KubernetesCSINode[] }
   | { kind: 'attachments'; items: KubernetesVolumeAttachment[] }
+  | { kind: 'capacities'; items: KubernetesCSIStorageCapacity[] }
 type StorageItem = KubernetesPersistentVolumeClaim | KubernetesPersistentVolume | KubernetesStorageClass |
-  KubernetesCSIDriver | KubernetesCSINode | KubernetesVolumeAttachment
+  KubernetesCSIDriver | KubernetesCSINode | KubernetesVolumeAttachment | KubernetesCSIStorageCapacity
 
 const emptyStorageItems: StorageItem[] = []
 
@@ -40,6 +42,7 @@ const storageLabels: Record<StorageView, string> = {
   drivers: 'CSIDriver',
   csiNodes: 'CSINode',
   attachments: 'VolumeAttachment',
+  capacities: 'CSIStorageCapacity',
 }
 
 export function StoragePage() {
@@ -50,7 +53,7 @@ export function StoragePage() {
   const [selectedCSIDriver, setSelectedCSIDriver] = useState<KubernetesCSIDriver | null>(null)
   const [selectedCSINode, setSelectedCSINode] = useState<KubernetesCSINode | null>(null)
   const selectedCluster = clusters.find((cluster) => cluster.id === selectedClusterId)
-  const namespaceScoped = view === 'claims'
+  const namespaceScoped = view === 'claims' || view === 'capacities'
   const namespaceScope = namespaceScoped ? selectedNamespace : ''
   const namespaces = useResource(
     (signal) => selectedClusterId && namespaceScoped
@@ -96,6 +99,14 @@ export function StoragePage() {
       )
       return { kind: 'csiNodes', items }
     }
+    if (view === 'capacities') {
+      const suffix = namespaceScope ? `?${new URLSearchParams({ namespace: namespaceScope })}` : ''
+      const items = await api.get<KubernetesCSIStorageCapacity[]>(
+        `/api/v1/clusters/${selectedClusterId}/csi-storage-capacities${suffix}`,
+        signal,
+      )
+      return { kind: 'capacities', items }
+    }
     const items = await api.get<KubernetesVolumeAttachment[]>(
       `/api/v1/clusters/${selectedClusterId}/volume-attachments`,
       signal,
@@ -105,7 +116,7 @@ export function StoragePage() {
 
   useEffect(() => {
     if (!namespaceScoped) return
-    if (selectedNamespace && namespaces.data && !namespaces.data.some((item) => item.name === selectedNamespace)) {
+    if (selectedNamespace && namespaces.data?.length && !namespaces.data.some((item) => item.name === selectedNamespace)) {
       setSelectedNamespace('')
     }
   }, [namespaceScoped, namespaces.data, selectedNamespace, setSelectedNamespace])
@@ -153,15 +164,16 @@ export function StoragePage() {
             <button type="button" className={view === 'drivers' ? 'active' : ''} aria-pressed={view === 'drivers'} onClick={() => setView('drivers')}>CSIDriver</button>
             <button type="button" className={view === 'csiNodes' ? 'active' : ''} aria-pressed={view === 'csiNodes'} onClick={() => setView('csiNodes')}>CSI节点</button>
             <button type="button" className={view === 'attachments' ? 'active' : ''} aria-pressed={view === 'attachments'} onClick={() => setView('attachments')}>卷挂接</button>
+            <button type="button" className={view === 'capacities' ? 'active' : ''} aria-pressed={view === 'capacities'} onClick={() => setView('capacities')}>CSI容量</button>
           </div>
           <section className="toolbar" aria-label="存储资源筛选">
             <div className="toolbar-field">
               <label htmlFor="storage-namespace">命名空间</label>
               <select
                 id="storage-namespace"
-                value={view === 'claims' ? selectedNamespace : ''}
+                value={namespaceScoped ? selectedNamespace : ''}
                 onChange={(event) => setSelectedNamespace(event.target.value)}
-                disabled={view !== 'claims' || namespaces.loading}
+                disabled={!namespaceScoped || namespaces.loading}
               >
                 <option value="">全部命名空间</option>
                 {namespaces.data?.map((item) => <option key={item.name} value={item.name}>{item.name}</option>)}
@@ -180,7 +192,7 @@ export function StoragePage() {
             </div>
           </section>
           <section className="section-block table-section">
-            {view === 'claims' && namespaces.error ? <ErrorState error={namespaces.error} onRetry={() => void namespaces.refresh()} />
+            {namespaceScoped && namespaces.error ? <ErrorState error={namespaces.error} onRetry={() => void namespaces.refresh()} />
               : inventory.loading ? <LoadingState label={`正在读取 ${resourceLabel}`} />
                 : inventory.error ? <ErrorState error={inventory.error} onRetry={() => void inventory.refresh()} />
                   : visibleItems.length === 0 ? <EmptyState title={normalizedSearch ? `没有匹配的 ${resourceLabel}` : `当前范围没有 ${resourceLabel}`} />
@@ -222,6 +234,7 @@ function emptyInventory(view: StorageView): StorageInventory {
   if (view === 'classes') return { kind: 'classes', items: [] }
   if (view === 'drivers') return { kind: 'drivers', items: [] }
   if (view === 'csiNodes') return { kind: 'csiNodes', items: [] }
+  if (view === 'capacities') return { kind: 'capacities', items: [] }
   return { kind: 'attachments', items: [] }
 }
 
@@ -239,6 +252,10 @@ function storageSearchText(
   }
   if (view === 'drivers') return (item as KubernetesCSIDriver).name
   if (view === 'csiNodes') return (item as KubernetesCSINode).name
+  if (view === 'capacities') {
+    const capacity = item as KubernetesCSIStorageCapacity
+    return `${capacity.namespace} ${capacity.name} ${capacity.storage_class} ${capacity.capacity ?? ''}`
+  }
   if (view === 'attachments') {
     const attachment = item as KubernetesVolumeAttachment
     return `${attachment.name} ${attachment.attacher} ${attachment.persistent_volume ?? ''} ${attachment.node} ` +
@@ -264,7 +281,27 @@ function StorageTable({
   if (view === 'classes') return <StorageClassTable storageClasses={items as KubernetesStorageClass[]} />
   if (view === 'drivers') return <CSIDriverTable drivers={items as KubernetesCSIDriver[]} onSelect={onSelectCSIDriver} />
   if (view === 'csiNodes') return <CSINodeTable nodes={items as KubernetesCSINode[]} onSelect={onSelectCSINode} />
+  if (view === 'capacities') return <CSIStorageCapacityTable capacities={items as KubernetesCSIStorageCapacity[]} />
   return <VolumeAttachmentTable attachments={items as KubernetesVolumeAttachment[]} />
+}
+
+function CSIStorageCapacityTable({ capacities }: { capacities: KubernetesCSIStorageCapacity[] }) {
+  return (
+    <div className="table-wrap" role="region" aria-label="CSIStorageCapacity 清单" tabIndex={0}>
+      <table className="csi-storage-capacity-table">
+        <thead><tr><th>名称</th><th>命名空间</th><th>StorageClass</th><th>报告容量</th><th>创建时间</th></tr></thead>
+        <tbody>{capacities.map((capacity) => (
+          <tr key={`${capacity.namespace}:${capacity.name}`}>
+            <td className="mono"><strong>{capacity.name}</strong></td>
+            <td className="mono">{capacity.namespace}</td>
+            <td className="mono clipped-cell" title={capacity.storage_class}>{capacity.storage_class}</td>
+            <td className="mono">{capacity.capacity || <span className="detail-muted">未报告</span>}</td>
+            <td>{formatDateTime(capacity.created_at)}</td>
+          </tr>
+        ))}</tbody>
+      </table>
+    </div>
+  )
 }
 
 function ClaimTable({ claims }: { claims: KubernetesPersistentVolumeClaim[] }) {

@@ -518,6 +518,14 @@ type KubernetesVolumeAttachment struct {
 	CreatedAt        time.Time                        `json:"created_at"`
 }
 
+type KubernetesCSIStorageCapacity struct {
+	Namespace    string    `json:"namespace"`
+	Name         string    `json:"name"`
+	StorageClass string    `json:"storage_class"`
+	Capacity     string    `json:"capacity,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
 type KubernetesCSIDriver struct {
 	Name      string    `json:"name"`
 	CreatedAt time.Time `json:"created_at"`

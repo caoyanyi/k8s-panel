@@ -83,6 +83,7 @@ type KubeGateway interface {
 	PersistentVolumes(context.Context) ([]domain.KubernetesPersistentVolume, error)
 	StorageClasses(context.Context) ([]domain.KubernetesStorageClass, error)
 	VolumeAttachments(context.Context) ([]domain.KubernetesVolumeAttachment, error)
+	CSIStorageCapacities(context.Context, string) ([]domain.KubernetesCSIStorageCapacity, error)
 	CSIDrivers(context.Context) ([]domain.KubernetesCSIDriver, error)
 	CSIDriver(context.Context, string) (domain.KubernetesCSIDriverDetail, error)
 	CSINodes(context.Context) ([]domain.KubernetesCSINode, error)

@@ -807,12 +807,14 @@ func TestValidateCSIDriverName(t *testing.T) {
 	}
 }
 
-func TestValidateVolumeAttachmentAndPersistentVolumeNames(t *testing.T) {
+func TestValidateStorageResourceNames(t *testing.T) {
 	t.Parallel()
 
 	validators := map[string]func(string) error{
-		"volume attachment": ValidateVolumeAttachmentName,
-		"persistent volume": ValidatePersistentVolumeName,
+		"volume attachment":    ValidateVolumeAttachmentName,
+		"persistent volume":    ValidatePersistentVolumeName,
+		"storage class":        ValidateStorageClassName,
+		"CSI storage capacity": ValidateCSIStorageCapacityName,
 	}
 	tests := []struct {
 		name      string

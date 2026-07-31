@@ -61,6 +61,10 @@ describe('StoragePage', () => {
         requested.push(path)
         return Promise.resolve(dataResponse(volumeAttachments))
       }
+      if (path.includes('/csi-storage-capacities')) {
+        requested.push(path)
+        return Promise.resolve(dataResponse(csiStorageCapacities))
+      }
       if (path.endsWith('/csi-nodes/worker-01')) {
         requested.push(path)
         return Promise.resolve(dataResponse({
@@ -143,6 +147,23 @@ describe('StoragePage', () => {
     expect(within(nodeDialog).queryByText('topology.example.com/zone')).not.toBeInTheDocument()
     expect(within(nodeDialog).queryByText('private-value')).not.toBeInTheDocument()
     expect(requested.filter((path) => path.endsWith('/csi-nodes/worker-01'))).toHaveLength(1)
+
+    await user.click(within(nodeDialog).getByRole('button', { name: '关闭' }))
+    expect(requested.some((path) => path.includes('/csi-storage-capacities'))).toBe(false)
+    await user.click(screen.getByRole('button', { name: 'CSI容量' }))
+    const capacityTable = await screen.findByRole('region', { name: 'CSIStorageCapacity 清单' })
+    expect(within(capacityTable).getByText('capacity-payments')).toBeInTheDocument()
+    expect(within(capacityTable).getByText('80Gi')).toBeInTheDocument()
+    expect(within(capacityTable).getByText('未报告')).toBeInTheDocument()
+    expect(within(capacityTable).queryByText('private-topology-zone')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('命名空间')).toBeEnabled()
+    expect(screen.getByLabelText('命名空间')).toHaveValue('payments')
+    expect(requested.at(-1)).toBe('/api/v1/clusters/clu_1/csi-storage-capacities?namespace=payments')
+    expect(namespaceRequests).toBe(2)
+
+    await user.type(screen.getByLabelText('搜索存储资源'), 'archive')
+    expect(within(capacityTable).getByText('capacity-unset')).toBeInTheDocument()
+    expect(within(capacityTable).queryByText('capacity-payments')).not.toBeInTheDocument()
   })
 
   it('aborts an active claim refresh when the storage kind changes', async () => {
@@ -261,6 +282,17 @@ const volumeAttachments = [
 const csiNodes = [
   { name: 'worker-01', driver_count: 2, created_at: '2026-07-31T08:00:00Z' },
   { name: 'worker-02', driver_count: 0, created_at: '2026-07-31T08:02:00Z' },
+]
+
+const csiStorageCapacities = [
+  {
+    namespace: 'payments', name: 'capacity-payments', storage_class: 'standard', capacity: '80Gi',
+    created_at: '2026-07-31T08:03:00Z', node_topology: 'private-topology-zone',
+  },
+  {
+    namespace: 'payments', name: 'capacity-unset', storage_class: 'archive',
+    created_at: '2026-07-31T08:04:00Z',
+  },
 ]
 
 function renderPage(overrides: Partial<PanelContextValue> = {}) {

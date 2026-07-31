@@ -600,6 +600,7 @@ test('storage inventory keeps cluster resources namespace independent', async ({
   expect(requestedKinds.some((request) => request.startsWith('csidrivers:'))).toBe(false)
   expect(requestedKinds.some((request) => request.startsWith('attachments:'))).toBe(false)
   expect(requestedKinds.some((request) => request.startsWith('csinodes:'))).toBe(false)
+  expect(requestedKinds.some((request) => request.startsWith('capacities:'))).toBe(false)
 
   await page.getByLabel('命名空间').selectOption('payments')
   await expect.poll(() => requestedKinds).toContain('claims:payments')
@@ -651,6 +652,17 @@ test('storage inventory keeps cluster resources namespace independent', async ({
   await expect(nodeDialog.getByText('topology.example.com/zone')).toHaveCount(0)
   expect(requestedKinds.at(-1)).toBe('csinode-detail:worker-01')
 
+  await nodeDialog.getByRole('button', { name: '关闭' }).click()
+  await page.getByRole('button', { name: 'CSI容量' }).click()
+  const capacityTable = page.getByRole('region', { name: 'CSIStorageCapacity 清单' })
+  await expect(capacityTable.getByText('capacity-payments', { exact: true })).toBeVisible()
+  await expect(capacityTable.getByText('80Gi', { exact: true })).toBeVisible()
+  await expect(capacityTable.getByText('未报告', { exact: true })).toBeVisible()
+  await expect(capacityTable.getByText('private-topology-zone')).toHaveCount(0)
+  await expect(page.getByLabel('命名空间')).toBeEnabled()
+  expect(requestedKinds).toContain('capacities:payments')
+  expect(requestedKinds.filter((request) => request === 'namespaces')).toHaveLength(2)
+
   const storageKindLabelOverflow = await page.getByRole('group', { name: '存储资源类型' })
     .getByRole('button')
     .evaluateAll((buttons) => Math.max(...buttons.map((button) => button.scrollWidth - button.clientWidth)))
@@ -660,7 +672,7 @@ test('storage inventory keeps cluster resources namespace independent', async ({
   expect(overflow).toBeLessThanOrEqual(1)
   const result = await new AxeBuilder({ page }).analyze()
   expect(result.violations.filter((violation) => ['serious', 'critical'].includes(violation.impact ?? ''))).toEqual([])
-  await page.screenshot({ path: `test-results/${testInfo.project.name}-csi-node-storage.png`, fullPage: true })
+  await page.screenshot({ path: `test-results/${testInfo.project.name}-csi-storage-capacity.png`, fullPage: true })
   expect(consoleErrors).toEqual([])
 })
 
@@ -1202,6 +1214,18 @@ async function mockStorageResources(page: Page, requestedKinds: string[]) {
         {
           name: 'attach-inline', attacher: 'kubernetes.io/csi-migrated', node: 'worker-02', status: 'detaching',
           created_at: '2026-07-31T08:02:00Z', attach_error: 'private-attach-error',
+        },
+      ]
+    } else if (path === '/api/v1/clusters/clu_1/csi-storage-capacities') {
+      requestedKinds.push(`capacities:${url.searchParams.get('namespace') ?? 'all'}`)
+      data = [
+        {
+          namespace: 'payments', name: 'capacity-payments', storage_class: 'standard', capacity: '80Gi',
+          created_at: '2026-07-31T08:03:00Z', node_topology: 'private-topology-zone',
+        },
+        {
+          namespace: 'payments', name: 'capacity-unset', storage_class: 'archive',
+          created_at: '2026-07-31T08:04:00Z',
         },
       ]
     } else if (path === '/api/v1/clusters/clu_1/csi-nodes/worker-01') {

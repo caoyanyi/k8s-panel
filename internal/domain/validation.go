@@ -403,6 +403,20 @@ func ValidatePersistentVolumeName(name string) error {
 	return nil
 }
 
+func ValidateStorageClassName(name string) error {
+	if !validDNSSubdomain(name) {
+		return Invalid("name", "must be a valid Kubernetes StorageClass name")
+	}
+	return nil
+}
+
+func ValidateCSIStorageCapacityName(name string) error {
+	if !validDNSSubdomain(name) {
+		return Invalid("name", "must be a valid Kubernetes CSIStorageCapacity name")
+	}
+	return nil
+}
+
 func ValidateAPIServiceName(name string) error {
 	version, group, found := strings.Cut(name, ".")
 	if !found || len(name) > 253 || !validDNSLabel(version) || (group != "" && !validDNSSubdomain(group)) {

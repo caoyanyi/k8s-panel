@@ -945,6 +945,27 @@ func (s *Service) VolumeAttachments(ctx context.Context, clusterID string) ([]do
 	return gateway.VolumeAttachments(ctx)
 }
 
+func (s *Service) CSIStorageCapacities(
+	ctx context.Context,
+	clusterID, namespace string,
+) ([]domain.KubernetesCSIStorageCapacity, error) {
+	if namespace != "" {
+		if err := domain.ValidateNamespace(namespace); err != nil {
+			return nil, err
+		}
+	}
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	gateway, err := s.kubeGateway(ctx, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	return gateway.CSIStorageCapacities(ctx, namespace)
+}
+
 func (s *Service) CSIDrivers(ctx context.Context, clusterID string) ([]domain.KubernetesCSIDriver, error) {
 	release, err := s.acquireKubernetesRead(ctx)
 	if err != nil {

@@ -553,6 +553,14 @@ export interface KubernetesVolumeAttachment {
   created_at: string
 }
 
+export interface KubernetesCSIStorageCapacity {
+  namespace: string
+  name: string
+  storage_class: string
+  capacity?: string
+  created_at: string
+}
+
 export interface KubernetesCSIDriver {
   name: string
   created_at: string

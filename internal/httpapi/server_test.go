@@ -156,6 +156,13 @@ func TestServerAuthenticationAndClusterLifecycle(t *testing.T) {
 	if unauthorizedVolumeAttachments.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthorized volume attachments status = %d, want 401", unauthorizedVolumeAttachments.Code)
 	}
+	unauthorizedCSIStorageCapacities := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorizedCSIStorageCapacities, httptest.NewRequest(
+		http.MethodGet, "/api/v1/clusters/clu_1/csi-storage-capacities", nil,
+	))
+	if unauthorizedCSIStorageCapacities.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized CSI storage capacities status = %d, want 401", unauthorizedCSIStorageCapacities.Code)
+	}
 	unauthorizedCSIDrivers := httptest.NewRecorder()
 	handler.ServeHTTP(unauthorizedCSIDrivers, httptest.NewRequest(http.MethodGet, "/api/v1/clusters/clu_1/csi-drivers", nil))
 	if unauthorizedCSIDrivers.Code != http.StatusUnauthorized {
@@ -517,6 +524,35 @@ func TestServerAuthenticationAndClusterLifecycle(t *testing.T) {
 	if missingVolumeAttachmentCluster.Code != http.StatusNotFound {
 		t.Fatalf("missing cluster volume attachments status = %d, body = %s",
 			missingVolumeAttachmentCluster.Code, missingVolumeAttachmentCluster.Body.String())
+	}
+	csiStorageCapacityPath := "/api/v1/clusters/" + created.Data.ID + "/csi-storage-capacities"
+	csiStorageCapacities := authenticatedRequest(
+		t, handler, cookie, http.MethodGet, csiStorageCapacityPath+"?namespace=storage-system", "",
+	)
+	if csiStorageCapacities.Code != http.StatusOK ||
+		!strings.Contains(csiStorageCapacities.Body.String(), `"namespace":"storage-system"`) ||
+		!strings.Contains(csiStorageCapacities.Body.String(), `"name":"capacity-a"`) ||
+		!strings.Contains(csiStorageCapacities.Body.String(), `"storage_class":"standard"`) ||
+		!strings.Contains(csiStorageCapacities.Body.String(), `"capacity":"80Gi"`) ||
+		strings.Contains(csiStorageCapacities.Body.String(), "private-topology") ||
+		strings.Contains(csiStorageCapacities.Body.String(), "maximumVolumeSize") {
+		t.Fatalf("CSI storage capacities status = %d, body = %s",
+			csiStorageCapacities.Code, csiStorageCapacities.Body.String())
+	}
+	invalidCSIStorageCapacityNamespace := authenticatedRequest(
+		t, handler, cookie, http.MethodGet, csiStorageCapacityPath+"?namespace=bad%2Fnamespace", "",
+	)
+	if invalidCSIStorageCapacityNamespace.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid CSI storage capacity namespace status = %d, body = %s",
+			invalidCSIStorageCapacityNamespace.Code, invalidCSIStorageCapacityNamespace.Body.String())
+	}
+	assertErrorField(t, invalidCSIStorageCapacityNamespace.Body.Bytes(), "namespace")
+	missingCSIStorageCapacityCluster := authenticatedRequest(
+		t, handler, cookie, http.MethodGet, "/api/v1/clusters/clu_missing/csi-storage-capacities", "",
+	)
+	if missingCSIStorageCapacityCluster.Code != http.StatusNotFound {
+		t.Fatalf("missing cluster CSI storage capacities status = %d, body = %s",
+			missingCSIStorageCapacityCluster.Code, missingCSIStorageCapacityCluster.Body.String())
 	}
 	csiDriverPath := "/api/v1/clusters/" + created.Data.ID + "/csi-drivers"
 	csiDrivers := authenticatedRequest(t, handler, cookie, http.MethodGet, csiDriverPath, "")
@@ -1661,6 +1697,15 @@ func (testKube) VolumeAttachments(context.Context) ([]domain.KubernetesVolumeAtt
 	return []domain.KubernetesVolumeAttachment{{
 		Name: "attach-data", Attacher: "ebs.csi.example.com", PersistentVolume: "pv-data", Node: "worker-01",
 		Status: domain.VolumeAttachmentAttached, CreatedAt: time.Date(2026, 7, 31, 8, 0, 0, 0, time.UTC),
+	}}, nil
+}
+func (testKube) CSIStorageCapacities(_ context.Context, namespace string) ([]domain.KubernetesCSIStorageCapacity, error) {
+	if namespace == "" {
+		namespace = "storage-system"
+	}
+	return []domain.KubernetesCSIStorageCapacity{{
+		Namespace: namespace, Name: "capacity-a", StorageClass: "standard", Capacity: "80Gi",
+		CreatedAt: time.Date(2026, 7, 31, 8, 0, 0, 0, time.UTC),
 	}}, nil
 }
 func (testKube) CSIDrivers(context.Context) ([]domain.KubernetesCSIDriver, error) {
