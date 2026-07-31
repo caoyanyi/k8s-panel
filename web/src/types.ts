@@ -542,6 +542,17 @@ export interface KubernetesStorageClass {
   created_at: string
 }
 
+export type KubernetesVolumeAttachmentStatus = 'attached' | 'attaching' | 'detaching'
+
+export interface KubernetesVolumeAttachment {
+  name: string
+  attacher: string
+  persistent_volume?: string
+  node: string
+  status: KubernetesVolumeAttachmentStatus
+  created_at: string
+}
+
 export interface KubernetesCSIDriver {
   name: string
   created_at: string

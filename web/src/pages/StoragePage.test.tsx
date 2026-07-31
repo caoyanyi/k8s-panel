@@ -57,6 +57,10 @@ describe('StoragePage', () => {
         requested.push(path)
         return Promise.resolve(dataResponse(csiDrivers))
       }
+      if (path.endsWith('/volume-attachments')) {
+        requested.push(path)
+        return Promise.resolve(dataResponse(volumeAttachments))
+      }
       return Promise.resolve(errorResponse(404, 'not_found'))
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -82,6 +86,7 @@ describe('StoragePage', () => {
     expect(screen.getByLabelText('命名空间')).toBeDisabled()
     expect(namespaceRequests).toBe(1)
     expect(requested.filter((path) => path.endsWith('/csi-drivers'))).toHaveLength(1)
+    expect(requested.some((path) => path.endsWith('/volume-attachments'))).toBe(false)
 
     await user.click(screen.getByRole('button', { name: '查看 ebs.csi.example.com' }))
     const dialog = await screen.findByRole('dialog', { name: 'CSIDriver · ebs.csi.example.com' })
@@ -90,6 +95,17 @@ describe('StoragePage', () => {
     expect(within(dialog).getByText('2 项')).toBeInTheDocument()
     expect(screen.queryByText('private-storage-api')).not.toBeInTheDocument()
     expect(requested.filter((path) => path.endsWith('/csi-drivers/ebs.csi.example.com'))).toHaveLength(1)
+
+    await user.click(within(dialog).getByRole('button', { name: '关闭' }))
+    await user.click(screen.getByRole('button', { name: '卷挂接' }))
+    expect(await screen.findByText('attach-a')).toBeInTheDocument()
+    expect(screen.getByText('已挂接')).toBeInTheDocument()
+    expect(screen.getByText('正在分离')).toBeInTheDocument()
+    expect(screen.getByText('内联迁移卷')).toBeInTheDocument()
+    expect(screen.queryByText('private-attach-error')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('命名空间')).toBeDisabled()
+    expect(namespaceRequests).toBe(1)
+    expect(requested.filter((path) => path.endsWith('/volume-attachments'))).toHaveLength(1)
   })
 
   it('aborts an active claim refresh when the storage kind changes', async () => {
@@ -192,6 +208,17 @@ const storageClass = {
 const csiDrivers = [
   { name: 'ebs.csi.example.com', created_at: '2026-07-22T08:05:00Z' },
   { name: 'local.csi.example.com', created_at: '2026-07-22T08:10:00Z' },
+]
+
+const volumeAttachments = [
+  {
+    name: 'attach-a', attacher: 'ebs.csi.example.com', persistent_volume: 'pv-payments-data',
+    node: 'worker-01', status: 'attached', created_at: '2026-07-31T08:00:00Z',
+  },
+  {
+    name: 'attach-inline', attacher: 'kubernetes.io/csi-migrated', node: 'worker-02', status: 'detaching',
+    created_at: '2026-07-31T08:02:00Z', attach_error: 'private-attach-error',
+  },
 ]
 
 function renderPage(overrides: Partial<PanelContextValue> = {}) {

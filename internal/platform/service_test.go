@@ -843,6 +843,10 @@ func TestServiceRejectsKubernetesReadsDuringCriticalResourcePressure(t *testing.
 			_, err := service.StorageClasses(context.Background(), cluster.ID)
 			return err
 		}},
+		{name: "volume attachments", call: func() error {
+			_, err := service.VolumeAttachments(context.Background(), cluster.ID)
+			return err
+		}},
 		{name: "CSI drivers", call: func() error {
 			_, err := service.CSIDrivers(context.Background(), cluster.ID)
 			return err
@@ -937,6 +941,9 @@ func TestServiceRejectsKubernetesReadsDuringCriticalResourcePressure(t *testing.
 	}
 	if claimCalls, volumeCalls, classCalls := gateway.persistentVolumeClaimCalls.Load(), gateway.persistentVolumeCalls.Load(), gateway.storageClassCalls.Load(); claimCalls != 0 || volumeCalls != 0 || classCalls != 0 {
 		t.Fatalf("storage reads reached Kubernetes under critical pressure: claims=%d volumes=%d classes=%d", claimCalls, volumeCalls, classCalls)
+	}
+	if calls := gateway.volumeAttachmentCalls.Load(); calls != 0 {
+		t.Fatalf("VolumeAttachments() reached Kubernetes %d times under critical pressure", calls)
 	}
 	if calls := gateway.clusterEventCalls.Load(); calls != 0 {
 		t.Fatalf("event reads reached Kubernetes %d times under critical pressure", calls)
@@ -1141,6 +1148,10 @@ func TestServiceListsStorageResourcesAndValidatesClaimScopeBeforeGateway(t *test
 		persistentVolumeClaims: []domain.KubernetesPersistentVolumeClaim{{Namespace: "payments", Name: "data", Status: "Bound"}},
 		persistentVolumes:      []domain.KubernetesPersistentVolume{{Name: "pv-data", Status: "Bound"}},
 		storageClasses:         []domain.KubernetesStorageClass{{Name: "standard", Provisioner: "csi.example.com"}},
+		volumeAttachments: []domain.KubernetesVolumeAttachment{{
+			Name: "attach-data", Attacher: "ebs.csi.example.com", PersistentVolume: "pv-data", Node: "worker-01",
+			Status: domain.VolumeAttachmentAttached,
+		}},
 	}
 	service, _, _ := newTestService(t, serviceFakes{kube: gateway})
 	cluster, err := service.CreateCluster(context.Background(), "admin", "req_cluster", domain.ClusterInput{
@@ -1161,6 +1172,14 @@ func TestServiceListsStorageResourcesAndValidatesClaimScopeBeforeGateway(t *test
 	classes, err := service.StorageClasses(context.Background(), cluster.ID)
 	if err != nil || len(classes) != 1 || classes[0].Name != "standard" {
 		t.Fatalf("StorageClasses() = %#v, %v", classes, err)
+	}
+	attachments, err := service.VolumeAttachments(context.Background(), cluster.ID)
+	if err != nil || len(attachments) != 1 || attachments[0].Name != "attach-data" ||
+		attachments[0].Status != domain.VolumeAttachmentAttached {
+		t.Fatalf("VolumeAttachments() = %#v, %v", attachments, err)
+	}
+	if gateway.volumeAttachmentCalls.Load() != 1 {
+		t.Fatalf("VolumeAttachment gateway calls = %d, want 1", gateway.volumeAttachmentCalls.Load())
 	}
 	if gateway.persistentVolumeClaimNamespace != "payments" {
 		t.Fatalf("claim namespace = %q", gateway.persistentVolumeClaimNamespace)
@@ -2833,6 +2852,7 @@ type fakeKubeGateway struct {
 	persistentVolumeClaims           []domain.KubernetesPersistentVolumeClaim
 	persistentVolumes                []domain.KubernetesPersistentVolume
 	storageClasses                   []domain.KubernetesStorageClass
+	volumeAttachments                []domain.KubernetesVolumeAttachment
 	csiDrivers                       []domain.KubernetesCSIDriver
 	csiDriverDetail                  domain.KubernetesCSIDriverDetail
 	csiDriverName                    string
@@ -2860,6 +2880,7 @@ type fakeKubeGateway struct {
 	persistentVolumeClaimCalls       atomic.Int64
 	persistentVolumeCalls            atomic.Int64
 	storageClassCalls                atomic.Int64
+	volumeAttachmentCalls            atomic.Int64
 	resourceQuotaCalls               atomic.Int64
 	limitRangeCalls                  atomic.Int64
 	horizontalPodAutoscalerCalls     atomic.Int64
@@ -3160,6 +3181,10 @@ func (g *fakeKubeGateway) PersistentVolumes(context.Context) ([]domain.Kubernete
 func (g *fakeKubeGateway) StorageClasses(context.Context) ([]domain.KubernetesStorageClass, error) {
 	g.storageClassCalls.Add(1)
 	return append([]domain.KubernetesStorageClass(nil), g.storageClasses...), nil
+}
+func (g *fakeKubeGateway) VolumeAttachments(context.Context) ([]domain.KubernetesVolumeAttachment, error) {
+	g.volumeAttachmentCalls.Add(1)
+	return append([]domain.KubernetesVolumeAttachment(nil), g.volumeAttachments...), nil
 }
 func (g *fakeKubeGateway) CSIDrivers(context.Context) ([]domain.KubernetesCSIDriver, error) {
 	g.csiDriverListCalls.Add(1)

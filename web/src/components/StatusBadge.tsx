@@ -44,6 +44,9 @@ const labels: Record<string, string> = {
   blocked: '当前受阻',
   inactive: '未匹配 Pod',
   unobserved: '待同步',
+  attached: '已挂接',
+  attaching: '等待挂接',
+  detaching: '正在分离',
 }
 
 export function StatusBadge({ status }: StatusBadgeProps) {

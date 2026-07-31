@@ -250,6 +250,7 @@ td strong { color: var(--text); font-size: 12px; }
 .storage-table { min-width: 1180px; }
 .storage-class-table { min-width: 900px; }
 .csi-driver-table { min-width: 720px; }
+.volume-attachment-table { min-width: 1000px; }
 .helm-history-table table { min-width: 560px; }
 .helm-history-table .operation-action-column { width: 78px; }
 .governance-quota-table { min-width: 1080px; }
@@ -284,8 +285,8 @@ td strong { color: var(--text); font-size: 12px; }
 
 .status-badge { min-height: 24px; padding: 0 8px; display: inline-flex; align-items: center; gap: 6px; border: 1px solid #d9dfdb; border-radius: 999px; background: #f6f8f7; color: #536159; font-size: 11px; font-weight: 630; white-space: nowrap; }
 .status-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
-.status-connected, .status-succeeded, .status-passed, .status-ready, .status-active, .status-deployed, .status-true, .status-normal, .status-same-minor, .status-valid, .status-available { color: var(--success); background: #eff9f3; border-color: #c5e6d3; }
-.status-degraded, .status-pending, .status-queued, .status-progressing, .status-retrying, .status-suspended, .status-submitted, .status-warning, .status-constrained, .status-upgrade-blocking, .status-expiring, .status-unobserved { color: var(--warning); background: #fff8ea; border-color: #efd9aa; }
+.status-connected, .status-succeeded, .status-passed, .status-ready, .status-active, .status-deployed, .status-true, .status-normal, .status-same-minor, .status-valid, .status-available, .status-attached { color: var(--success); background: #eff9f3; border-color: #c5e6d3; }
+.status-degraded, .status-pending, .status-queued, .status-progressing, .status-retrying, .status-suspended, .status-submitted, .status-warning, .status-constrained, .status-upgrade-blocking, .status-expiring, .status-unobserved, .status-attaching, .status-detaching { color: var(--warning); background: #fff8ea; border-color: #efd9aa; }
 .status-unreachable, .status-failed, .status-unavailable, .status-uninstalled, .status-critical, .status-expired, .status-outside-policy, .status-newer-than-server, .status-major-mismatch, .status-blocked { color: var(--danger); background: #fff1f1; border-color: #edc6c6; }
 .status-notready { color: var(--danger); background: #fff1f1; border-color: #edc6c6; }
 .status-running, .status-scheduled, .status-within-policy { color: var(--info); background: #eef6fc; border-color: #c8dff0; }
@@ -330,6 +331,7 @@ td strong { color: var(--text); font-size: 12px; }
 .governance-kind-control button { min-width: 118px; }
 .network-kind-control { max-width: 100%; overflow-x: auto; }
 .network-kind-control button { min-width: 122px; }
+.storage-kind-control { max-width: 100%; overflow-x: auto; }
 
 input, select, textarea { width: 100%; border: 1px solid var(--line-strong); border-radius: 5px; background: #fff; color: var(--text); }
 input, select { height: 38px; padding: 0 10px; }
@@ -545,6 +547,8 @@ select:disabled { cursor: not-allowed; background: #f3f5f4; color: #89938d; }
   .governance-kind-control button { min-width: 118px; flex: 0 0 118px; }
   .network-kind-control { justify-content: flex-start; }
   .network-kind-control button { min-width: 122px; flex: 0 0 122px; }
+  .storage-kind-control { justify-content: flex-start; }
+  .storage-kind-control button { min-width: 110px; flex: 0 0 110px; }
   .modal-backdrop { padding: 0; align-items: end; }
   .modal { width: 100%; max-height: 92vh; border-radius: 8px 8px 0 0; border-bottom: 0; }
   .modal-body { padding: 16px; }

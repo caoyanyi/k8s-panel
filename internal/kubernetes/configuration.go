@@ -49,6 +49,7 @@ type partialObjectMetadata struct {
 	Name              string
 	Namespace         string
 	CreationTimestamp time.Time
+	DeletionTimestamp *time.Time
 }
 
 func (c *Client) ConfigMaps(ctx context.Context, namespace string) ([]domain.KubernetesConfigMap, error) {
@@ -231,15 +232,17 @@ func decodePartialObjectMetadataForScope(raw json.RawMessage, namespaced bool) (
 		APIVersion string `json:"apiVersion"`
 		Kind       string `json:"kind"`
 		Metadata   struct {
-			Name              string    `json:"name"`
-			Namespace         string    `json:"namespace"`
-			CreationTimestamp time.Time `json:"creationTimestamp"`
+			Name              string     `json:"name"`
+			Namespace         string     `json:"namespace"`
+			CreationTimestamp time.Time  `json:"creationTimestamp"`
+			DeletionTimestamp *time.Time `json:"deletionTimestamp"`
 		} `json:"metadata"`
 	}
 	if err := json.Unmarshal(raw, &envelope); err != nil || envelope.APIVersion != "meta.k8s.io/v1" || envelope.Kind != "PartialObjectMetadata" {
 		return empty, fmt.Errorf("unsupported Kubernetes table row object: %w", domain.ErrUpstream)
 	}
-	if !validKubernetesMetadataString(envelope.Metadata.Name) || envelope.Metadata.CreationTimestamp.IsZero() {
+	if !validKubernetesMetadataString(envelope.Metadata.Name) || envelope.Metadata.CreationTimestamp.IsZero() ||
+		(envelope.Metadata.DeletionTimestamp != nil && envelope.Metadata.DeletionTimestamp.IsZero()) {
 		return empty, fmt.Errorf("invalid Kubernetes table metadata: %w", domain.ErrUpstream)
 	}
 	if namespaced {
@@ -249,10 +252,16 @@ func decodePartialObjectMetadataForScope(raw json.RawMessage, namespaced bool) (
 	} else if envelope.Metadata.Namespace != "" {
 		return empty, fmt.Errorf("cluster-scoped Kubernetes table row contains a namespace: %w", domain.ErrUpstream)
 	}
+	var deletionTimestamp *time.Time
+	if envelope.Metadata.DeletionTimestamp != nil {
+		value := envelope.Metadata.DeletionTimestamp.UTC()
+		deletionTimestamp = &value
+	}
 	return partialObjectMetadata{
 		Name:              envelope.Metadata.Name,
 		Namespace:         envelope.Metadata.Namespace,
-		CreationTimestamp: envelope.Metadata.CreationTimestamp,
+		CreationTimestamp: envelope.Metadata.CreationTimestamp.UTC(),
+		DeletionTimestamp: deletionTimestamp,
 	}, nil
 }
 

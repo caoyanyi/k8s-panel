@@ -149,6 +149,13 @@ func TestServerAuthenticationAndClusterLifecycle(t *testing.T) {
 	if unauthorizedStorage.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthorized storage status = %d, want 401", unauthorizedStorage.Code)
 	}
+	unauthorizedVolumeAttachments := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorizedVolumeAttachments, httptest.NewRequest(
+		http.MethodGet, "/api/v1/clusters/clu_1/volume-attachments", nil,
+	))
+	if unauthorizedVolumeAttachments.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized volume attachments status = %d, want 401", unauthorizedVolumeAttachments.Code)
+	}
 	unauthorizedCSIDrivers := httptest.NewRecorder()
 	handler.ServeHTTP(unauthorizedCSIDrivers, httptest.NewRequest(http.MethodGet, "/api/v1/clusters/clu_1/csi-drivers", nil))
 	if unauthorizedCSIDrivers.Code != http.StatusUnauthorized {
@@ -487,6 +494,24 @@ func TestServerAuthenticationAndClusterLifecycle(t *testing.T) {
 	if classes.Code != http.StatusOK || !strings.Contains(classes.Body.String(), `"name":"standard"`) ||
 		!strings.Contains(classes.Body.String(), `"default":true`) || strings.Contains(classes.Body.String(), "storage-account") {
 		t.Fatalf("storage classes status = %d, body = %s", classes.Code, classes.Body.String())
+	}
+	volumeAttachments := authenticatedRequest(
+		t, handler, cookie, http.MethodGet, "/api/v1/clusters/"+created.Data.ID+"/volume-attachments", "",
+	)
+	if volumeAttachments.Code != http.StatusOK ||
+		!strings.Contains(volumeAttachments.Body.String(), `"name":"attach-data"`) ||
+		!strings.Contains(volumeAttachments.Body.String(), `"persistent_volume":"pv-data"`) ||
+		!strings.Contains(volumeAttachments.Body.String(), `"status":"attached"`) ||
+		strings.Contains(volumeAttachments.Body.String(), "private-attach-error") ||
+		strings.Contains(volumeAttachments.Body.String(), "attachmentMetadata") {
+		t.Fatalf("volume attachments status = %d, body = %s", volumeAttachments.Code, volumeAttachments.Body.String())
+	}
+	missingVolumeAttachmentCluster := authenticatedRequest(
+		t, handler, cookie, http.MethodGet, "/api/v1/clusters/clu_missing/volume-attachments", "",
+	)
+	if missingVolumeAttachmentCluster.Code != http.StatusNotFound {
+		t.Fatalf("missing cluster volume attachments status = %d, body = %s",
+			missingVolumeAttachmentCluster.Code, missingVolumeAttachmentCluster.Body.String())
 	}
 	csiDriverPath := "/api/v1/clusters/" + created.Data.ID + "/csi-drivers"
 	csiDrivers := authenticatedRequest(t, handler, cookie, http.MethodGet, csiDriverPath, "")
@@ -1601,6 +1626,12 @@ func (testKube) StorageClasses(context.Context) ([]domain.KubernetesStorageClass
 	return []domain.KubernetesStorageClass{{
 		Name: "standard", Provisioner: "csi.example.com", ReclaimPolicy: "Delete",
 		VolumeBindingMode: "WaitForFirstConsumer", AllowVolumeExpansion: true, Default: true,
+	}}, nil
+}
+func (testKube) VolumeAttachments(context.Context) ([]domain.KubernetesVolumeAttachment, error) {
+	return []domain.KubernetesVolumeAttachment{{
+		Name: "attach-data", Attacher: "ebs.csi.example.com", PersistentVolume: "pv-data", Node: "worker-01",
+		Status: domain.VolumeAttachmentAttached, CreatedAt: time.Date(2026, 7, 31, 8, 0, 0, 0, time.UTC),
 	}}, nil
 }
 func (testKube) CSIDrivers(context.Context) ([]domain.KubernetesCSIDriver, error) {

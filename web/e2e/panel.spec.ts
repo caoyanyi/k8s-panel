@@ -598,6 +598,7 @@ test('storage inventory keeps cluster resources namespace independent', async ({
   expect(requestedKinds.some((request) => request.startsWith('volumes:'))).toBe(false)
   expect(requestedKinds.some((request) => request.startsWith('classes:'))).toBe(false)
   expect(requestedKinds.some((request) => request.startsWith('csidrivers:'))).toBe(false)
+  expect(requestedKinds.some((request) => request.startsWith('attachments:'))).toBe(false)
 
   await page.getByLabel('命名空间').selectOption('payments')
   await expect.poll(() => requestedKinds).toContain('claims:payments')
@@ -625,11 +626,26 @@ test('storage inventory keeps cluster resources namespace independent', async ({
   await expect(dialog.getByText('private-storage-api')).toHaveCount(0)
   expect(requestedKinds.at(-1)).toBe('csidriver-detail:ebs.csi.example.com')
 
+  await dialog.getByRole('button', { name: '关闭' }).click()
+  await page.getByRole('button', { name: '卷挂接' }).click()
+  await expect(page.getByText('attach-payments-data', { exact: true })).toBeVisible()
+  await expect(page.getByText('已挂接', { exact: true })).toBeVisible()
+  await expect(page.getByText('正在分离', { exact: true })).toBeVisible()
+  await expect(page.getByText('内联迁移卷', { exact: true })).toBeVisible()
+  await expect(page.getByText('private-attach-error')).toHaveCount(0)
+  expect(requestedKinds).toContain('attachments:cluster')
+  expect(requestedKinds.filter((request) => request === 'namespaces')).toHaveLength(1)
+
+  const storageKindLabelOverflow = await page.getByRole('group', { name: '存储资源类型' })
+    .getByRole('button')
+    .evaluateAll((buttons) => Math.max(...buttons.map((button) => button.scrollWidth - button.clientWidth)))
+  expect(storageKindLabelOverflow).toBeLessThanOrEqual(1)
+
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
   expect(overflow).toBeLessThanOrEqual(1)
   const result = await new AxeBuilder({ page }).analyze()
   expect(result.violations.filter((violation) => ['serious', 'critical'].includes(violation.impact ?? ''))).toEqual([])
-  await page.screenshot({ path: `test-results/${testInfo.project.name}-csi-driver-storage.png`, fullPage: true })
+  await page.screenshot({ path: `test-results/${testInfo.project.name}-volume-attachment-storage.png`, fullPage: true })
   expect(consoleErrors).toEqual([])
 })
 
@@ -1160,6 +1176,18 @@ async function mockStorageResources(page: Page, requestedKinds: string[]) {
       data = [
         { name: 'ebs.csi.example.com', created_at: '2026-07-22T08:05:00Z' },
         { name: 'local.csi.example.com', created_at: '2026-07-22T08:10:00Z' },
+      ]
+    } else if (path === '/api/v1/clusters/clu_1/volume-attachments') {
+      requestedKinds.push('attachments:cluster')
+      data = [
+        {
+          name: 'attach-payments-data', attacher: 'ebs.csi.example.com', persistent_volume: 'pv-payments-data',
+          node: 'worker-01', status: 'attached', created_at: '2026-07-31T08:00:00Z',
+        },
+        {
+          name: 'attach-inline', attacher: 'kubernetes.io/csi-migrated', node: 'worker-02', status: 'detaching',
+          created_at: '2026-07-31T08:02:00Z', attach_error: 'private-attach-error',
+        },
       ]
     } else {
       data = []

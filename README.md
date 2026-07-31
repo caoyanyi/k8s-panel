@@ -8,7 +8,7 @@ K8s Panel 是一个独立实现的 Kubernetes 与 Helm 管理面板。后端使�
 - 多集群配置、连接测试、命名空间权限能力检测、启停和删除确认，支持验证后原子轮换访问凭据
 - 集群概览、节点/命名空间资源清单、节点诊断详情、CRD 与证书签名请求元数据/按需状态详情、聚合 API 健康清单，以及准入 Webhook/CEL 校验策略与绑定检查
 - Deployment/StatefulSet/DaemonSet/Job/CronJob/Pod 工作负载查询
-- Service/Ingress/EndpointSlice/NetworkPolicy 网络清单、ConfigMap/Secret 最小配置摘要，以及 PVC/PV/StorageClass 与集群级 CSIDriver 存储摘要
+- Service/Ingress/EndpointSlice/NetworkPolicy 网络清单、ConfigMap/Secret 最小配置摘要，以及 PVC/PV/StorageClass、VolumeAttachment 与集群级 CSIDriver 存储摘要
 - 命名空间 ResourceQuota、LimitRange、HPA、PodDisruptionBudget 治理清单，以及集群级 PriorityClass 与 RuntimeClass 元数据和按需配置详情
 - Pod Security Admission 命名空间安全态势，区分显式级别、版本固定、继承集群默认值和无效标签组合
 - 节点 Kubelet 与已观测 API Server 的版本偏差态势，标记政策范围、升级阻塞、超限和主版本不一致
@@ -82,6 +82,8 @@ PriorityClass 清单只在用户切换到集群级治理视图后读取 PartialO
 RuntimeClass 清单同样只在用户切换视图后读取 PartialObjectMetadata，最多 4 页、1,000 个对象和 4 MiB；单对象详情最多 1 MiB。响应只返回运行时 handler、CPU/内存 Pod overhead 字符串及资源项、节点选择器和容忍数量，不返回扩展资源名称、标签键值、容忍规则或对象元数据，不读取 Pod、Node、CRI 配置或宿主机运行时 socket，也不验证 handler 是否实际可用。
 
 CSIDriver 清单只在用户切换到对应集群级存储视图后读取 PartialObjectMetadata，同时停止只供 PVC 使用的命名空间清单读取；最多 4 页、1,000 个对象和 4 MiB。单对象详情最多 1 MiB，只返回稳定 CSI 配置和 TokenRequest 数量，不返回 audience、有效期或对象元数据，不扫描 PV/PVC、VolumeAttachment、CSINode、CSIStorageCapacity、Pod、Node 或宿主机 CSI socket，也不验证驱动是否实际部署或健康。
+
+VolumeAttachment 清单只在用户切换到卷挂接视图后串行读取 Kubernetes Table，最多 4 页、1,000 个对象、单页 2 MiB 和总计 4 MiB。响应仅返回挂接器、PV 来源、节点和挂接/分离状态；不读取完整对象，不返回挂接错误、分离错误、附件元数据或内联卷规范，也不对 PV、Node、Pod 和 CSI 驱动执行二次查询或自动轮询。
 
 Helm Release 修订历史只在用户打开单个 Release 的历史弹窗后读取 Helm 3 默认 Secret 存储的 PartialObjectMetadata；一次最多 4 页、200 个对象和 2 MiB，并只返回最近 10 条 revision、状态和存储时间。面板不读取或解码 Chart、Values、Manifest、Hooks、Notes 和 Secret data，不回退完整 Secret，也不支持 ConfigMap 或 SQL 存储后端；选择历史修订只会预填现有回滚确认框，不会直接执行回滚。
 

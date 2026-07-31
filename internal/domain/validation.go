@@ -389,6 +389,20 @@ func ValidateCSIDriverName(name string) error {
 	return nil
 }
 
+func ValidateVolumeAttachmentName(name string) error {
+	if !validDNSSubdomain(name) {
+		return Invalid("name", "must be a valid Kubernetes VolumeAttachment name")
+	}
+	return nil
+}
+
+func ValidatePersistentVolumeName(name string) error {
+	if !validDNSSubdomain(name) {
+		return Invalid("name", "must be a valid Kubernetes PersistentVolume name")
+	}
+	return nil
+}
+
 func ValidateAPIServiceName(name string) error {
 	version, group, found := strings.Cut(name, ".")
 	if !found || len(name) > 253 || !validDNSLabel(version) || (group != "" && !validDNSSubdomain(group)) {

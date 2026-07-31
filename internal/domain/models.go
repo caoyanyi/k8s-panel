@@ -501,6 +501,23 @@ type KubernetesStorageClass struct {
 	CreatedAt            time.Time `json:"created_at"`
 }
 
+type KubernetesVolumeAttachmentStatus string
+
+const (
+	VolumeAttachmentAttached  KubernetesVolumeAttachmentStatus = "attached"
+	VolumeAttachmentAttaching KubernetesVolumeAttachmentStatus = "attaching"
+	VolumeAttachmentDetaching KubernetesVolumeAttachmentStatus = "detaching"
+)
+
+type KubernetesVolumeAttachment struct {
+	Name             string                           `json:"name"`
+	Attacher         string                           `json:"attacher"`
+	PersistentVolume string                           `json:"persistent_volume,omitempty"`
+	Node             string                           `json:"node"`
+	Status           KubernetesVolumeAttachmentStatus `json:"status"`
+	CreatedAt        time.Time                        `json:"created_at"`
+}
+
 type KubernetesCSIDriver struct {
 	Name      string    `json:"name"`
 	CreatedAt time.Time `json:"created_at"`

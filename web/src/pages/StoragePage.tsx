@@ -4,6 +4,7 @@ import { api } from '../api'
 import { CSIDriverDetailModal } from '../components/CSIDriverDetailModal'
 import { EmptyState, ErrorState, LoadingState } from '../components/DataState'
 import { PageHeader } from '../components/PageHeader'
+import { StatusBadge, statusLabel } from '../components/StatusBadge'
 import { TablePagination, TABLE_PAGE_SIZE } from '../components/TablePagination'
 import { usePanel } from '../context'
 import { useResource } from '../hooks'
@@ -12,23 +13,29 @@ import type {
   KubernetesPersistentVolume,
   KubernetesPersistentVolumeClaim,
   KubernetesStorageClass,
+  KubernetesVolumeAttachment,
   Namespace,
 } from '../types'
 import { formatDateTime } from '../utils'
 
-type StorageView = 'claims' | 'volumes' | 'classes' | 'drivers'
+type StorageView = 'claims' | 'volumes' | 'classes' | 'drivers' | 'attachments'
 type StorageInventory =
   | { kind: 'claims'; items: KubernetesPersistentVolumeClaim[] }
   | { kind: 'volumes'; items: KubernetesPersistentVolume[] }
   | { kind: 'classes'; items: KubernetesStorageClass[] }
   | { kind: 'drivers'; items: KubernetesCSIDriver[] }
-type StorageItem = KubernetesPersistentVolumeClaim | KubernetesPersistentVolume | KubernetesStorageClass | KubernetesCSIDriver
+  | { kind: 'attachments'; items: KubernetesVolumeAttachment[] }
+type StorageItem = KubernetesPersistentVolumeClaim | KubernetesPersistentVolume | KubernetesStorageClass |
+  KubernetesCSIDriver | KubernetesVolumeAttachment
+
+const emptyStorageItems: StorageItem[] = []
 
 const storageLabels: Record<StorageView, string> = {
   claims: 'PVC',
   volumes: 'PV',
   classes: 'StorageClass',
   drivers: 'CSIDriver',
+  attachments: 'VolumeAttachment',
 }
 
 export function StoragePage() {
@@ -70,11 +77,18 @@ export function StoragePage() {
       )
       return { kind: 'classes', items }
     }
-    const items = await api.get<KubernetesCSIDriver[]>(
-      `/api/v1/clusters/${selectedClusterId}/csi-drivers`,
+    if (view === 'drivers') {
+      const items = await api.get<KubernetesCSIDriver[]>(
+        `/api/v1/clusters/${selectedClusterId}/csi-drivers`,
+        signal,
+      )
+      return { kind: 'drivers', items }
+    }
+    const items = await api.get<KubernetesVolumeAttachment[]>(
+      `/api/v1/clusters/${selectedClusterId}/volume-attachments`,
       signal,
     )
-    return { kind: 'drivers', items }
+    return { kind: 'attachments', items }
   }, [selectedClusterId, namespaceScope, view])
 
   useEffect(() => {
@@ -86,7 +100,7 @@ export function StoragePage() {
   useEffect(() => setSelectedCSIDriver(null), [selectedClusterId, view])
 
   const normalizedSearch = search.trim().toLowerCase()
-  const activeItems = inventory.data?.kind === view ? inventory.data.items : []
+  const activeItems = inventory.data?.kind === view ? inventory.data.items : emptyStorageItems
   const visibleItems = useMemo(() => activeItems.filter((item) => (
     !normalizedSearch || storageSearchText(view, item).toLowerCase().includes(normalizedSearch)
   )), [activeItems, normalizedSearch, view])
@@ -119,11 +133,12 @@ export function StoragePage() {
       )}
       {!selectedClusterId ? <EmptyState title="尚未选择集群" /> : (
         <>
-          <div className="segmented-control" role="group" aria-label="存储资源类型">
+          <div className="segmented-control storage-kind-control" role="group" aria-label="存储资源类型">
             <button type="button" className={view === 'claims' ? 'active' : ''} aria-pressed={view === 'claims'} onClick={() => setView('claims')}>PVC</button>
             <button type="button" className={view === 'volumes' ? 'active' : ''} aria-pressed={view === 'volumes'} onClick={() => setView('volumes')}>PV</button>
             <button type="button" className={view === 'classes' ? 'active' : ''} aria-pressed={view === 'classes'} onClick={() => setView('classes')}>StorageClass</button>
             <button type="button" className={view === 'drivers' ? 'active' : ''} aria-pressed={view === 'drivers'} onClick={() => setView('drivers')}>CSIDriver</button>
+            <button type="button" className={view === 'attachments' ? 'active' : ''} aria-pressed={view === 'attachments'} onClick={() => setView('attachments')}>卷挂接</button>
           </div>
           <section className="toolbar" aria-label="存储资源筛选">
             <div className="toolbar-field">
@@ -179,7 +194,8 @@ function emptyInventory(view: StorageView): StorageInventory {
   if (view === 'claims') return { kind: 'claims', items: [] }
   if (view === 'volumes') return { kind: 'volumes', items: [] }
   if (view === 'classes') return { kind: 'classes', items: [] }
-  return { kind: 'drivers', items: [] }
+  if (view === 'drivers') return { kind: 'drivers', items: [] }
+  return { kind: 'attachments', items: [] }
 }
 
 function storageSearchText(
@@ -195,6 +211,11 @@ function storageSearchText(
     return `${volume.name} ${volume.status} ${volume.claim ?? ''} ${volume.storage_class ?? ''}`
   }
   if (view === 'drivers') return (item as KubernetesCSIDriver).name
+  if (view === 'attachments') {
+    const attachment = item as KubernetesVolumeAttachment
+    return `${attachment.name} ${attachment.attacher} ${attachment.persistent_volume ?? ''} ${attachment.node} ` +
+      `${attachment.status} ${statusLabel(attachment.status)}`
+  }
   const storageClass = item as KubernetesStorageClass
   return `${storageClass.name} ${storageClass.provisioner} ${storageClass.reclaim_policy ?? ''} ${storageClass.volume_binding_mode ?? ''}`
 }
@@ -211,7 +232,8 @@ function StorageTable({
   if (view === 'claims') return <ClaimTable claims={items as KubernetesPersistentVolumeClaim[]} />
   if (view === 'volumes') return <VolumeTable volumes={items as KubernetesPersistentVolume[]} />
   if (view === 'classes') return <StorageClassTable storageClasses={items as KubernetesStorageClass[]} />
-  return <CSIDriverTable drivers={items as KubernetesCSIDriver[]} onSelect={onSelectCSIDriver} />
+  if (view === 'drivers') return <CSIDriverTable drivers={items as KubernetesCSIDriver[]} onSelect={onSelectCSIDriver} />
+  return <VolumeAttachmentTable attachments={items as KubernetesVolumeAttachment[]} />
 }
 
 function ClaimTable({ claims }: { claims: KubernetesPersistentVolumeClaim[] }) {
@@ -305,6 +327,28 @@ function CSIDriverTable({
                 onClick={() => onSelect(driver)}
               ><Eye size={16} /></button>
             </td>
+          </tr>
+        ))}</tbody>
+      </table>
+    </div>
+  )
+}
+
+function VolumeAttachmentTable({ attachments }: { attachments: KubernetesVolumeAttachment[] }) {
+  return (
+    <div className="table-wrap" role="region" aria-label="VolumeAttachment 清单" tabIndex={0}>
+      <table className="volume-attachment-table">
+        <thead><tr><th>名称</th><th>状态</th><th>持久卷 / 来源</th><th>节点</th><th>挂接器</th><th>创建时间</th></tr></thead>
+        <tbody>{attachments.map((attachment) => (
+          <tr key={attachment.name}>
+            <td className="mono"><strong>{attachment.name}</strong></td>
+            <td><StatusBadge status={attachment.status} /></td>
+            <td className="mono clipped-cell" title={attachment.persistent_volume}>
+              {attachment.persistent_volume || <span className="detail-muted">内联迁移卷</span>}
+            </td>
+            <td className="mono clipped-cell" title={attachment.node}>{attachment.node}</td>
+            <td className="mono clipped-cell" title={attachment.attacher}>{attachment.attacher}</td>
+            <td>{formatDateTime(attachment.created_at)}</td>
           </tr>
         ))}</tbody>
       </table>

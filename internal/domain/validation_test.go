@@ -807,6 +807,37 @@ func TestValidateCSIDriverName(t *testing.T) {
 	}
 }
 
+func TestValidateVolumeAttachmentAndPersistentVolumeNames(t *testing.T) {
+	t.Parallel()
+
+	validators := map[string]func(string) error{
+		"volume attachment": ValidateVolumeAttachmentName,
+		"persistent volume": ValidatePersistentVolumeName,
+	}
+	tests := []struct {
+		name      string
+		value     string
+		wantField string
+	}{
+		{name: "dns subdomain", value: "csi-attachment.example.com"},
+		{name: "hyphenated", value: "pv-data-01"},
+		{name: "empty", value: "", wantField: "name"},
+		{name: "uppercase", value: "PV-Data", wantField: "name"},
+		{name: "path traversal", value: "../volume", wantField: "name"},
+		{name: "too long", value: strings.Repeat("a", 254), wantField: "name"},
+	}
+	for validatorName, validate := range validators {
+		validatorName, validate := validatorName, validate
+		for _, tt := range tests {
+			tt := tt
+			t.Run(validatorName+" "+tt.name, func(t *testing.T) {
+				t.Parallel()
+				assertValidationField(t, validate(tt.value), tt.wantField)
+			})
+		}
+	}
+}
+
 func assertValidationField(t *testing.T, err error, wantField string) {
 	t.Helper()
 	if wantField == "" {
