@@ -2,6 +2,7 @@ import { Eye, RefreshCw, Search } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '../api'
 import { CSIDriverDetailModal } from '../components/CSIDriverDetailModal'
+import { CSINodeDetailModal } from '../components/CSINodeDetailModal'
 import { EmptyState, ErrorState, LoadingState } from '../components/DataState'
 import { PageHeader } from '../components/PageHeader'
 import { StatusBadge, statusLabel } from '../components/StatusBadge'
@@ -10,6 +11,7 @@ import { usePanel } from '../context'
 import { useResource } from '../hooks'
 import type {
   KubernetesCSIDriver,
+  KubernetesCSINode,
   KubernetesPersistentVolume,
   KubernetesPersistentVolumeClaim,
   KubernetesStorageClass,
@@ -18,15 +20,16 @@ import type {
 } from '../types'
 import { formatDateTime } from '../utils'
 
-type StorageView = 'claims' | 'volumes' | 'classes' | 'drivers' | 'attachments'
+type StorageView = 'claims' | 'volumes' | 'classes' | 'drivers' | 'csiNodes' | 'attachments'
 type StorageInventory =
   | { kind: 'claims'; items: KubernetesPersistentVolumeClaim[] }
   | { kind: 'volumes'; items: KubernetesPersistentVolume[] }
   | { kind: 'classes'; items: KubernetesStorageClass[] }
   | { kind: 'drivers'; items: KubernetesCSIDriver[] }
+  | { kind: 'csiNodes'; items: KubernetesCSINode[] }
   | { kind: 'attachments'; items: KubernetesVolumeAttachment[] }
 type StorageItem = KubernetesPersistentVolumeClaim | KubernetesPersistentVolume | KubernetesStorageClass |
-  KubernetesCSIDriver | KubernetesVolumeAttachment
+  KubernetesCSIDriver | KubernetesCSINode | KubernetesVolumeAttachment
 
 const emptyStorageItems: StorageItem[] = []
 
@@ -35,6 +38,7 @@ const storageLabels: Record<StorageView, string> = {
   volumes: 'PV',
   classes: 'StorageClass',
   drivers: 'CSIDriver',
+  csiNodes: 'CSINode',
   attachments: 'VolumeAttachment',
 }
 
@@ -44,6 +48,7 @@ export function StoragePage() {
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(0)
   const [selectedCSIDriver, setSelectedCSIDriver] = useState<KubernetesCSIDriver | null>(null)
+  const [selectedCSINode, setSelectedCSINode] = useState<KubernetesCSINode | null>(null)
   const selectedCluster = clusters.find((cluster) => cluster.id === selectedClusterId)
   const namespaceScoped = view === 'claims'
   const namespaceScope = namespaceScoped ? selectedNamespace : ''
@@ -84,6 +89,13 @@ export function StoragePage() {
       )
       return { kind: 'drivers', items }
     }
+    if (view === 'csiNodes') {
+      const items = await api.get<KubernetesCSINode[]>(
+        `/api/v1/clusters/${selectedClusterId}/csi-nodes`,
+        signal,
+      )
+      return { kind: 'csiNodes', items }
+    }
     const items = await api.get<KubernetesVolumeAttachment[]>(
       `/api/v1/clusters/${selectedClusterId}/volume-attachments`,
       signal,
@@ -98,6 +110,7 @@ export function StoragePage() {
     }
   }, [namespaceScoped, namespaces.data, selectedNamespace, setSelectedNamespace])
   useEffect(() => setSelectedCSIDriver(null), [selectedClusterId, view])
+  useEffect(() => setSelectedCSINode(null), [selectedClusterId, view])
 
   const normalizedSearch = search.trim().toLowerCase()
   const activeItems = inventory.data?.kind === view ? inventory.data.items : emptyStorageItems
@@ -138,6 +151,7 @@ export function StoragePage() {
             <button type="button" className={view === 'volumes' ? 'active' : ''} aria-pressed={view === 'volumes'} onClick={() => setView('volumes')}>PV</button>
             <button type="button" className={view === 'classes' ? 'active' : ''} aria-pressed={view === 'classes'} onClick={() => setView('classes')}>StorageClass</button>
             <button type="button" className={view === 'drivers' ? 'active' : ''} aria-pressed={view === 'drivers'} onClick={() => setView('drivers')}>CSIDriver</button>
+            <button type="button" className={view === 'csiNodes' ? 'active' : ''} aria-pressed={view === 'csiNodes'} onClick={() => setView('csiNodes')}>CSI节点</button>
             <button type="button" className={view === 'attachments' ? 'active' : ''} aria-pressed={view === 'attachments'} onClick={() => setView('attachments')}>卷挂接</button>
           </div>
           <section className="toolbar" aria-label="存储资源筛选">
@@ -172,7 +186,12 @@ export function StoragePage() {
                   : visibleItems.length === 0 ? <EmptyState title={normalizedSearch ? `没有匹配的 ${resourceLabel}` : `当前范围没有 ${resourceLabel}`} />
                     : (
                       <>
-                        <StorageTable view={view} items={pageItems} onSelectCSIDriver={setSelectedCSIDriver} />
+                        <StorageTable
+                          view={view}
+                          items={pageItems}
+                          onSelectCSIDriver={setSelectedCSIDriver}
+                          onSelectCSINode={setSelectedCSINode}
+                        />
                         <TablePagination page={currentPage} totalItems={visibleItems.length} onPage={setPage} />
                       </>
                     )}
@@ -186,6 +205,13 @@ export function StoragePage() {
           onClose={() => setSelectedCSIDriver(null)}
         />
       )}
+      {selectedCSINode && (
+        <CSINodeDetailModal
+          clusterId={selectedClusterId}
+          resource={selectedCSINode}
+          onClose={() => setSelectedCSINode(null)}
+        />
+      )}
     </div>
   )
 }
@@ -195,6 +221,7 @@ function emptyInventory(view: StorageView): StorageInventory {
   if (view === 'volumes') return { kind: 'volumes', items: [] }
   if (view === 'classes') return { kind: 'classes', items: [] }
   if (view === 'drivers') return { kind: 'drivers', items: [] }
+  if (view === 'csiNodes') return { kind: 'csiNodes', items: [] }
   return { kind: 'attachments', items: [] }
 }
 
@@ -211,6 +238,7 @@ function storageSearchText(
     return `${volume.name} ${volume.status} ${volume.claim ?? ''} ${volume.storage_class ?? ''}`
   }
   if (view === 'drivers') return (item as KubernetesCSIDriver).name
+  if (view === 'csiNodes') return (item as KubernetesCSINode).name
   if (view === 'attachments') {
     const attachment = item as KubernetesVolumeAttachment
     return `${attachment.name} ${attachment.attacher} ${attachment.persistent_volume ?? ''} ${attachment.node} ` +
@@ -224,15 +252,18 @@ function StorageTable({
   view,
   items,
   onSelectCSIDriver,
+  onSelectCSINode,
 }: {
   view: StorageView
   items: StorageItem[]
   onSelectCSIDriver: (item: KubernetesCSIDriver) => void
+  onSelectCSINode: (item: KubernetesCSINode) => void
 }) {
   if (view === 'claims') return <ClaimTable claims={items as KubernetesPersistentVolumeClaim[]} />
   if (view === 'volumes') return <VolumeTable volumes={items as KubernetesPersistentVolume[]} />
   if (view === 'classes') return <StorageClassTable storageClasses={items as KubernetesStorageClass[]} />
   if (view === 'drivers') return <CSIDriverTable drivers={items as KubernetesCSIDriver[]} onSelect={onSelectCSIDriver} />
+  if (view === 'csiNodes') return <CSINodeTable nodes={items as KubernetesCSINode[]} onSelect={onSelectCSINode} />
   return <VolumeAttachmentTable attachments={items as KubernetesVolumeAttachment[]} />
 }
 
@@ -349,6 +380,38 @@ function VolumeAttachmentTable({ attachments }: { attachments: KubernetesVolumeA
             <td className="mono clipped-cell" title={attachment.node}>{attachment.node}</td>
             <td className="mono clipped-cell" title={attachment.attacher}>{attachment.attacher}</td>
             <td>{formatDateTime(attachment.created_at)}</td>
+          </tr>
+        ))}</tbody>
+      </table>
+    </div>
+  )
+}
+
+function CSINodeTable({
+  nodes,
+  onSelect,
+}: {
+  nodes: KubernetesCSINode[]
+  onSelect: (item: KubernetesCSINode) => void
+}) {
+  return (
+    <div className="table-wrap" role="region" aria-label="CSINode 清单" tabIndex={0}>
+      <table className="csi-node-table">
+        <thead><tr><th>节点</th><th>已注册驱动</th><th>创建时间</th><th className="actions-column">操作</th></tr></thead>
+        <tbody>{nodes.map((node) => (
+          <tr key={node.name}>
+            <td className="mono"><strong>{node.name}</strong></td>
+            <td className="mono">{node.driver_count}</td>
+            <td>{formatDateTime(node.created_at)}</td>
+            <td className="actions-column">
+              <button
+                type="button"
+                className="icon-button"
+                aria-label={`查看 ${node.name}`}
+                title="查看 CSINode 详情"
+                onClick={() => onSelect(node)}
+              ><Eye size={16} /></button>
+            </td>
           </tr>
         ))}</tbody>
       </table>

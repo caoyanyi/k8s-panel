@@ -250,6 +250,8 @@ td strong { color: var(--text); font-size: 12px; }
 .storage-table { min-width: 1180px; }
 .storage-class-table { min-width: 900px; }
 .csi-driver-table { min-width: 720px; }
+.csi-node-table { min-width: 720px; }
+.csi-node-driver-table { min-width: 620px; }
 .volume-attachment-table { min-width: 1000px; }
 .helm-history-table table { min-width: 560px; }
 .helm-history-table .operation-action-column { width: 78px; }

@@ -85,6 +85,8 @@ type KubeGateway interface {
 	VolumeAttachments(context.Context) ([]domain.KubernetesVolumeAttachment, error)
 	CSIDrivers(context.Context) ([]domain.KubernetesCSIDriver, error)
 	CSIDriver(context.Context, string) (domain.KubernetesCSIDriverDetail, error)
+	CSINodes(context.Context) ([]domain.KubernetesCSINode, error)
+	CSINode(context.Context, string) (domain.KubernetesCSINodeDetail, error)
 	HelmReleaseHistory(context.Context, string, string) (domain.HelmReleaseHistory, error)
 	ResourceQuotas(context.Context, string) ([]domain.KubernetesResourceQuota, error)
 	LimitRanges(context.Context, string) ([]domain.KubernetesLimitRange, error)

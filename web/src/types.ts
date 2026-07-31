@@ -572,6 +572,22 @@ export interface KubernetesCSIDriverDetail extends KubernetesCSIDriver {
   token_request_count: number
 }
 
+export interface KubernetesCSINode {
+  name: string
+  driver_count: number
+  created_at: string
+}
+
+export interface KubernetesCSINodeDriver {
+  name: string
+  allocatable_count?: number
+  topology_key_count: number
+}
+
+export interface KubernetesCSINodeDetail extends KubernetesCSINode {
+  drivers: KubernetesCSINodeDriver[]
+}
+
 export interface KubernetesQuotaResource {
   name: string
   hard?: string

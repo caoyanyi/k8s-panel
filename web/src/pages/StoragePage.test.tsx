@@ -61,6 +61,24 @@ describe('StoragePage', () => {
         requested.push(path)
         return Promise.resolve(dataResponse(volumeAttachments))
       }
+      if (path.endsWith('/csi-nodes/worker-01')) {
+        requested.push(path)
+        return Promise.resolve(dataResponse({
+          ...csiNodes[0],
+          drivers: [
+            {
+              name: 'ebs.csi.example.com', allocatable_count: 12, topology_key_count: 2,
+              node_id: 'private-storage-node-01', topology_keys: ['topology.example.com/zone'],
+            },
+            { name: 'local.csi.example.com', topology_key_count: 0 },
+          ],
+          annotations: { private: 'private-value' },
+        }))
+      }
+      if (path.endsWith('/csi-nodes')) {
+        requested.push(path)
+        return Promise.resolve(dataResponse(csiNodes))
+      }
       return Promise.resolve(errorResponse(404, 'not_found'))
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -106,6 +124,25 @@ describe('StoragePage', () => {
     expect(screen.getByLabelText('命名空间')).toBeDisabled()
     expect(namespaceRequests).toBe(1)
     expect(requested.filter((path) => path.endsWith('/volume-attachments'))).toHaveLength(1)
+
+    expect(requested.some((path) => path.includes('/csi-nodes'))).toBe(false)
+    await user.click(screen.getByRole('button', { name: 'CSI节点' }))
+    const nodeTable = await screen.findByRole('region', { name: 'CSINode 清单' })
+    const nodeRow = within(nodeTable).getByText('worker-01').closest('tr')
+    expect(nodeRow).not.toBeNull()
+    expect(within(nodeRow as HTMLElement).getByText('2')).toBeInTheDocument()
+    expect(screen.getByLabelText('命名空间')).toBeDisabled()
+    expect(namespaceRequests).toBe(1)
+    expect(requested.filter((path) => path.endsWith('/csi-nodes'))).toHaveLength(1)
+
+    await user.click(within(nodeRow as HTMLElement).getByRole('button', { name: '查看 worker-01' }))
+    const nodeDialog = await screen.findByRole('dialog', { name: 'CSINode · worker-01' })
+    expect(within(nodeDialog).getByText('ebs.csi.example.com')).toBeInTheDocument()
+    expect(within(nodeDialog).getByText('未声明上限')).toBeInTheDocument()
+    expect(within(nodeDialog).queryByText('private-storage-node-01')).not.toBeInTheDocument()
+    expect(within(nodeDialog).queryByText('topology.example.com/zone')).not.toBeInTheDocument()
+    expect(within(nodeDialog).queryByText('private-value')).not.toBeInTheDocument()
+    expect(requested.filter((path) => path.endsWith('/csi-nodes/worker-01'))).toHaveLength(1)
   })
 
   it('aborts an active claim refresh when the storage kind changes', async () => {
@@ -219,6 +256,11 @@ const volumeAttachments = [
     name: 'attach-inline', attacher: 'kubernetes.io/csi-migrated', node: 'worker-02', status: 'detaching',
     created_at: '2026-07-31T08:02:00Z', attach_error: 'private-attach-error',
   },
+]
+
+const csiNodes = [
+  { name: 'worker-01', driver_count: 2, created_at: '2026-07-31T08:00:00Z' },
+  { name: 'worker-02', driver_count: 0, created_at: '2026-07-31T08:02:00Z' },
 ]
 
 function renderPage(overrides: Partial<PanelContextValue> = {}) {

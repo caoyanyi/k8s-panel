@@ -977,6 +977,38 @@ func (s *Service) CSIDriver(
 	return gateway.CSIDriver(ctx, name)
 }
 
+func (s *Service) CSINodes(ctx context.Context, clusterID string) ([]domain.KubernetesCSINode, error) {
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	gateway, err := s.kubeGateway(ctx, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	return gateway.CSINodes(ctx)
+}
+
+func (s *Service) CSINode(
+	ctx context.Context,
+	clusterID, name string,
+) (domain.KubernetesCSINodeDetail, error) {
+	if err := domain.ValidateNodeName(name); err != nil {
+		return domain.KubernetesCSINodeDetail{}, err
+	}
+	release, err := s.acquireKubernetesRead(ctx)
+	if err != nil {
+		return domain.KubernetesCSINodeDetail{}, err
+	}
+	defer release()
+	gateway, err := s.kubeGateway(ctx, clusterID)
+	if err != nil {
+		return domain.KubernetesCSINodeDetail{}, err
+	}
+	return gateway.CSINode(ctx, name)
+}
+
 func (s *Service) ResourceQuotas(
 	ctx context.Context,
 	clusterID, namespace string,

@@ -855,6 +855,14 @@ func TestServiceRejectsKubernetesReadsDuringCriticalResourcePressure(t *testing.
 			_, err := service.CSIDriver(context.Background(), cluster.ID, "csi.example.com")
 			return err
 		}},
+		{name: "CSI nodes", call: func() error {
+			_, err := service.CSINodes(context.Background(), cluster.ID)
+			return err
+		}},
+		{name: "CSI node detail", call: func() error {
+			_, err := service.CSINode(context.Background(), cluster.ID, "worker-01")
+			return err
+		}},
 		{name: "access resources", call: func() error {
 			_, err := service.AccessResources(context.Background(), cluster.ID, domain.AccessResourceRoles, "payments")
 			return err
@@ -944,6 +952,10 @@ func TestServiceRejectsKubernetesReadsDuringCriticalResourcePressure(t *testing.
 	}
 	if calls := gateway.volumeAttachmentCalls.Load(); calls != 0 {
 		t.Fatalf("VolumeAttachments() reached Kubernetes %d times under critical pressure", calls)
+	}
+	if driverLists, driverDetails, nodeLists, nodeDetails := gateway.csiDriverListCalls.Load(), gateway.csiDriverDetailCalls.Load(), gateway.csiNodeListCalls.Load(), gateway.csiNodeDetailCalls.Load(); driverLists != 0 || driverDetails != 0 || nodeLists != 0 || nodeDetails != 0 {
+		t.Fatalf("CSI reads reached Kubernetes under critical pressure: driver lists=%d driver details=%d node lists=%d node details=%d",
+			driverLists, driverDetails, nodeLists, nodeDetails)
 	}
 	if calls := gateway.clusterEventCalls.Load(); calls != 0 {
 		t.Fatalf("event reads reached Kubernetes %d times under critical pressure", calls)
@@ -1233,6 +1245,50 @@ func TestServiceListsCSIDriversAndValidatesDetailNameBeforeGateway(t *testing.T)
 	}
 	if gateway.csiDriverDetailCalls.Load() != 1 {
 		t.Fatal("invalid CSIDriver name reached Kubernetes gateway")
+	}
+}
+
+func TestServiceListsCSINodesAndValidatesDetailNameBeforeGateway(t *testing.T) {
+	t.Parallel()
+
+	const name = "worker-01"
+	allocatable := int32(12)
+	gateway := &fakeKubeGateway{
+		probe:    domain.ClusterProbe{Version: "v1.36.2"},
+		csiNodes: []domain.KubernetesCSINode{{Name: name, DriverCount: 1}},
+		csiNodeDetail: domain.KubernetesCSINodeDetail{
+			KubernetesCSINode: domain.KubernetesCSINode{Name: name, DriverCount: 1},
+			Drivers: []domain.KubernetesCSINodeDriver{{
+				Name: "ebs.csi.example.com", AllocatableCount: &allocatable, TopologyKeyCount: 2,
+			}},
+		},
+	}
+	service, _, _ := newTestService(t, serviceFakes{kube: gateway})
+	cluster, err := service.CreateCluster(context.Background(), "admin", "req_cluster", domain.ClusterInput{
+		Name: "cluster", Environment: domain.EnvironmentDevelopment, Server: "https://api.example.com", BearerToken: "token",
+	})
+	if err != nil {
+		t.Fatalf("CreateCluster() error = %v", err)
+	}
+
+	items, err := service.CSINodes(context.Background(), cluster.ID)
+	if err != nil || len(items) != 1 || items[0].Name != name || items[0].DriverCount != 1 {
+		t.Fatalf("CSINodes() = %#v, %v", items, err)
+	}
+	detail, err := service.CSINode(context.Background(), cluster.ID, name)
+	if err != nil || detail.Name != name || len(detail.Drivers) != 1 || detail.Drivers[0].TopologyKeyCount != 2 {
+		t.Fatalf("CSINode() = %#v, %v", detail, err)
+	}
+	if gateway.csiNodeName != name || gateway.csiNodeListCalls.Load() != 1 || gateway.csiNodeDetailCalls.Load() != 1 {
+		t.Fatalf("CSINode gateway inputs = name %q, list calls %d, detail calls %d",
+			gateway.csiNodeName, gateway.csiNodeListCalls.Load(), gateway.csiNodeDetailCalls.Load())
+	}
+
+	if _, err := service.CSINode(context.Background(), cluster.ID, "../nodes"); err == nil {
+		t.Fatal("CSINode() accepted an invalid name")
+	}
+	if gateway.csiNodeDetailCalls.Load() != 1 {
+		t.Fatal("invalid CSINode name reached Kubernetes gateway")
 	}
 }
 
@@ -2858,6 +2914,11 @@ type fakeKubeGateway struct {
 	csiDriverName                    string
 	csiDriverListCalls               atomic.Int64
 	csiDriverDetailCalls             atomic.Int64
+	csiNodes                         []domain.KubernetesCSINode
+	csiNodeDetail                    domain.KubernetesCSINodeDetail
+	csiNodeName                      string
+	csiNodeListCalls                 atomic.Int64
+	csiNodeDetailCalls               atomic.Int64
 	helmHistory                      domain.HelmReleaseHistory
 	helmHistoryNamespace             string
 	helmHistoryName                  string
@@ -3196,6 +3257,19 @@ func (g *fakeKubeGateway) CSIDriver(_ context.Context, name string) (domain.Kube
 	g.csiDriverName = name
 	g.mutationMu.Unlock()
 	return g.csiDriverDetail, nil
+}
+func (g *fakeKubeGateway) CSINodes(context.Context) ([]domain.KubernetesCSINode, error) {
+	g.csiNodeListCalls.Add(1)
+	return append([]domain.KubernetesCSINode(nil), g.csiNodes...), nil
+}
+func (g *fakeKubeGateway) CSINode(_ context.Context, name string) (domain.KubernetesCSINodeDetail, error) {
+	g.csiNodeDetailCalls.Add(1)
+	g.mutationMu.Lock()
+	g.csiNodeName = name
+	g.mutationMu.Unlock()
+	detail := g.csiNodeDetail
+	detail.Drivers = append([]domain.KubernetesCSINodeDriver(nil), detail.Drivers...)
+	return detail, nil
 }
 func (g *fakeKubeGateway) HelmReleaseHistory(_ context.Context, namespace, name string) (domain.HelmReleaseHistory, error) {
 	g.helmHistoryCalls.Add(1)

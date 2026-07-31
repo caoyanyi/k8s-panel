@@ -161,6 +161,11 @@ func TestServerAuthenticationAndClusterLifecycle(t *testing.T) {
 	if unauthorizedCSIDrivers.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthorized CSIDriver status = %d, want 401", unauthorizedCSIDrivers.Code)
 	}
+	unauthorizedCSINodes := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorizedCSINodes, httptest.NewRequest(http.MethodGet, "/api/v1/clusters/clu_1/csi-nodes", nil))
+	if unauthorizedCSINodes.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized CSINode status = %d, want 401", unauthorizedCSINodes.Code)
+	}
 	unauthorizedEvents := httptest.NewRecorder()
 	handler.ServeHTTP(unauthorizedEvents, httptest.NewRequest(http.MethodGet, "/api/v1/clusters/clu_1/events", nil))
 	if unauthorizedEvents.Code != http.StatusUnauthorized {
@@ -537,6 +542,30 @@ func TestServerAuthenticationAndClusterLifecycle(t *testing.T) {
 		t.Fatalf("invalid CSI driver name status = %d, body = %s", invalidCSIDriverName.Code, invalidCSIDriverName.Body.String())
 	}
 	assertErrorField(t, invalidCSIDriverName.Body.Bytes(), "name")
+	csiNodePath := "/api/v1/clusters/" + created.Data.ID + "/csi-nodes"
+	csiNodes := authenticatedRequest(t, handler, cookie, http.MethodGet, csiNodePath, "")
+	if csiNodes.Code != http.StatusOK || !strings.Contains(csiNodes.Body.String(), `"name":"worker-01"`) ||
+		!strings.Contains(csiNodes.Body.String(), `"driver_count":2`) || strings.Contains(csiNodes.Body.String(), "private-node-id") {
+		t.Fatalf("CSI nodes status = %d, body = %s", csiNodes.Code, csiNodes.Body.String())
+	}
+	missingCSINodes := authenticatedRequest(t, handler, cookie, http.MethodGet, "/api/v1/clusters/clu_missing/csi-nodes", "")
+	if missingCSINodes.Code != http.StatusNotFound {
+		t.Fatalf("missing cluster CSI nodes status = %d, body = %s", missingCSINodes.Code, missingCSINodes.Body.String())
+	}
+	csiNodeDetail := authenticatedRequest(t, handler, cookie, http.MethodGet, csiNodePath+"/worker-01", "")
+	if csiNodeDetail.Code != http.StatusOK ||
+		!strings.Contains(csiNodeDetail.Body.String(), `"name":"ebs.csi.example.com"`) ||
+		!strings.Contains(csiNodeDetail.Body.String(), `"allocatable_count":12`) ||
+		!strings.Contains(csiNodeDetail.Body.String(), `"topology_key_count":2`) ||
+		strings.Contains(csiNodeDetail.Body.String(), "node_id") ||
+		strings.Contains(csiNodeDetail.Body.String(), "topology_keys") {
+		t.Fatalf("CSI node detail status = %d, body = %s", csiNodeDetail.Code, csiNodeDetail.Body.String())
+	}
+	invalidCSINodeName := authenticatedRequest(t, handler, cookie, http.MethodGet, csiNodePath+"/..%2Fnodes", "")
+	if invalidCSINodeName.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid CSI node name status = %d, body = %s", invalidCSINodeName.Code, invalidCSINodeName.Body.String())
+	}
+	assertErrorField(t, invalidCSINodeName.Body.Bytes(), "name")
 	accessPath := "/api/v1/clusters/" + created.Data.ID + "/access-resources"
 	clusterRoles := authenticatedRequest(t, handler, cookie, http.MethodGet, accessPath+"?kind=clusterroles", "")
 	if clusterRoles.Code != http.StatusOK || !strings.Contains(clusterRoles.Body.String(), `"kind":"ClusterRole"`) ||
@@ -1646,6 +1675,23 @@ func (testKube) CSIDriver(_ context.Context, name string) (domain.KubernetesCSID
 			domain.CSIVolumeLifecyclePersistent, domain.CSIVolumeLifecycleEphemeral,
 		},
 		TokenRequestCount: 2,
+	}, nil
+}
+func (testKube) CSINodes(context.Context) ([]domain.KubernetesCSINode, error) {
+	return []domain.KubernetesCSINode{{
+		Name: "worker-01", DriverCount: 2, CreatedAt: time.Date(2026, 7, 31, 8, 0, 0, 0, time.UTC),
+	}}, nil
+}
+func (testKube) CSINode(_ context.Context, name string) (domain.KubernetesCSINodeDetail, error) {
+	count := int32(12)
+	return domain.KubernetesCSINodeDetail{
+		KubernetesCSINode: domain.KubernetesCSINode{
+			Name: name, DriverCount: 2, CreatedAt: time.Date(2026, 7, 31, 8, 0, 0, 0, time.UTC),
+		},
+		Drivers: []domain.KubernetesCSINodeDriver{
+			{Name: "ebs.csi.example.com", AllocatableCount: &count, TopologyKeyCount: 2},
+			{Name: "local.csi.example.com", TopologyKeyCount: 0},
+		},
 	}, nil
 }
 func (testKube) HelmReleaseHistory(_ context.Context, namespace, name string) (domain.HelmReleaseHistory, error) {

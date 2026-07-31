@@ -550,6 +550,23 @@ type KubernetesCSIDriverDetail struct {
 	TokenRequestCount    int                                `json:"token_request_count"`
 }
 
+type KubernetesCSINode struct {
+	Name        string    `json:"name"`
+	DriverCount int       `json:"driver_count"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+type KubernetesCSINodeDriver struct {
+	Name             string `json:"name"`
+	AllocatableCount *int32 `json:"allocatable_count,omitempty"`
+	TopologyKeyCount int    `json:"topology_key_count"`
+}
+
+type KubernetesCSINodeDetail struct {
+	KubernetesCSINode
+	Drivers []KubernetesCSINodeDriver `json:"drivers"`
+}
+
 type KubernetesQuotaResource struct {
 	Name     string `json:"name"`
 	Hard     string `json:"hard,omitempty"`

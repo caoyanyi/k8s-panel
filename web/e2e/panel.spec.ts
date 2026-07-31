@@ -599,6 +599,7 @@ test('storage inventory keeps cluster resources namespace independent', async ({
   expect(requestedKinds.some((request) => request.startsWith('classes:'))).toBe(false)
   expect(requestedKinds.some((request) => request.startsWith('csidrivers:'))).toBe(false)
   expect(requestedKinds.some((request) => request.startsWith('attachments:'))).toBe(false)
+  expect(requestedKinds.some((request) => request.startsWith('csinodes:'))).toBe(false)
 
   await page.getByLabel('命名空间').selectOption('payments')
   await expect.poll(() => requestedKinds).toContain('claims:payments')
@@ -636,6 +637,20 @@ test('storage inventory keeps cluster resources namespace independent', async ({
   expect(requestedKinds).toContain('attachments:cluster')
   expect(requestedKinds.filter((request) => request === 'namespaces')).toHaveLength(1)
 
+  await page.getByRole('button', { name: 'CSI节点' }).click()
+  await expect(page.getByText('worker-01', { exact: true })).toBeVisible()
+  await expect(page.getByRole('region', { name: 'CSINode 清单' }).getByText('2', { exact: true })).toBeVisible()
+  expect(requestedKinds).toContain('csinodes:cluster')
+  expect(requestedKinds.filter((request) => request === 'namespaces')).toHaveLength(1)
+  await page.getByRole('button', { name: '查看 worker-01' }).click()
+  const nodeDialog = page.getByRole('dialog', { name: 'CSINode · worker-01' })
+  await expect(nodeDialog.getByText('ebs.csi.example.com', { exact: true })).toBeVisible()
+  await expect(nodeDialog.getByText('local.csi.example.com', { exact: true })).toBeVisible()
+  await expect(nodeDialog.getByText('未声明上限')).toBeVisible()
+  await expect(nodeDialog.getByText('private-storage-node-01')).toHaveCount(0)
+  await expect(nodeDialog.getByText('topology.example.com/zone')).toHaveCount(0)
+  expect(requestedKinds.at(-1)).toBe('csinode-detail:worker-01')
+
   const storageKindLabelOverflow = await page.getByRole('group', { name: '存储资源类型' })
     .getByRole('button')
     .evaluateAll((buttons) => Math.max(...buttons.map((button) => button.scrollWidth - button.clientWidth)))
@@ -645,7 +660,7 @@ test('storage inventory keeps cluster resources namespace independent', async ({
   expect(overflow).toBeLessThanOrEqual(1)
   const result = await new AxeBuilder({ page }).analyze()
   expect(result.violations.filter((violation) => ['serious', 'critical'].includes(violation.impact ?? ''))).toEqual([])
-  await page.screenshot({ path: `test-results/${testInfo.project.name}-volume-attachment-storage.png`, fullPage: true })
+  await page.screenshot({ path: `test-results/${testInfo.project.name}-csi-node-storage.png`, fullPage: true })
   expect(consoleErrors).toEqual([])
 })
 
@@ -1188,6 +1203,24 @@ async function mockStorageResources(page: Page, requestedKinds: string[]) {
           name: 'attach-inline', attacher: 'kubernetes.io/csi-migrated', node: 'worker-02', status: 'detaching',
           created_at: '2026-07-31T08:02:00Z', attach_error: 'private-attach-error',
         },
+      ]
+    } else if (path === '/api/v1/clusters/clu_1/csi-nodes/worker-01') {
+      requestedKinds.push('csinode-detail:worker-01')
+      data = {
+        name: 'worker-01', driver_count: 2, created_at: '2026-07-31T08:00:00Z',
+        drivers: [
+          {
+            name: 'ebs.csi.example.com', allocatable_count: 12, topology_key_count: 2,
+            node_id: 'private-storage-node-01', topology_keys: ['topology.example.com/zone'],
+          },
+          { name: 'local.csi.example.com', topology_key_count: 0 },
+        ],
+      }
+    } else if (path === '/api/v1/clusters/clu_1/csi-nodes') {
+      requestedKinds.push('csinodes:cluster')
+      data = [
+        { name: 'worker-01', driver_count: 2, created_at: '2026-07-31T08:00:00Z' },
+        { name: 'worker-02', driver_count: 0, created_at: '2026-07-31T08:02:00Z' },
       ]
     } else {
       data = []
