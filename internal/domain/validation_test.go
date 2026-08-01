@@ -811,10 +811,11 @@ func TestValidateStorageResourceNames(t *testing.T) {
 	t.Parallel()
 
 	validators := map[string]func(string) error{
-		"volume attachment":    ValidateVolumeAttachmentName,
-		"persistent volume":    ValidatePersistentVolumeName,
-		"storage class":        ValidateStorageClassName,
-		"CSI storage capacity": ValidateCSIStorageCapacityName,
+		"volume attachment":       ValidateVolumeAttachmentName,
+		"persistent volume":       ValidatePersistentVolumeName,
+		"storage class":           ValidateStorageClassName,
+		"CSI storage capacity":    ValidateCSIStorageCapacityName,
+		"volume attributes class": ValidateVolumeAttributesClassName,
 	}
 	tests := []struct {
 		name      string

@@ -561,6 +561,12 @@ export interface KubernetesCSIStorageCapacity {
   created_at: string
 }
 
+export interface KubernetesVolumeAttributesClass {
+  name: string
+  driver_name: string
+  created_at: string
+}
+
 export interface KubernetesCSIDriver {
   name: string
   created_at: string

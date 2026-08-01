@@ -253,6 +253,7 @@ td strong { color: var(--text); font-size: 12px; }
 .csi-node-table { min-width: 720px; }
 .csi-node-driver-table { min-width: 620px; }
 .csi-storage-capacity-table { min-width: 820px; }
+.volume-attributes-class-table { min-width: 720px; }
 .volume-attachment-table { min-width: 1000px; }
 .helm-history-table table { min-width: 560px; }
 .helm-history-table .operation-action-column { width: 78px; }

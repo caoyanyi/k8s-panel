@@ -84,6 +84,7 @@ type KubeGateway interface {
 	StorageClasses(context.Context) ([]domain.KubernetesStorageClass, error)
 	VolumeAttachments(context.Context) ([]domain.KubernetesVolumeAttachment, error)
 	CSIStorageCapacities(context.Context, string) ([]domain.KubernetesCSIStorageCapacity, error)
+	VolumeAttributesClasses(context.Context) ([]domain.KubernetesVolumeAttributesClass, error)
 	CSIDrivers(context.Context) ([]domain.KubernetesCSIDriver, error)
 	CSIDriver(context.Context, string) (domain.KubernetesCSIDriverDetail, error)
 	CSINodes(context.Context) ([]domain.KubernetesCSINode, error)

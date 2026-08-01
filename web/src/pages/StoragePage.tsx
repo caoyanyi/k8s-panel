@@ -17,11 +17,12 @@ import type {
   KubernetesPersistentVolumeClaim,
   KubernetesStorageClass,
   KubernetesVolumeAttachment,
+  KubernetesVolumeAttributesClass,
   Namespace,
 } from '../types'
 import { formatDateTime } from '../utils'
 
-type StorageView = 'claims' | 'volumes' | 'classes' | 'drivers' | 'csiNodes' | 'attachments' | 'capacities'
+type StorageView = 'claims' | 'volumes' | 'classes' | 'attributes' | 'drivers' | 'csiNodes' | 'attachments' | 'capacities'
 type StorageInventory =
   | { kind: 'claims'; items: KubernetesPersistentVolumeClaim[] }
   | { kind: 'volumes'; items: KubernetesPersistentVolume[] }
@@ -30,8 +31,10 @@ type StorageInventory =
   | { kind: 'csiNodes'; items: KubernetesCSINode[] }
   | { kind: 'attachments'; items: KubernetesVolumeAttachment[] }
   | { kind: 'capacities'; items: KubernetesCSIStorageCapacity[] }
+  | { kind: 'attributes'; items: KubernetesVolumeAttributesClass[] }
 type StorageItem = KubernetesPersistentVolumeClaim | KubernetesPersistentVolume | KubernetesStorageClass |
-  KubernetesCSIDriver | KubernetesCSINode | KubernetesVolumeAttachment | KubernetesCSIStorageCapacity
+  KubernetesCSIDriver | KubernetesCSINode | KubernetesVolumeAttachment | KubernetesCSIStorageCapacity |
+  KubernetesVolumeAttributesClass
 
 const emptyStorageItems: StorageItem[] = []
 
@@ -43,6 +46,7 @@ const storageLabels: Record<StorageView, string> = {
   csiNodes: 'CSINode',
   attachments: 'VolumeAttachment',
   capacities: 'CSIStorageCapacity',
+  attributes: 'VolumeAttributesClass',
 }
 
 export function StoragePage() {
@@ -107,6 +111,13 @@ export function StoragePage() {
       )
       return { kind: 'capacities', items }
     }
+    if (view === 'attributes') {
+      const items = await api.get<KubernetesVolumeAttributesClass[]>(
+        `/api/v1/clusters/${selectedClusterId}/volume-attributes-classes`,
+        signal,
+      )
+      return { kind: 'attributes', items }
+    }
     const items = await api.get<KubernetesVolumeAttachment[]>(
       `/api/v1/clusters/${selectedClusterId}/volume-attachments`,
       signal,
@@ -161,6 +172,7 @@ export function StoragePage() {
             <button type="button" className={view === 'claims' ? 'active' : ''} aria-pressed={view === 'claims'} onClick={() => setView('claims')}>PVC</button>
             <button type="button" className={view === 'volumes' ? 'active' : ''} aria-pressed={view === 'volumes'} onClick={() => setView('volumes')}>PV</button>
             <button type="button" className={view === 'classes' ? 'active' : ''} aria-pressed={view === 'classes'} onClick={() => setView('classes')}>StorageClass</button>
+            <button type="button" className={view === 'attributes' ? 'active' : ''} aria-pressed={view === 'attributes'} onClick={() => setView('attributes')}>卷属性类</button>
             <button type="button" className={view === 'drivers' ? 'active' : ''} aria-pressed={view === 'drivers'} onClick={() => setView('drivers')}>CSIDriver</button>
             <button type="button" className={view === 'csiNodes' ? 'active' : ''} aria-pressed={view === 'csiNodes'} onClick={() => setView('csiNodes')}>CSI节点</button>
             <button type="button" className={view === 'attachments' ? 'active' : ''} aria-pressed={view === 'attachments'} onClick={() => setView('attachments')}>卷挂接</button>
@@ -235,6 +247,7 @@ function emptyInventory(view: StorageView): StorageInventory {
   if (view === 'drivers') return { kind: 'drivers', items: [] }
   if (view === 'csiNodes') return { kind: 'csiNodes', items: [] }
   if (view === 'capacities') return { kind: 'capacities', items: [] }
+  if (view === 'attributes') return { kind: 'attributes', items: [] }
   return { kind: 'attachments', items: [] }
 }
 
@@ -255,6 +268,10 @@ function storageSearchText(
   if (view === 'capacities') {
     const capacity = item as KubernetesCSIStorageCapacity
     return `${capacity.namespace} ${capacity.name} ${capacity.storage_class} ${capacity.capacity ?? ''}`
+  }
+  if (view === 'attributes') {
+    const attributesClass = item as KubernetesVolumeAttributesClass
+    return `${attributesClass.name} ${attributesClass.driver_name}`
   }
   if (view === 'attachments') {
     const attachment = item as KubernetesVolumeAttachment
@@ -282,7 +299,26 @@ function StorageTable({
   if (view === 'drivers') return <CSIDriverTable drivers={items as KubernetesCSIDriver[]} onSelect={onSelectCSIDriver} />
   if (view === 'csiNodes') return <CSINodeTable nodes={items as KubernetesCSINode[]} onSelect={onSelectCSINode} />
   if (view === 'capacities') return <CSIStorageCapacityTable capacities={items as KubernetesCSIStorageCapacity[]} />
+  if (view === 'attributes') return <VolumeAttributesClassTable classes={items as KubernetesVolumeAttributesClass[]} />
   return <VolumeAttachmentTable attachments={items as KubernetesVolumeAttachment[]} />
+}
+
+function VolumeAttributesClassTable({ classes }: { classes: KubernetesVolumeAttributesClass[] }) {
+  return (
+    <div className="table-wrap" role="region" aria-label="VolumeAttributesClass 清单" tabIndex={0}>
+      <table className="volume-attributes-class-table">
+        <thead><tr><th>名称</th><th>CSI 驱动</th><th>作用域</th><th>创建时间</th></tr></thead>
+        <tbody>{classes.map((attributesClass) => (
+          <tr key={attributesClass.name}>
+            <td className="mono"><strong>{attributesClass.name}</strong></td>
+            <td className="mono clipped-cell" title={attributesClass.driver_name}>{attributesClass.driver_name}</td>
+            <td><span className="kind-label">集群级</span></td>
+            <td>{formatDateTime(attributesClass.created_at)}</td>
+          </tr>
+        ))}</tbody>
+      </table>
+    </div>
+  )
 }
 
 function CSIStorageCapacityTable({ capacities }: { capacities: KubernetesCSIStorageCapacity[] }) {

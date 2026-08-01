@@ -560,6 +560,15 @@ func (s *Server) listCSIStorageCapacities(w http.ResponseWriter, r *http.Request
 	writeData(w, http.StatusOK, items)
 }
 
+func (s *Server) listVolumeAttributesClasses(w http.ResponseWriter, r *http.Request) {
+	items, err := s.service.VolumeAttributesClasses(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeData(w, http.StatusOK, items)
+}
+
 func (s *Server) listCSIDrivers(w http.ResponseWriter, r *http.Request) {
 	items, err := s.service.CSIDrivers(r.Context(), r.PathValue("id"))
 	if err != nil {

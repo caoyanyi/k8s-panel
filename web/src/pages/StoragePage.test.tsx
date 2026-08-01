@@ -65,6 +65,10 @@ describe('StoragePage', () => {
         requested.push(path)
         return Promise.resolve(dataResponse(csiStorageCapacities))
       }
+      if (path.endsWith('/volume-attributes-classes')) {
+        requested.push(path)
+        return Promise.resolve(dataResponse(volumeAttributesClasses))
+      }
       if (path.endsWith('/csi-nodes/worker-01')) {
         requested.push(path)
         return Promise.resolve(dataResponse({
@@ -164,6 +168,21 @@ describe('StoragePage', () => {
     await user.type(screen.getByLabelText('搜索存储资源'), 'archive')
     expect(within(capacityTable).getByText('capacity-unset')).toBeInTheDocument()
     expect(within(capacityTable).queryByText('capacity-payments')).not.toBeInTheDocument()
+
+    await user.clear(screen.getByLabelText('搜索存储资源'))
+    expect(requested.some((path) => path.endsWith('/volume-attributes-classes'))).toBe(false)
+    await user.click(screen.getByRole('button', { name: '卷属性类' }))
+    const attributesTable = await screen.findByRole('region', { name: 'VolumeAttributesClass 清单' })
+    expect(within(attributesTable).getByText('gold')).toBeInTheDocument()
+    expect(within(attributesTable).getByText('ebs.csi.example.com')).toBeInTheDocument()
+    expect(within(attributesTable).queryByText('private-iops')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('命名空间')).toBeDisabled()
+    expect(requested.filter((path) => path.endsWith('/volume-attributes-classes'))).toHaveLength(1)
+    expect(namespaceRequests).toBe(2)
+
+    await user.type(screen.getByLabelText('搜索存储资源'), 'archive.csi')
+    expect(within(attributesTable).getByText('archive')).toBeInTheDocument()
+    expect(within(attributesTable).queryByText('gold')).not.toBeInTheDocument()
   })
 
   it('aborts an active claim refresh when the storage kind changes', async () => {
@@ -292,6 +311,16 @@ const csiStorageCapacities = [
   {
     namespace: 'payments', name: 'capacity-unset', storage_class: 'archive',
     created_at: '2026-07-31T08:04:00Z',
+  },
+]
+
+const volumeAttributesClasses = [
+  {
+    name: 'gold', driver_name: 'ebs.csi.example.com', created_at: '2026-07-31T08:05:00Z',
+    parameters: { iops: 'private-iops' }, annotations: { private: 'private-value' },
+  },
+  {
+    name: 'archive', driver_name: 'archive.csi.example.com', created_at: '2026-07-31T08:06:00Z',
   },
 ]
 

@@ -526,6 +526,12 @@ type KubernetesCSIStorageCapacity struct {
 	CreatedAt    time.Time `json:"created_at"`
 }
 
+type KubernetesVolumeAttributesClass struct {
+	Name       string    `json:"name"`
+	DriverName string    `json:"driver_name"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
 type KubernetesCSIDriver struct {
 	Name      string    `json:"name"`
 	CreatedAt time.Time `json:"created_at"`

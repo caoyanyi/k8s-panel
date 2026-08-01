@@ -163,6 +163,13 @@ func TestServerAuthenticationAndClusterLifecycle(t *testing.T) {
 	if unauthorizedCSIStorageCapacities.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthorized CSI storage capacities status = %d, want 401", unauthorizedCSIStorageCapacities.Code)
 	}
+	unauthorizedVolumeAttributesClasses := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorizedVolumeAttributesClasses, httptest.NewRequest(
+		http.MethodGet, "/api/v1/clusters/clu_1/volume-attributes-classes", nil,
+	))
+	if unauthorizedVolumeAttributesClasses.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized volume attributes classes status = %d, want 401", unauthorizedVolumeAttributesClasses.Code)
+	}
 	unauthorizedCSIDrivers := httptest.NewRecorder()
 	handler.ServeHTTP(unauthorizedCSIDrivers, httptest.NewRequest(http.MethodGet, "/api/v1/clusters/clu_1/csi-drivers", nil))
 	if unauthorizedCSIDrivers.Code != http.StatusUnauthorized {
@@ -553,6 +560,23 @@ func TestServerAuthenticationAndClusterLifecycle(t *testing.T) {
 	if missingCSIStorageCapacityCluster.Code != http.StatusNotFound {
 		t.Fatalf("missing cluster CSI storage capacities status = %d, body = %s",
 			missingCSIStorageCapacityCluster.Code, missingCSIStorageCapacityCluster.Body.String())
+	}
+	volumeAttributesClassPath := "/api/v1/clusters/" + created.Data.ID + "/volume-attributes-classes"
+	volumeAttributesClasses := authenticatedRequest(t, handler, cookie, http.MethodGet, volumeAttributesClassPath, "")
+	if volumeAttributesClasses.Code != http.StatusOK ||
+		!strings.Contains(volumeAttributesClasses.Body.String(), `"name":"gold"`) ||
+		!strings.Contains(volumeAttributesClasses.Body.String(), `"driver_name":"ebs.csi.example.com"`) ||
+		strings.Contains(volumeAttributesClasses.Body.String(), "parameters") ||
+		strings.Contains(volumeAttributesClasses.Body.String(), "private-iops") {
+		t.Fatalf("volume attributes classes status = %d, body = %s",
+			volumeAttributesClasses.Code, volumeAttributesClasses.Body.String())
+	}
+	missingVolumeAttributesClassCluster := authenticatedRequest(
+		t, handler, cookie, http.MethodGet, "/api/v1/clusters/clu_missing/volume-attributes-classes", "",
+	)
+	if missingVolumeAttributesClassCluster.Code != http.StatusNotFound {
+		t.Fatalf("missing cluster volume attributes classes status = %d, body = %s",
+			missingVolumeAttributesClassCluster.Code, missingVolumeAttributesClassCluster.Body.String())
 	}
 	csiDriverPath := "/api/v1/clusters/" + created.Data.ID + "/csi-drivers"
 	csiDrivers := authenticatedRequest(t, handler, cookie, http.MethodGet, csiDriverPath, "")
@@ -1706,6 +1730,12 @@ func (testKube) CSIStorageCapacities(_ context.Context, namespace string) ([]dom
 	return []domain.KubernetesCSIStorageCapacity{{
 		Namespace: namespace, Name: "capacity-a", StorageClass: "standard", Capacity: "80Gi",
 		CreatedAt: time.Date(2026, 7, 31, 8, 0, 0, 0, time.UTC),
+	}}, nil
+}
+func (testKube) VolumeAttributesClasses(context.Context) ([]domain.KubernetesVolumeAttributesClass, error) {
+	return []domain.KubernetesVolumeAttributesClass{{
+		Name: "gold", DriverName: "ebs.csi.example.com",
+		CreatedAt: time.Date(2026, 7, 31, 8, 5, 0, 0, time.UTC),
 	}}, nil
 }
 func (testKube) CSIDrivers(context.Context) ([]domain.KubernetesCSIDriver, error) {

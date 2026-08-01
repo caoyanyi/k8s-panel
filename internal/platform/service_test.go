@@ -851,6 +851,10 @@ func TestServiceRejectsKubernetesReadsDuringCriticalResourcePressure(t *testing.
 			_, err := service.CSIStorageCapacities(context.Background(), cluster.ID, "storage-system")
 			return err
 		}},
+		{name: "volume attributes classes", call: func() error {
+			_, err := service.VolumeAttributesClasses(context.Background(), cluster.ID)
+			return err
+		}},
 		{name: "CSI drivers", call: func() error {
 			_, err := service.CSIDrivers(context.Background(), cluster.ID)
 			return err
@@ -959,6 +963,9 @@ func TestServiceRejectsKubernetesReadsDuringCriticalResourcePressure(t *testing.
 	}
 	if calls := gateway.csiStorageCapacityCalls.Load(); calls != 0 {
 		t.Fatalf("CSIStorageCapacities() reached Kubernetes %d times under critical pressure", calls)
+	}
+	if calls := gateway.volumeAttributesClassCalls.Load(); calls != 0 {
+		t.Fatalf("VolumeAttributesClasses() reached Kubernetes %d times under critical pressure", calls)
 	}
 	if driverLists, driverDetails, nodeLists, nodeDetails := gateway.csiDriverListCalls.Load(), gateway.csiDriverDetailCalls.Load(), gateway.csiNodeListCalls.Load(), gateway.csiNodeDetailCalls.Load(); driverLists != 0 || driverDetails != 0 || nodeLists != 0 || nodeDetails != 0 {
 		t.Fatalf("CSI reads reached Kubernetes under critical pressure: driver lists=%d driver details=%d node lists=%d node details=%d",
@@ -1286,6 +1293,32 @@ func TestServiceListsCSIStorageCapacitiesAndValidatesScopeBeforeGateway(t *testi
 	}
 	if gateway.csiStorageCapacityCalls.Load() != 1 {
 		t.Fatal("invalid CSIStorageCapacity namespace reached Kubernetes gateway")
+	}
+}
+
+func TestServiceListsVolumeAttributesClasses(t *testing.T) {
+	t.Parallel()
+
+	gateway := &fakeKubeGateway{
+		probe: domain.ClusterProbe{Version: "v1.36.2"},
+		volumeAttributesClasses: []domain.KubernetesVolumeAttributesClass{{
+			Name: "gold", DriverName: "ebs.csi.example.com",
+		}},
+	}
+	service, _, _ := newTestService(t, serviceFakes{kube: gateway})
+	cluster, err := service.CreateCluster(context.Background(), "admin", "req_cluster", domain.ClusterInput{
+		Name: "cluster", Environment: domain.EnvironmentDevelopment, Server: "https://api.example.com", BearerToken: "token",
+	})
+	if err != nil {
+		t.Fatalf("CreateCluster() error = %v", err)
+	}
+
+	items, err := service.VolumeAttributesClasses(context.Background(), cluster.ID)
+	if err != nil || len(items) != 1 || items[0].Name != "gold" || items[0].DriverName != "ebs.csi.example.com" {
+		t.Fatalf("VolumeAttributesClasses() = %#v, %v", items, err)
+	}
+	if gateway.volumeAttributesClassCalls.Load() != 1 {
+		t.Fatalf("VolumeAttributesClass gateway calls = %d, want 1", gateway.volumeAttributesClassCalls.Load())
 	}
 }
 
@@ -2951,6 +2984,7 @@ type fakeKubeGateway struct {
 	storageClasses                   []domain.KubernetesStorageClass
 	volumeAttachments                []domain.KubernetesVolumeAttachment
 	csiStorageCapacities             []domain.KubernetesCSIStorageCapacity
+	volumeAttributesClasses          []domain.KubernetesVolumeAttributesClass
 	csiDrivers                       []domain.KubernetesCSIDriver
 	csiDriverDetail                  domain.KubernetesCSIDriverDetail
 	csiDriverName                    string
@@ -2985,6 +3019,7 @@ type fakeKubeGateway struct {
 	storageClassCalls                atomic.Int64
 	volumeAttachmentCalls            atomic.Int64
 	csiStorageCapacityCalls          atomic.Int64
+	volumeAttributesClassCalls       atomic.Int64
 	resourceQuotaCalls               atomic.Int64
 	limitRangeCalls                  atomic.Int64
 	horizontalPodAutoscalerCalls     atomic.Int64
@@ -3297,6 +3332,10 @@ func (g *fakeKubeGateway) CSIStorageCapacities(_ context.Context, namespace stri
 	g.csiStorageCapacityNamespace = namespace
 	g.mutationMu.Unlock()
 	return append([]domain.KubernetesCSIStorageCapacity(nil), g.csiStorageCapacities...), nil
+}
+func (g *fakeKubeGateway) VolumeAttributesClasses(context.Context) ([]domain.KubernetesVolumeAttributesClass, error) {
+	g.volumeAttributesClassCalls.Add(1)
+	return append([]domain.KubernetesVolumeAttributesClass(nil), g.volumeAttributesClasses...), nil
 }
 func (g *fakeKubeGateway) CSIDrivers(context.Context) ([]domain.KubernetesCSIDriver, error) {
 	g.csiDriverListCalls.Add(1)

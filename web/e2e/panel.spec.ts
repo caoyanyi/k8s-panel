@@ -601,6 +601,7 @@ test('storage inventory keeps cluster resources namespace independent', async ({
   expect(requestedKinds.some((request) => request.startsWith('attachments:'))).toBe(false)
   expect(requestedKinds.some((request) => request.startsWith('csinodes:'))).toBe(false)
   expect(requestedKinds.some((request) => request.startsWith('capacities:'))).toBe(false)
+  expect(requestedKinds.some((request) => request.startsWith('attributes:'))).toBe(false)
 
   await page.getByLabel('命名空间').selectOption('payments')
   await expect.poll(() => requestedKinds).toContain('claims:payments')
@@ -663,6 +664,15 @@ test('storage inventory keeps cluster resources namespace independent', async ({
   expect(requestedKinds).toContain('capacities:payments')
   expect(requestedKinds.filter((request) => request === 'namespaces')).toHaveLength(2)
 
+  await page.getByRole('button', { name: '卷属性类' }).click()
+  const attributesTable = page.getByRole('region', { name: 'VolumeAttributesClass 清单' })
+  await expect(attributesTable.getByText('gold', { exact: true })).toBeVisible()
+  await expect(attributesTable.getByText('ebs.csi.example.com', { exact: true })).toBeVisible()
+  await expect(attributesTable.getByText('private-iops')).toHaveCount(0)
+  await expect(page.getByLabel('命名空间')).toBeDisabled()
+  expect(requestedKinds).toContain('attributes:cluster')
+  expect(requestedKinds.filter((request) => request === 'namespaces')).toHaveLength(2)
+
   const storageKindLabelOverflow = await page.getByRole('group', { name: '存储资源类型' })
     .getByRole('button')
     .evaluateAll((buttons) => Math.max(...buttons.map((button) => button.scrollWidth - button.clientWidth)))
@@ -672,7 +682,7 @@ test('storage inventory keeps cluster resources namespace independent', async ({
   expect(overflow).toBeLessThanOrEqual(1)
   const result = await new AxeBuilder({ page }).analyze()
   expect(result.violations.filter((violation) => ['serious', 'critical'].includes(violation.impact ?? ''))).toEqual([])
-  await page.screenshot({ path: `test-results/${testInfo.project.name}-csi-storage-capacity.png`, fullPage: true })
+  await page.screenshot({ path: `test-results/${testInfo.project.name}-volume-attributes-class.png`, fullPage: true })
   expect(consoleErrors).toEqual([])
 })
 
@@ -1227,6 +1237,15 @@ async function mockStorageResources(page: Page, requestedKinds: string[]) {
           namespace: 'payments', name: 'capacity-unset', storage_class: 'archive',
           created_at: '2026-07-31T08:04:00Z',
         },
+      ]
+    } else if (path === '/api/v1/clusters/clu_1/volume-attributes-classes') {
+      requestedKinds.push('attributes:cluster')
+      data = [
+        {
+          name: 'gold', driver_name: 'ebs.csi.example.com', created_at: '2026-07-31T08:05:00Z',
+          parameters: { iops: 'private-iops' }, annotations: { private: 'private-value' },
+        },
+        { name: 'archive', driver_name: 'archive.csi.example.com', created_at: '2026-07-31T08:06:00Z' },
       ]
     } else if (path === '/api/v1/clusters/clu_1/csi-nodes/worker-01') {
       requestedKinds.push('csinode-detail:worker-01')
